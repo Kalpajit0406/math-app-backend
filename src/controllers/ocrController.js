@@ -1,4 +1,4 @@
-const mathpixService = require('../services/mathpixService');
+const { OCRPipeline } = require('../services/ocrPipeline');
 
 const toDataUri = (base64Image) => (
   base64Image.startsWith('data:image')
@@ -39,16 +39,22 @@ exports.scanImage = async (req, res) => {
       });
     }
 
-    const result = await mathpixService.processImage(src);
+    // Run dynamic modulated orchestrated OCR Pipeline
+    const result = await OCRPipeline.run(src);
+
     return res.json({
       success: true,
       data: {
-        rawText: result.text,
+        rawText: result.rawText,
         latex: result.latex,
+        parsedMcq: result.parsedMcq,
+        confidence: result.confidence,
+        qualityRating: result.qualityRating,
         sourceType: req.file ? 'file' : (src.startsWith('http') ? 'url' : 'base64'),
       },
     });
   } catch (error) {
+    console.error('OCR Processing Controller Error:', error);
     const message = error.message || 'Failed to process image';
     const statusCode = message.toLowerCase().includes('credentials') ? 500 : 502;
     return res.status(statusCode).json({ success: false, message });
