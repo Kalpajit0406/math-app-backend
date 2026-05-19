@@ -65,6 +65,68 @@ const attemptService = {
     const isPrivileged = role === 'admin' || role === 'teacher';
     if (!isOwner && !isPrivileged) throw new Error('You are not allowed to view this result');
     return result;
+  },
+
+  syncOfflineAttempt: async (userId, examId, responses) => {
+    if (!examId) throw new Error('Exam id is required');
+    if (!Array.isArray(responses)) throw new Error('Responses must be an array');
+
+    const exam = await Exam.findById(examId);
+    if (!exam) throw new Error('Exam not found');
+
+    let score = 0;
+    const evaluatedResponses = [];
+    const seenQuestionIds = new Set();
+
+    for (const res of responses) {
+      if (!res?.questionId || seenQuestionIds.has(String(res.questionId))) {
+        continue;
+      }
+
+      const question = exam.questions.id(res.questionId);
+      if (question) {
+        seenQuestionIds.add(String(res.questionId));
+        const userAnswer = res.selectedAnswer !== undefined ? res.selectedAnswer : res.userAnswer;
+        const isCorrect = String(question.correctAnswer).trim().toLowerCase() === 
+                          String(userAnswer).trim().toLowerCase();
+        if (isCorrect) score++;
+        
+        evaluatedResponses.push({
+          questionId: res.questionId,
+          userAnswer: userAnswer,
+          isCorrect
+        });
+      }
+    }
+
+    // Check if a completed attempt already exists
+    let attempt = await Attempt.findOne({ userId, examId, endTime: { $exists: true } });
+    if (attempt) {
+      attempt.score = score;
+      attempt.responses = evaluatedResponses;
+      return await attempt.save();
+    }
+
+    // Check if there is an uncompleted attempt
+    attempt = await Attempt.findOne({ userId, examId, endTime: { $exists: false } });
+    if (attempt) {
+      attempt.score = score;
+      attempt.responses = evaluatedResponses;
+      attempt.endTime = new Date();
+      return await attempt.save();
+    }
+
+    // Create new completed attempt
+    attempt = new Attempt({
+      userId,
+      examId,
+      score,
+      responses: evaluatedResponses,
+      startTime: new Date(Date.now() - (exam.duration * 60 * 1000)),
+      endTime: new Date()
+    });
+
+    return await attempt.save();
   }
 };
 

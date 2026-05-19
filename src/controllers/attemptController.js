@@ -45,4 +45,14 @@ const getLeaderboard = async (req, res) => {
   }
 };
 
-module.exports = { startAttempt, submitAttempt, getResult, getLeaderboard };
+const syncOfflineAttempt = async (req, res) => {
+  try {
+    const { examId, responses } = req.body;
+    const result = await attemptService.syncOfflineAttempt(req.user.id, examId, responses);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+module.exports = { startAttempt, submitAttempt, getResult, getLeaderboard, syncOfflineAttempt };
