@@ -1,0 +1,82 @@
+{
+	"info": {
+		"_postman_id": "b1a2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+		"name": "Maths Exam App AI API",
+		"description": "Collection for testing Gemini AI math solving and OCR cleaning endpoints.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "OCR Clean & Reconstruct",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer dummy_token",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"text\": \"1. Solve 2x t 3 = 7. O option A: 2 B: 5 C: 10 D: 15\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:5000/api/ai/clean",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "5000",
+					"path": [
+						"api",
+						"ai",
+						"clean"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Solve Math Question",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer dummy_token",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"question\": \"Integral of x^2 from 0 to 1\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:5000/api/ai/solve",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "5000",
+					"path": [
+						"api",
+						"ai",
+						"solve"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
