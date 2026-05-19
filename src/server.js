@@ -13,6 +13,7 @@ const examRoutes = require('./routes/examRoutes');
 const attemptRoutes = require('./routes/attemptRoutes');
 const announcementRoutes = require('./routes/announcementRoutes');
 const ocrRoutes = require('./routes/ocrRoutes');
+const pdfRoutes = require('./routes/pdfRoutes');
 const ratingRoutes = require('./routes/ratingRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 
@@ -57,6 +58,7 @@ app.use('/api/', apiLimiter);
 app.use('/api/v1/student/login', authOcrLimiter);
 app.use('/api/v1/admin/ocr', authOcrLimiter);
 app.use('/api/v1/scan', authOcrLimiter);
+app.use('/api/v1/pdf', authOcrLimiter); // Rate limit PDF processing
 
 // Configure CORS securely
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
@@ -126,6 +128,7 @@ app.use('/api/v1/question', questionRoutes);
 app.use('/api/v1/ratings', ratingRoutes);
 app.use('/api/v1/analytics', analyticsRoutes);
 app.use('/api/v1/admin/ocr', ocrRoutes);
+app.use('/api/v1/pdf', pdfRoutes);
 app.use('/api/v1/scan', ocrRoutes); // Backward compatibility for legacy frontend constants
 
 // Additional fallback for old API compatibility if needed
