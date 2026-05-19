@@ -39,7 +39,7 @@ const secureMemoryUpload = multer({
   storage: multer.memoryStorage(),
   fileFilter: imageFileFilter,
   limits: {
-    fileSize: 5 * 1024 * 1024, // Strict 5MB limit to mitigate denial-of-service memory exhaustion
+    fileSize: 10 * 1024 * 1024, // Increased to 10MB for high-res camera photos
     files: 1 // Only allow one file at a time
   }
 });
@@ -64,7 +64,7 @@ const secureDiskUpload = multer({
   storage: secureDiskStorage,
   fileFilter: imageFileFilter,
   limits: {
-    fileSize: 5 * 1024 * 1024, // Strict 5MB limit
+    fileSize: 10 * 1024 * 1024, // Increased to 10MB
     files: 1
   }
 });

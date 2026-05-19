@@ -1,62 +1,84 @@
 const { OCRPipeline } = require('../services/ocrPipeline');
 
-const toDataUri = (base64Image) => (
-  base64Image.startsWith('data:image')
-    ? base64Image
-    : `data:image/jpeg;base64,${base64Image}`
-);
-
-const bufferToDataUri = (buffer, mimetype) => {
-  return `data:${mimetype};base64,${buffer.toString('base64')}`;
-};
-
+/**
+ * Resolves the image source for OCR.
+ * Priority: 1) Multer file buffer (most reliable), 2) base64 body, 3) URL body
+ */
 const resolveSource = (req) => {
-  // 1. Check for file upload (highest priority, most memory efficient for client)
   if (req.file) {
-    console.log('Resolving OCR source from file:', req.file.originalname, 'Size:', req.file.size);
-    return bufferToDataUri(req.file.buffer, req.file.mimetype || 'image/jpeg');
+    console.log('[OCR] Using multer file buffer:', req.file.originalname, `${(req.file.size / 1024).toFixed(1)}KB`);
+    return {
+      type: 'buffer',
+      buffer: req.file.buffer,
+      mimetype: req.file.mimetype || 'image/jpeg',
+      filename: req.file.originalname || 'image.jpg',
+    };
   }
-  // 2. Check for base64 in body
   if (req.body?.base64Image) {
-    console.log('Resolving OCR source from base64 string');
-    return toDataUri(req.body.base64Image);
+    console.log('[OCR] Using base64 body string');
+    const src = req.body.base64Image.startsWith('data:image')
+      ? req.body.base64Image
+      : `data:image/jpeg;base64,${req.body.base64Image}`;
+    return { type: 'src', src };
   }
-  // 3. Check for URL
   if (req.body?.imageUrl) {
-    console.log('Resolving OCR source from URL:', req.body.imageUrl);
-    return req.body.imageUrl;
+    console.log('[OCR] Using image URL:', req.body.imageUrl);
+    return { type: 'src', src: req.body.imageUrl };
   }
   return null;
 };
 
 exports.scanImage = async (req, res) => {
   try {
-    const src = resolveSource(req);
-    if (!src) {
+    const source = resolveSource(req);
+    if (!source) {
       return res.status(400).json({
         success: false,
-        message: 'Provide an image file, base64Image, or imageUrl',
+        message: 'Provide an image file (multipart), base64Image, or imageUrl',
       });
     }
 
-    // Run dynamic modulated orchestrated OCR Pipeline
-    const result = await OCRPipeline.run(src);
+    if (source.type === 'buffer' && (!source.buffer || source.buffer.length === 0)) {
+      console.error('[OCR] Received empty buffer in controller');
+      return res.status(400).json({
+        success: false,
+        message: 'Empty image buffer received by server.',
+      });
+    }
+
+    let result;
+    if (source.type === 'buffer') {
+      // ✅ Primary path: direct buffer → FormData multipart upload to Mathpix
+      result = await OCRPipeline.runFromBuffer(source.buffer, source.mimetype, source.filename);
+    } else {
+      // Fallback path: base64/URL (legacy compatibility)
+      result = await OCRPipeline.run(source.src);
+    }
+
+    console.log(`[OCR] Success. Detected ${result.parsedQuestions?.length || 0} questions.`);
 
     return res.json({
       success: true,
       data: {
         rawText: result.rawText,
         latex: result.latex,
-        parsedMcq: result.parsedMcq,
+        parsedQuestions: result.parsedQuestions, // Updated to match pipeline
+        parsedMcq: result.parsedQuestions, // Keep for backward compatibility
         confidence: result.confidence,
         qualityRating: result.qualityRating,
-        sourceType: req.file ? 'file' : (src.startsWith('http') ? 'url' : 'base64'),
+        sourceType: source.type === 'buffer' ? 'file' : (source.src?.startsWith('http') ? 'url' : 'base64'),
       },
     });
   } catch (error) {
-    console.error('OCR Processing Controller Error:', error);
+    console.error('[OCR] Controller error:', error.message);
     const message = error.message || 'Failed to process image';
-    const statusCode = message.toLowerCase().includes('credentials') ? 500 : 502;
+
+    // Return appropriate status code based on error type
+    let statusCode = 502; // Default: bad gateway (upstream Mathpix failure)
+    if (message.toLowerCase().includes('credentials')) statusCode = 500;
+    else if (message.toLowerCase().includes('empty') || message.toLowerCase().includes('no file')) statusCode = 400;
+    else if (message.toLowerCase().includes('too large')) statusCode = 413;
+
     return res.status(statusCode).json({ success: false, message });
   }
 };

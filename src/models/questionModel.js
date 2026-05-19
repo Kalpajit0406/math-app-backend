@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const questionSchema = new mongoose.Schema({
   language: {
     type: String,
-    enum: ["Bengali", "English"],
+    enum: ["Bengali", "English", "Both"],
     required: true,
   },
   chapter: {

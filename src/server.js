@@ -3,8 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const mongoSanitize = require('express-mongo-sanitize');
-const xss = require('xss-clean');
+// Mongo sanitization is handled via custom middleware below
+// XSS sanitization is handled via custom middleware below
 const connectDB = require('./config/db');
 
 // Import routes
@@ -17,6 +17,20 @@ const ratingRoutes = require('./routes/ratingRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 
 const app = express();
+
+// Request logger middleware
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  if (req.body && Object.keys(req.body).length > 0) {
+    console.log('Body:', JSON.stringify(req.body));
+  }
+  const originalJson = res.json;
+  res.json = function (data) {
+    console.log(`[Response] ${res.statusCode} :`, JSON.stringify(data));
+    return originalJson.call(this, data);
+  };
+  next();
+});
 
 // Set secure HTTP headers
 app.use(helmet());
@@ -63,11 +77,43 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-// Data sanitization against NoSQL query injection
-app.use(mongoSanitize());
+// Data sanitization against NoSQL query injection (Express 5 compatible)
+app.use((req, res, next) => {
+  const sanitize = (target) => {
+    if (target && typeof target === 'object') {
+      for (const key in target) {
+        if (key.startsWith('$') || key.includes('.')) {
+          delete target[key];
+        } else {
+          sanitize(target[key]);
+        }
+      }
+    }
+  };
+  if (req.body) sanitize(req.body);
+  if (req.params) sanitize(req.params);
+  if (req.query) sanitize(req.query);
+  next();
+});
 
-// Data sanitization against XSS (Cross Site Scripting)
-app.use(xss());
+// Data sanitization against XSS (Cross Site Scripting - Express 5 compatible)
+app.use((req, res, next) => {
+  const clean = (value) => {
+    if (typeof value === 'string') {
+      return value.replace(/<[^>]*>/g, '');
+    }
+    if (value && typeof value === 'object') {
+      for (const key in value) {
+        value[key] = clean(value[key]);
+      }
+    }
+    return value;
+  };
+  if (req.body) clean(req.body);
+  if (req.params) clean(req.params);
+  if (req.query) clean(req.query);
+  next();
+});
 
 const questionRoutes = require('./routes/questionRoutes');
 

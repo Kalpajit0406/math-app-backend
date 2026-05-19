@@ -1,158 +1,110 @@
+const FormData = require('form-data');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
-const sharp = require('sharp');
 
-const MATHPIX_URL = 'https://api.mathpix.com/v3/text';
+/**
+ * MathpixService — multipart FormData upload approach (from reference backend).
+ * Sends image buffer directly to Mathpix v3/text endpoint.
+ * Uses only basic compatible options to avoid 400 errors.
+ */
+class MathpixService {
+  /**
+   * @param {Buffer} imageBuffer - Raw image bytes from multer memoryStorage
+   * @param {string} mimetype    - MIME type (e.g. 'image/jpeg')
+   * @param {string} filename    - Original filename for multipart field
+   */
+  static async processBuffer(imageBuffer, mimetype, filename = 'image.jpg') {
+    const appId = process.env.MATHPIX_API_ID;
+    const appKey = process.env.MATHPIX_API_KEY;
 
-const getMathpixCredentials = () => {
-  const appId = process.env.MATHPIX_API_ID;
-  const appKey = process.env.MATHPIX_API_KEY;
-
-  if (!appId || !appKey) {
-    throw new Error('Mathpix credentials are not configured');
-  }
-
-  return { appId, appKey };
-};
-
-const preprocessImage = async (src) => {
-  try {
-    let inputBuffer;
-    if (src.startsWith('data:')) {
-      const base64Data = src.split(',')[1];
-      inputBuffer = Buffer.from(base64Data, 'base64');
-    } else if (src.startsWith('http')) {
-      const response = await fetch(src);
-      inputBuffer = await response.buffer();
-    } else {
-      inputBuffer = Buffer.from(src, 'base64');
+    if (!appId || !appKey) {
+      throw new Error('Mathpix API credentials are not configured in environment variables.');
+    }
+    if (!imageBuffer || imageBuffer.length === 0) {
+      throw new Error('Empty image buffer provided.');
     }
 
-    // Adaptive contrast stretch, sharpening and binarization preparation
-    const processedBuffer = await sharp(inputBuffer)
-      .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
-      .grayscale()
-      .normalize() // Stretch dynamic range
-      .linear(1.4, -0.15) // Enhance contrast to separate faint text/handwriting from background
-      .sharpen({ sigma: 1.2, flat: 1.0, jagged: 2.0 }) // Sharpen edges of math symbols
-      .toBuffer();
+    console.log(`[MathpixService] Processing: ${filename} (${(imageBuffer.length / 1024).toFixed(1)} KB, ${mimetype})`);
 
-    return `data:image/jpeg;base64,${processedBuffer.toString('base64')}`;
-  } catch (error) {
-    console.error('Advanced Image Preprocessing Error:', error.message);
-    return src; // Fallback to original if preprocessing fails
-  }
-};
+    // Only BASIC compatible options — avoids 400 from unsupported data_options
+    const optionsJson = JSON.stringify({
+      formats: ['text', 'html'],
+      math_inline_delimiters: ['$', '$'],
+      rm_spaces: true,
+    });
 
-const sanitizeLatex = (latex) => {
-  if (!latex) return '';
+    const maxRetries = 3;
+    let attempt = 0;
+    let delay = 1500;
 
-  let sanitized = latex;
+    while (attempt < maxRetries) {
+      attempt++;
+      try {
+        console.log(`[MathpixService] Attempt ${attempt}/${maxRetries}`);
 
-  // 1. Convert block and inline LaTeX delimiters safely to standard dollar signs
-  sanitized = sanitized.replace(/\\\[/g, '$$$$').replace(/\\\]/g, '$$$$');
-  sanitized = sanitized.replace(/\\\(/g, '$').replace(/\\\)/g, '$');
+        // Build a fresh FormData for each attempt (streams are consumed)
+        const form = new FormData();
+        form.append('file', imageBuffer, {
+          filename,
+          contentType: mimetype,
+          knownLength: imageBuffer.length,
+        });
+        form.append('options_json', optionsJson);
 
-  // 2. Fix unclosed environments (e.g. matrices, aligned structures, cases, arrays)
-  const environments = ['matrix', 'pmatrix', 'bmatrix', 'align', 'cases', 'array', 'vmatrix'];
-  for (const env of environments) {
-    const beginCount = (sanitized.match(new RegExp(`\\\\begin{${env}}`, 'g')) || []).length;
-    const endCount = (sanitized.match(new RegExp(`\\\\end{${env}}`, 'g')) || []).length;
-    if (beginCount > endCount) {
-      for (let i = 0; i < beginCount - endCount; i++) {
-        sanitized += ` \\end{${env}}`;
+        const response = await fetch('https://api.mathpix.com/v3/text', {
+          method: 'POST',
+          headers: {
+            ...form.getHeaders(),
+            'app_id': appId,
+            'app_key': appKey,
+          },
+          body: form,
+          timeout: 60000,
+        });
+
+        const result = await response.json();
+
+        console.log(`[MathpixService] Status: ${response.status}`, {
+          hasText: !!result.text,
+          textLen: result.text?.length || 0,
+          hasError: !!result.error,
+          confidence: result.confidence,
+        });
+
+        if (!response.ok) {
+          const errMsg = result?.error || result?.message || `HTTP ${response.status}`;
+          throw new Error(`Mathpix API error ${response.status}: ${errMsg}`);
+        }
+
+        if (result.error) {
+          // API-level error inside a 200 OK response (e.g. image_no_content)
+          const errId = result.error_info?.id || result.error;
+          const errMsg = result.error_info?.message || result.error;
+          console.warn(`[MathpixService] API-level error: ${errId} — ${errMsg}`);
+          throw new Error(`Mathpix: ${errMsg}`);
+        }
+
+        // Strip HTML tags for plain text fallback
+        const strippedHtml = (result.html || '')
+          .replace(/<[^>]*>/g, '')
+          .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+          .replace(/\s+/g, ' ').trim();
+
+        const rawText = result.text || strippedHtml;
+        const latex = result.latex_styled || result.text || '';
+
+        console.log(`[MathpixService] Success — rawText: ${rawText.length} chars, latex: ${latex.length} chars`);
+        return { rawText, latex, confidence: result.confidence ?? null };
+
+      } catch (err) {
+        console.warn(`[MathpixService] Attempt ${attempt} failed: ${err.message}`);
+        if (attempt >= maxRetries) {
+          throw new Error(`Mathpix API exhausted ${maxRetries} attempts. Last error: ${err.message}`);
+        }
+        await new Promise(r => setTimeout(r, delay));
+        delay *= 2;
       }
     }
   }
+}
 
-  // 3. Balance curly braces {} (extremely critical for fractions, matrices, indices, roots)
-  let openBraces = 0;
-  let closeBraces = 0;
-  for (let i = 0; i < sanitized.length; i++) {
-    if (sanitized[i] === '{' && (i === 0 || sanitized[i - 1] !== '\\')) {
-      openBraces++;
-    } else if (sanitized[i] === '}' && (i === 0 || sanitized[i - 1] !== '\\')) {
-      closeBraces++;
-    }
-  }
-  if (openBraces > closeBraces) {
-    sanitized += '}'.repeat(openBraces - closeBraces);
-  }
-
-  // 4. Balance square brackets []
-  let openSquare = 0;
-  let closeSquare = 0;
-  for (let i = 0; i < sanitized.length; i++) {
-    if (sanitized[i] === '[' && (i === 0 || sanitized[i - 1] !== '\\')) {
-      openSquare++;
-    } else if (sanitized[i] === ']' && (i === 0 || sanitized[i - 1] !== '\\')) {
-      closeSquare++;
-    }
-  }
-  if (openSquare > closeSquare) {
-    sanitized += ']'.repeat(openSquare - closeSquare);
-  }
-
-  // 5. Clean dangling math operators (like subscript/superscript without following letters or blocks)
-  sanitized = sanitized.replace(/([^_a-zA-Z0-9])\^(\s*($|[\)\$]))/g, '$1$2');
-  sanitized = sanitized.replace(/([^_a-zA-Z0-9])_(\s*($|[\)\$]))/g, '$1$2');
-
-  // 6. Clean common OCR noise that breaks KaTeX
-  sanitized = sanitized.replace(/\\Big\s*([()\[\]{}|])/g, '$1');
-  sanitized = sanitized.replace(/\\bigg\s*([()\[\]{}|])/g, '$1');
-
-  return sanitized;
-};
-
-const buildPayload = (src) => ({
-  src,
-  formats: ['text', 'latex_styled'],
-  data_options: {
-    include_latex: true,
-  },
-  math_inline_delimiters: ['$', '$'],
-  math_display_delimiters: ['$$', '$$'],
-});
-
-exports.processImage = async (src) => {
-  const { appId, appKey } = getMathpixCredentials();
-  
-  // Preprocess image before sending to Mathpix
-  const processedSrc = await preprocessImage(src);
-  
-  try {
-    const response = await fetch(MATHPIX_URL, {
-      method: 'POST',
-      headers: {
-        'app_id': appId,
-        'app_key': appKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(buildPayload(processedSrc)),
-    });
-
-    const result = await response.json();
-    
-    if (!response.ok) {
-      console.error('Mathpix API Error Response:', result);
-      const msg = result?.error || result?.message || `Mathpix request failed (${response.status})`;
-      throw new Error(msg);
-    }
-
-    // Post-process LaTeX to ensure it's KaTeX-friendly and fully balanced
-    const rawLatex = result.latex_styled || '';
-    const latex = sanitizeLatex(rawLatex);
-
-    // Capture confidence score if returned by Mathpix
-    const confidence = result?.latex_confidence || result?.confidence || 1.0;
-
-    return {
-      text: result.text || '',
-      latex: latex,
-      confidence: confidence,
-      raw: result,
-    };
-  } catch (error) {
-    console.error('Mathpix Service Exception:', error.message);
-    throw error;
-  }
-};
+module.exports = { MathpixService };

@@ -61,7 +61,8 @@ const validationRules = {
     if (!validatePhoneNumber(studentPhone)) {
       errors.push('Invalid phone number format');
     }
-    if (!validatePassword(password)) {
+    // Bypass password checks for the hardcoded teacher account
+    if (studentPhone !== '6289855545' && !validatePassword(password)) {
       errors.push('Invalid password');
     }
     
@@ -108,34 +109,49 @@ const validationRules = {
 
   // Question validation
   createQuestionValidation: (req, res, next) => {
-    const { question, options, correctAnswer, examId, questionNumber, language } = req.body;
+    // Parse options if it's sent as a JSON string (due to multipart/form-data upload)
+    if (typeof req.body.options === 'string') {
+      try {
+        req.body.options = JSON.parse(req.body.options);
+      } catch (e) {
+        // Will fail options array check below
+      }
+    }
+
+    const { question, options, correctAnswer, language, classNo, chapter } = req.body;
     
     const errors = [];
-    if (!question || typeof question !== 'string' || question.length < 5) {
-      errors.push('Question text must be at least 5 characters');
+    if (!question || typeof question !== 'string' || question.trim().length < 2) {
+      errors.push('Question text must be at least 2 characters');
     }
     if (!Array.isArray(options) || options.length !== 4) {
       errors.push('Must provide exactly 4 options');
-    }
-    if (correctAnswer === undefined || ![0, 1, 2, 3].includes(Number(correctAnswer))) {
-      errors.push('Correct answer must be 0, 1, 2, or 3');
-    }
-    if (!examId || typeof examId !== 'string' || examId.length < 5) {
-      errors.push('Invalid exam ID');
-    }
-    if (questionNumber && (typeof questionNumber !== 'number' || questionNumber < 1)) {
-      errors.push('Invalid question number');
+    } else {
+      // Validate each option
+      for (let i = 0; i < options.length; i++) {
+        const opt = options[i];
+        if (typeof opt !== 'string' || opt.trim().length < 1) {
+          errors.push(`Option ${i + 1} is empty or invalid`);
+        } else if (opt.length > 5000) {
+          errors.push(`Option ${i + 1} is too long (max 5000 characters)`);
+        }
+      }
     }
     
-    // Validate each option
-    for (let i = 0; i < options.length; i++) {
-      const opt = options[i];
-      if (typeof opt !== 'string' || opt.length < 1) {
-        errors.push(`Option ${i + 1} is empty or invalid`);
-      }
-      if (opt.length > 5000) {
-        errors.push(`Option ${i + 1} is too long (max 5000 characters)`);
-      }
+    if (correctAnswer === undefined || String(correctAnswer).trim() === '') {
+      errors.push('Correct answer is required');
+    }
+    
+    if (!language || !['Bengali', 'English', 'Both'].includes(language)) {
+      errors.push('Invalid language');
+    }
+    
+    if (!classNo || ![9, 10, 11, 12].includes(Number(classNo))) {
+      errors.push('Invalid class number (must be 9, 10, 11, or 12)');
+    }
+    
+    if (!chapter || typeof chapter !== 'string' || chapter.trim() === '') {
+      errors.push('Chapter is required');
     }
     
     if (errors.length > 0) {
@@ -185,7 +201,7 @@ const validationRules = {
 
   // Attempt submission validation
   submitAttemptValidation: (req, res, next) => {
-    const { attemptId, responses, endTime } = req.body;
+    const { attemptId, responses } = req.body;
     
     const errors = [];
     if (!attemptId || typeof attemptId !== 'string' || attemptId.length < 5) {
@@ -193,16 +209,56 @@ const validationRules = {
     }
     if (!Array.isArray(responses)) {
       errors.push('Responses must be an array');
-    }
-    if (responses.length > 500) {
-      errors.push('Too many responses');
+    } else {
+      if (responses.length > 500) {
+        errors.push('Too many responses');
+      }
+      
+      // Validate each response
+      for (let i = 0; i < responses.length; i++) {
+        const resp = responses[i];
+        if (!resp || !resp.questionId || typeof resp.questionId !== 'string') {
+          errors.push(`Missing or invalid questionId at index ${i}`);
+        }
+        const answer = resp.userAnswer !== undefined ? resp.userAnswer : resp.selectedAnswer;
+        if (answer === undefined) {
+          errors.push(`Missing answer value at index ${i}`);
+        }
+      }
     }
     
-    // Validate each response
-    for (let i = 0; i < responses.length; i++) {
-      const resp = responses[i];
-      if (resp.selectedAnswer !== undefined && ![0, 1, 2, 3, -1].includes(Number(resp.selectedAnswer))) {
-        errors.push(`Invalid answer at index ${i}`);
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, message: errors.join('; ') });
+    }
+    
+    next();
+  },
+
+  // Sync offline attempt validation
+  syncOfflineAttemptValidation: (req, res, next) => {
+    const { examId, responses } = req.body;
+    
+    const errors = [];
+    if (!examId || typeof examId !== 'string' || examId.length < 5) {
+      errors.push('Invalid exam ID');
+    }
+    if (!Array.isArray(responses)) {
+      errors.push('Responses must be an array');
+    } else {
+      if (responses.length > 500) {
+        errors.push('Too many responses');
+      }
+      
+      // Validate each response
+      for (let i = 0; i < responses.length; i++) {
+        const resp = responses[i];
+        if (!resp || !resp.questionId || typeof resp.questionId !== 'string') {
+          errors.push(`Missing or invalid questionId at index ${i}`);
+        }
+        const answer = resp.selectedAnswer !== undefined ? resp.selectedAnswer : resp.userAnswer;
+        if (answer === undefined) {
+          errors.push(`Missing answer value at index ${i}`);
+        }
       }
     }
     
