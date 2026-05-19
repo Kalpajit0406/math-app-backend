@@ -4,6 +4,7 @@ jspm_packages/
 
 # Environment files
 .env
+.env.example
 .env.test
 .env.production
 .env.local
