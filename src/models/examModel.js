@@ -52,7 +52,7 @@ const examSchema = new mongoose.Schema({
   questions: [questionSchema],
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    ref: 'Student',
   },
 }, { 
   timestamps: true,

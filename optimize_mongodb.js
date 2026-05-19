@@ -21,9 +21,11 @@ const ensureIndexes = async () => {
     ]),
     Exam.collection.createIndexes([
       { key: { createdBy: 1, createdAt: -1 }, name: 'createdBy_createdAt_1' },
+      { key: { classNo: 1, language: 1 }, name: 'classNo_language_1' },
     ]),
     Attempt.collection.createIndexes([
       { key: { userId: 1, examId: 1, createdAt: -1 }, name: 'user_exam_createdAt_1' },
+      { key: { examId: 1, score: -1 }, name: 'examId_score_leaderboard_1' },
       {
         key: { userId: 1, examId: 1 },
         name: 'unique_active_attempt_per_user_exam',

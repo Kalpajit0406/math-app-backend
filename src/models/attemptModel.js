@@ -12,7 +12,7 @@ const responseSchema = new mongoose.Schema({
 const attemptSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    ref: 'Student',
     required: true,
   },
   examId: {
