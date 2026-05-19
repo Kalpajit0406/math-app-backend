@@ -13,6 +13,8 @@ const examRoutes = require('./routes/examRoutes');
 const attemptRoutes = require('./routes/attemptRoutes');
 const announcementRoutes = require('./routes/announcementRoutes');
 const ocrRoutes = require('./routes/ocrRoutes');
+const ratingRoutes = require('./routes/ratingRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
 
 const app = express();
 
@@ -75,6 +77,8 @@ app.use('/api/v1/tests', examRoutes);
 app.use('/api/v1/testResponse', attemptRoutes);
 app.use('/api/v1/announcements', announcementRoutes);
 app.use('/api/v1/question', questionRoutes);
+app.use('/api/v1/ratings', ratingRoutes);
+app.use('/api/v1/analytics', analyticsRoutes);
 app.use('/api/v1/admin/ocr', ocrRoutes);
 app.use('/api/v1/scan', ocrRoutes); // Backward compatibility for legacy frontend constants
 

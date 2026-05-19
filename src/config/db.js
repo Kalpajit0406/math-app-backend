@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
+const { ensureIndexes } = require('../utils/indexes');
 
 dotenv.config();
 
@@ -72,6 +73,10 @@ const connectDB = async () => {
       try {
         const conn = await mongoose.connect(uri, getConnectionOptions());
         console.log(`MongoDB Connected: ${conn.connection.host}${isFallback ? ' (fallback URI)' : ''}`);
+        
+        // Create database indexes for performance
+        await ensureIndexes(mongoose);
+        
         return conn;
       } catch (error) {
         const isLastUri = i === uris.length - 1;

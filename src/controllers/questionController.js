@@ -1,5 +1,6 @@
 const Question = require('../models/questionModel');
 const { uploadOnCloudinary } = require('../utils/cloudinary');
+const { PaginationParams, paginate, formatPaginatedResponse } = require('../utils/pagination');
 
 const addQuestion = async (req, res) => {
   try {
@@ -56,13 +57,25 @@ const addQuestion = async (req, res) => {
 
 const getQuestions = async (req, res) => {
   try {
-    const { classNo, language } = req.query;
+    const { classNo, language, chapter } = req.query;
+    const pagination = new PaginationParams(req);
+    
     let filter = {};
     if (classNo) filter.classNo = parseInt(classNo);
     if (language) filter.language = language;
+    if (chapter) filter.chapter = chapter;
 
-    const questions = await Question.find(filter).sort({ createdAt: -1 });
-    res.json({ success: true, data: questions });
+    const result = await paginate(
+      Question,
+      filter,
+      pagination
+    );
+
+    res.json({
+      success: true,
+      data: result.data,
+      pagination: result.pagination
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

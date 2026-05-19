@@ -16,35 +16,10 @@ const authService = {
   },
 
   login: async (studentPhone, password) => {
-    // Admin bypass for hardcoded phone number
-    if (studentPhone === '6289855545') {
-      let admin = await Student.findOne({ studentPhone });
-      if (!admin) {
-        admin = new Student({
-          studentPhone,
-          password: await bcrypt.hash('admin123', 10),
-          firstName: 'Admin',
-          lastName: 'User',
-          role: 'admin',
-          verified: true,
-          classNo: 12,
-          language: 'English',
-          guardianPhone: '6289855545'
-        });
-        await admin.save();
-      }
-      
-      const jwtSecret = process.env.JWT_SECRET || process.env.ACCESS_TOKEN_SECRET;
-      const accessToken = jwt.sign(
-        { id: admin._id, phone: admin.studentPhone, role: admin.role }, 
-        jwtSecret, 
-        { expiresIn: '24h' }
-      );
-      
-      return { student: admin, accessToken };
+    if (!studentPhone || !password) {
+      throw new Error('Phone and password are required');
     }
 
-    // Regular student login
     const student = await Student.findOne({ studentPhone });
     if (!student) throw new Error('Invalid credentials');
 
