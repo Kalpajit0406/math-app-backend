@@ -37,3 +37,22 @@ If another agent continues work, please update this file after each completed st
 - Added CI workflow: `.github/workflows/ci.yml`.
 - Fixed OCRNormalizer merge logic so question boundaries/options are not merged into previous lines.
 - Verified local tests pass: `npm test` -> 2/2 passing.
+
+## March 21, 2026 — Retry caps + reaper + test-factory debugging
+
+- Added queue retry/backoff metadata to `OCRJob` model: `availableAt`, `lockedAt`, plus indexes.
+- Added retry policy in `OCRQueueService`:
+	- `OCR_MAX_ATTEMPTS` cap (default 3)
+	- exponential retry backoff from `OCR_RETRY_BASE_MS`
+	- `markRetryOrFailed()` for controlled retries
+- Added queue maintenance methods:
+	- `recoverStaleProcessingJobs()` based on `OCR_STALE_PROCESSING_MS`
+	- `cleanupExpiredJobs()` based on `OCR_RESULT_RETENTION_MS`
+- Updated worker loop to run periodic maintenance and apply retry-or-fail semantics.
+- Improved job status API payload with `availableAt` for retry observability.
+- Debugged and fixed parser test creation logic by switching to reusable test factory helpers (`createSegmentationCase`, `createMcqCase`).
+- Expanded test corpus for edge cases:
+	- cross-question leakage detection
+	- roman labels + multiline options
+	- numeric option labels
+- Verified local tests pass: `npm test` -> 5/5 passing.

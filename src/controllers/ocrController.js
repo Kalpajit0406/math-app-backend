@@ -106,6 +106,7 @@ exports.getJobStatus = async (req, res) => {
         jobId: job._id,
         status: job.status,
         attempts: job.attempts,
+        availableAt: job.availableAt || null,
         createdAt: job.createdAt,
         updatedAt: job.updatedAt,
         error: job.error || null,
