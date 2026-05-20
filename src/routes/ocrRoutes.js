@@ -6,5 +6,6 @@ const { secureMemoryUpload } = require('../middleware/uploadMiddleware');
 
 router.post('/scan', authMiddleware, authorizeRoles('admin', 'teacher'), secureMemoryUpload.single('image'), ocrController.scanImage);
 router.post('/process', authMiddleware, authorizeRoles('admin', 'teacher'), secureMemoryUpload.single('image'), ocrController.scanImage);
+router.get('/jobs/:jobId', authMiddleware, authorizeRoles('admin', 'teacher'), ocrController.getJobStatus);
 
 module.exports = router;

@@ -1,4 +1,5 @@
 const { OCRPipeline } = require('../services/ocrPipeline');
+const { OCRQueueService } = require('../services/ocrQueueService');
 
 /**
  * Resolves the image source for OCR.
@@ -46,6 +47,14 @@ exports.scanImage = async (req, res) => {
       });
     }
 
+    // Support async enqueue: client may supply ?async=true or body.async = true
+    const wantsAsync = (req.query?.async === 'true') || (req.body?.async === true);
+    if (wantsAsync && source.type === 'buffer') {
+      // Enqueue and return job id for polling
+      const job = await OCRQueueService.enqueueFromBuffer({ buffer: source.buffer, mimetype: source.mimetype, filename: source.filename, sourceType: 'file' });
+      return res.status(202).json({ success: true, jobId: job._id, message: 'OCR job queued' });
+    }
+
     let result;
     if (source.type === 'buffer') {
       // ✅ Primary path: direct buffer → FormData multipart upload to Mathpix
@@ -80,5 +89,32 @@ exports.scanImage = async (req, res) => {
     else if (message.toLowerCase().includes('too large')) statusCode = 413;
 
     return res.status(statusCode).json({ success: false, message });
+  }
+};
+
+exports.getJobStatus = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const job = await OCRQueueService.getJob(jobId);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'OCR job not found' });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        jobId: job._id,
+        status: job.status,
+        attempts: job.attempts,
+        availableAt: job.availableAt || null,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+        error: job.error || null,
+        result: job.status === 'done' ? job.result : null,
+      },
+    });
+  } catch (error) {
+    console.error('[OCR] getJobStatus error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to get OCR job status' });
   }
 };

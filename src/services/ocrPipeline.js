@@ -1,4 +1,6 @@
 const { MathpixService } = require('./mathpixService');
+const { ImagePreprocessor } = require('./imagePreprocessor');
+const { OCRNormalizer } = require('./ocrNormalizer');
 
 // ─── 0. QUESTION NUMBER EXTRACTOR ──────────────────────────────────────────
 class QuestionNumberExtractor {
@@ -28,59 +30,182 @@ class QuestionNumberExtractor {
   }
 }
 
+// Helper for finding math ranges to preserve LaTeX blocks
+function getMathRanges(text) {
+  const ranges = [];
+  if (!text) return ranges;
+  
+  // Find $$ ... $$
+  const displayMathRegex = /\$\$.*?\$\$/gs;
+  let match;
+  while ((match = displayMathRegex.exec(text)) !== null) {
+    ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+  
+  // Find \[ ... \]
+  const bracketMathRegex = /\\\[.*?\\\]/gs;
+  while ((match = bracketMathRegex.exec(text)) !== null) {
+    ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+  
+  // Find \( ... \)
+  const parenMathRegex = /\\\(.*?\\\)/gs;
+  while ((match = parenMathRegex.exec(text)) !== null) {
+    ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+  
+  // Find $ ... $ (avoiding double dollar matches)
+  const inlineMathRegex = /(?<!\$)\$.*?\$(?!\$)/gs;
+  while ((match = inlineMathRegex.exec(text)) !== null) {
+    const start = match.index;
+    const end = match.index + match[0].length;
+    const isOverlapping = ranges.some(r => (start >= r.start && start < r.end) || (end > r.start && end <= r.end));
+    if (!isOverlapping) {
+      ranges.push({ start, end });
+    }
+  }
+  
+  return ranges;
+}
+
+function normalizeOcrText(text) {
+  if (!text) return '';
+  let s = text;
+  s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  s = s.replace(/[ \t]+/g, ' ');
+  s = s.replace(/(?<=^|\n)\s*(\d+)\s*[\.)]\s*/g, '$1. ');
+  s = s.replace(/\n{3,}/g, '\n\n');
+  return s.trim();
+}
+
+class QuestionSegmenter {
+  static segment(text) {
+    if (!text) return [];
+    const normalized = normalizeOcrText(OCRNormalizer.normalizeText(text));
+    const mathRanges = getMathRanges(normalized);
+    const boundaryRegex = /(?:^|\n)\s*(?:Question\s+(\d+)|Q\s*(\d+)|Q(\d+)|(\d+)\.)\s+(?=\S)/g;
+
+    const rawMatches = [...normalized.matchAll(boundaryRegex)];
+    const matches = rawMatches.filter(m => !mathRanges.some(r => m.index >= r.start && m.index < r.end));
+
+    if (matches.length === 0) {
+      return [{ text: normalized, number: null, startIndex: 0, endIndex: normalized.length, rawHeader: '' }];
+    }
+
+    const segments = [];
+    for (let i = 0; i < matches.length; i++) {
+      const match = matches[i];
+      const start = match.index;
+      const end = (i + 1 < matches.length) ? matches[i + 1].index : normalized.length;
+      let seg = normalized.substring(start, end).trim();
+      const innerHeader = seg.slice(1).match(/\n\s*(?:Question\s+\d+|Q\s*\d+|Q\d+|\d+\.)\s+/);
+      if (innerHeader && innerHeader.index != null) seg = seg.substring(0, 1 + innerHeader.index).trim();
+      let number = null;
+      for (let g = 1; g < match.length; g++) {
+        if (match[g]) { number = match[g]; break; }
+      }
+      segments.push({ text: seg, number, startIndex: start, endIndex: end, rawHeader: match[0] });
+    }
+    return segments;
+  }
+}
+
+class MCQOptionParser {
+  static parse(segmentText) {
+    if (!segmentText) return null;
+
+    // Defensive: truncate if a subsequent question header exists inside
+    const internalHeader = segmentText.match(/\n\s*(?:Question\s+\d+|Q\s*\d+|Q\d+|\d+\.)\s+/);
+    if (internalHeader && internalHeader.index != null) {
+      segmentText = segmentText.substring(0, internalHeader.index).trim();
+    }
+
+    const lines = segmentText.split('\n').map(l => l.replace(/\r/g, '').trim());
+    const optionStartRegex = /^\s*[\(\[]?\s*([A-Da-d1-4]|i{1,4}|I{1,4})\s*[\)\]\.]\s*(.*)$/;
+    const romanMap = { i: 0, ii: 1, iii: 2, iv: 3, v: 3 };
+    const numericMap = { '1': 0, '2': 1, '3': 2, '4': 3 };
+    const alphaMap = { A:0, B:1, C:2, D:3, a:0, b:1, c:2, d:3 };
+
+    let questionLines = [];
+    const options = [];
+    let currentOption = null;
+    let foundFirstOptionAt = -1;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const m = line.match(optionStartRegex);
+      if (m) {
+        foundFirstOptionAt = foundFirstOptionAt === -1 ? i : foundFirstOptionAt;
+        const rawLabel = m[1];
+        const rest = m[2] || '';
+        let idx = null;
+        if (alphaMap.hasOwnProperty(rawLabel)) idx = alphaMap[rawLabel];
+        else if (numericMap.hasOwnProperty(rawLabel)) idx = numericMap[rawLabel];
+        else if (romanMap.hasOwnProperty(rawLabel.toLowerCase())) idx = romanMap[rawLabel.toLowerCase()];
+        else idx = options.length;
+
+        currentOption = { label: ['A','B','C','D'][idx] || 'A', text: rest.trim() };
+        options.push(currentOption);
+      } else if (currentOption) {
+        // continuation of previous option (multiline option)
+        currentOption.text += '\n' + line;
+      } else {
+        questionLines.push(line);
+      }
+    }
+
+    if (options.length < 2) return null;
+
+    // Normalize options array to have 4 entries
+    while (options.length < 4) options.push({ label: ['A','B','C','D'][options.length], text: '' });
+
+    const questionText = questionLines.slice(0, foundFirstOptionAt === -1 ? questionLines.length : foundFirstOptionAt).join(' ').trim() || 'Question';
+
+    return {
+      question: questionText,
+      options: options.slice(0,4),
+      format: 'line-based'
+    };
+  }
+
+  static _findBestChain(matches) {
+    // fallback retained for compatibility but not used by line-based parser
+    let maxWeight = 0;
+    let bestChain = [];
+    function search(currentIndex, lastValueIndex, currentChain, currentWeight) {
+      if (currentWeight > maxWeight) { maxWeight = currentWeight; bestChain = [...currentChain]; }
+      for (let i = currentIndex; i < matches.length; i++) {
+        const match = matches[i];
+        if (match.valueIndex > lastValueIndex) {
+          currentChain.push(match);
+          search(i + 1, match.valueIndex, currentChain, currentWeight + match.weight);
+          currentChain.pop();
+        }
+      }
+    }
+    search(0, -1, [], 0);
+    return bestChain;
+  }
+}
+
 // ─── 1. MCQ DETECTOR (enhanced for multi-question) ───────────────────────────
 class MCQDetector {
-  /**
-   * Improved: Split multiple questions with better boundary detection
-   * Handles: 1., 11., Q1., Question 1, (1), i., ii., etc.
-   */
   static splitMultipleQuestions(text) {
     if (!text) return [];
     
-    // Enhanced regex to catch more question number patterns
-    // ^\d+\.?\s+ → 1. or 1 followed by space
-    // ^Q\d+[:\-]?\s+ → Q1: or Q1.
-    // ^Question\s+\d+ → Question 1
-    // ^\(\d+\) → (1)
-    // ^[ivxlc]+[\.\)] → i. or ii)
-    const splitRegex = /^(?:Question\s+\d+|[Qq](?:uestion)?\s*\d+|No\.?\s*\d+|\d+[\.\)]\s+|\(\d+\)|[ivxlc]+[\.\)])\s*(?:[\:\-]|\s+)(?=\S)/gm;
-    
-    const matches = [...text.matchAll(splitRegex)];
-    if (matches.length <= 1) {
-      return [{ text: text, number: null }];
-    }
-
-    const chunks = [];
-    for (let i = 0; i < matches.length; i++) {
-      const start = matches[i].index;
-      const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
-      let chunk = text.substring(start, end).trim();
-      
-      // Extract question number
-      const numberInfo = QuestionNumberExtractor.extract(chunk);
-      
-      // If there's text before the first match, prepend it to the first chunk
-      if (i === 0 && start > 0) {
-        const preamble = text.substring(0, start).trim();
-        if (preamble && preamble.length > 10) { // Only include significant preambles
-          chunk = preamble + '\n\n' + chunk;
-        }
-      }
-      if (chunk) chunks.push({ 
-        text: chunk, 
-        number: numberInfo?.raw || (i + 1).toString(),
-        numberPattern: numberInfo?.full 
-      });
-    }
-    return chunks;
+    const segments = QuestionSegmenter.segment(text);
+    return segments.map((seg, idx) => ({
+      text: seg.text,
+      number: seg.number || (idx + 1).toString(),
+      numberPattern: seg.rawHeader || ''
+    }));
   }
 
-  /**
-   * Detect multiple questions from text, preserving raw & LaTeX separately
-   */
   static detectMultiple(text, rawText = null) {
     const chunks = this.splitMultipleQuestions(text);
     const results = [];
+    
+    console.log(`[MCQDetector.detectMultiple] Processing ${chunks.length} segments.`);
     
     for (const chunk of chunks) {
       if (!chunk.text || !chunk.text.trim()) continue;
@@ -91,10 +216,10 @@ class MCQDetector {
           ...parsed,
           questionNumber: chunk.number,
           rawChunk: chunk.text,
-          ocrConfidence: null // Will be set by pipeline
+          ocrConfidence: null
         });
       } else {
-        // No options found, treat as descriptive question
+        console.log(`[MCQDetector] Segment for Q# ${chunk.number} parsed as descriptive/fallback.`);
         results.push({
           question: chunk.text,
           options: [
@@ -115,29 +240,28 @@ class MCQDetector {
 
   static detect(text) {
     if (!text || typeof text !== 'string') return null;
-    const cleaned = text.replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
-
+    const cleaned = text.trim();
+    
+    const parsed = MCQOptionParser.parse(cleaned);
+    if (parsed) return parsed;
+    
+    // Legacy support fallback
+    const cleanedLegacy = cleaned.replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
     return (
-      this.detectStructuredMCQ(cleaned) ||
-      this.detectLineBasedMCQ(cleaned) ||
-      this.detectInlineMCQ(cleaned) ||
+      this.detectStructuredMCQ(cleanedLegacy) ||
+      this.detectLineBasedMCQ(cleanedLegacy) ||
+      this.detectInlineMCQ(cleanedLegacy) ||
       null
     );
   }
 
   static detectInlineMCQ(text) {
-    // Robust inline label splitting. Matches (A), (B), (C), (D) or A., B., C., D.
-    // It avoids stopping at regular parentheses by splitting using the label boundaries
     const labelRegex = /(?:^|\n|\s)[\(\[]?([A-Da-d1-4]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:](?=\s)/g;
     const parts = text.split(labelRegex);
-    
-    // parts will be: [ preamble, label1, text1, label2, text2, ... ]
-    // Need at least 9 parts for 4 options: [preamble, L, T, L, T, L, T, L, T]
     if (parts.length >= 9) {
       const labels = ['A', 'B', 'C', 'D'];
       const labelMap = { '1': 'A', '2': 'B', '3': 'C', '4': 'D', 'i': 'A', 'ii': 'B', 'iii': 'C', 'iv': 'D' };
       const options = [];
-      
       for (let i = 1; i <= 8; i += 2) {
         if (i < parts.length) {
           const rawLabel = parts[i].toLowerCase();
@@ -148,11 +272,9 @@ class MCQDetector {
           });
         }
       }
-      
-      // Only accept if we got 4 non-empty options
       if (options.length === 4 && options.some(o => o.text.length > 0)) {
         return { 
-          question: (parts[0]?.trim() || 'Question').substring(0, 500), // Limit preamble
+          question: (parts[0]?.trim() || 'Question').substring(0, 500),
           options: options, 
           format: 'inline' 
         };
@@ -175,34 +297,25 @@ class MCQDetector {
       if (match) {
         if (firstOptionIndex === -1) firstOptionIndex = i;
         const rawLabel = match[1].toLowerCase();
-        
-        // Normalize label mapping
         let labelStr = labelMap[rawLabel];
         if (!labelStr) {
-          // Handle roman numerals properly
           if (rawLabel === 'iv') labelStr = 'D';
           else if (rawLabel.length === 3 && rawLabel[0] === rawLabel[1]) labelStr = ['A', 'B', 'C', 'D'][rawLabel.length - 1];
           else labelStr = labels[options.length] || 'A';
         }
-        
         currentOption = {
           label: labelStr,
           text: match[2].trim(),
         };
         options.push(currentOption);
       } else if (currentOption && firstOptionIndex >= 0) {
-        // Continuation of previous option (multiline option text)
         currentOption.text += '\n' + lines[i];
       }
     }
 
-    // Require at least 2 options, but ideally 4
     if (options.length >= 2) {
       const questionText = firstOptionIndex > 0 ? lines.slice(0, firstOptionIndex).join('\n').trim() : 'Question';
-      
-      // Ensure exactly 4 options
       while (options.length < 4) options.push({ label: labels[options.length], text: '' });
-      
       return { 
         question: questionText || 'Question',
         options: options.slice(0, 4),
@@ -271,9 +384,29 @@ class LatexSanitizer {
       if (opens > closes) s += ` \\end{${env}}`.repeat(opens - closes);
     }
 
-    // Balance braces and dollar signs
-    this._balanceBraces(s);
-    this._balanceDollarSigns(s);
+    // Balance braces and dollar signs (assign returned corrected text)
+    s = this._balanceBraces(s);
+    s = this._balanceDollarSigns(s);
+
+    // Normalize common OCR symbol mistakes to LaTeX-safe tokens
+    const symbolMap = {
+      '−': '-', // unicode minus
+      '×': '\\times',
+      '÷': '\\div',
+      '·': '\\cdot',
+      '—': '-',
+      '–': '-'
+    };
+    s = s.replace(/[−×÷·—–]/g, ch => symbolMap[ch] || ch);
+
+    // Repair simple frac patterns where OCR may drop braces: frac a b -> \frac{a}{b}
+    s = s.replace(/\\?frac\s*\{?\s*([^\s{}]+)\s*\}?\s*\{?\s*([^\s{}]+)\s*\}?/g, '\\frac{$1}{$2}');
+
+    // Remove duplicated operators like ++ or -- introduced by OCR
+    s = s.replace(/([+\-\/\^=])\1+/g, '$1');
+
+    // Balance parentheses and square brackets
+    s = this._balanceBrackets(s);
 
     // Fix common OCR fraction/power errors
     s = s.replace(/\^(\d)([a-zA-Z])/g, '^{$1}$2');
@@ -292,6 +425,19 @@ class LatexSanitizer {
       else if (s[i] === '}' && s[i - 1] !== '\\') closes++;
     }
     if (opens > closes) return s + '}'.repeat(Math.min(opens - closes, 10));
+    return s;
+  }
+
+  static _balanceBrackets(s) {
+    let openPar = 0, closePar = 0, openSq = 0, closeSq = 0;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === '(' && s[i - 1] !== '\\') openPar++;
+      else if (s[i] === ')' && s[i - 1] !== '\\') closePar++;
+      else if (s[i] === '[' && s[i - 1] !== '\\') openSq++;
+      else if (s[i] === ']' && s[i - 1] !== '\\') closeSq++;
+    }
+    if (openPar > closePar) s = s + ')'.repeat(Math.min(openPar - closePar, 10));
+    if (openSq > closeSq) s = s + ']'.repeat(Math.min(openSq - closeSq, 10));
     return s;
   }
 
@@ -475,6 +621,15 @@ class OCRPipeline {
    * @param {string} filename - Original filename
    */
   static async runFromBuffer(buffer, mimetype, filename) {
+    // Step 0: Preprocess image buffer to improve OCR quality and detect issues
+    let preprocessInfo = null;
+    try {
+      preprocessInfo = await ImagePreprocessor.preprocessBuffer(buffer);
+      buffer = preprocessInfo.buffer;
+    } catch (err) {
+      console.warn('[OCRPipeline] Image preprocessing failed, proceeding with original buffer:', err.message);
+    }
+
     // Step 1: Call Mathpix with FormData multipart upload
     const mathpixResult = await MathpixService.processBuffer(buffer, mimetype, filename);
     const { rawText, latex: rawLatex, confidence } = mathpixResult;
@@ -505,7 +660,9 @@ class OCRPipeline {
         rawLatex: rawLatex,
         sanitizedLatex: sanitizedLatex,
         confidence: confidence,
-        chunkText: q.rawChunk || ''
+        chunkText: q.rawChunk || '',
+        preprocessing: preprocessInfo ? preprocessInfo.diagnostics : null,
+        preprocessingQuality: preprocessInfo ? preprocessInfo.qualityRating : null
       },
       // Store OCR confidence at question level
       ocrConfidence: confidence,
@@ -573,6 +730,7 @@ class OCRPipeline {
 
 module.exports = {
   QuestionNumberExtractor,
+  QuestionSegmenter,
   MCQDetector,
   LatexSanitizer,
   QuestionQueueManager,
