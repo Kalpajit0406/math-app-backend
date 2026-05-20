@@ -67,249 +67,70 @@ function getMathRanges(text) {
   return ranges;
 }
 
-// Normalizes whitespace, OCR spacing anomalies, and delimiters
-function normalizeOcrText(text) {
-  if (!text) return '';
-  let s = text;
-  s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  s = s.replace(/[ \t]+/g, ' ');
-  
-  // Normalize question numbers at line starts (e.g. "11 . " -> "11. ")
-  s = s.replace(/(?<=^|\n)[ \t]*(\d+)[ \t]*\.[ \t]*/g, '$1. ');
-  s = s.replace(/(?<=^|\n)[ \t]*(\d+)[ \t]*\)[ \t]*/g, '$1) ');
-  
-  // Normalize option labels
-  s = s.replace(/\([ \t]*([A-Da-d]|[1-4]|i{1,4})[ \t]*\)/g, '($1)');
-  s = s.replace(/\[[ \t]*([A-Da-d]|[1-4]|i{1,4})[ \t]*\]/g, '[$1]');
-  s = s.replace(/(?<=^|\n|[ \t])([A-Da-d]|[1-4])\s*\.\s*/g, '$1. ');
-  s = s.replace(/(?<=^|\n|[ \t])([A-Da-d]|[1-4])\s*\:\s*/g, '$1: ');
-  
-  return s.trim();
-}
-
-class QuestionSegmenter {
-  static segment(text) {
-    if (!text) return [];
-    
-    const normalized = normalizeOcrText(text);
-    const mathRanges = getMathRanges(normalized);
-    
-    // Boundary Regex matches Question headers at starts of lines, followed by space and non-empty text
-    const boundaryRegex = /(?:^|\n)[ \t]*(?:\*\*|\$|\\textbf{)?(?:(?:Question\s+(\d+)|[Qq](?:uestion)?\s*(\d+)|No\.?\s*(\d+))(?:[\.\)\-\:]?)|(\d+)[\.\)])(?:\*\*|\$|})?[ \t]+(?=\S)/g;
-    
-    const rawMatches = [...normalized.matchAll(boundaryRegex)];
-    const validMatches = rawMatches.filter(match => {
-      const idx = match.index;
-      // Make sure match index is not inside a math block
-      const isInside = mathRanges.some(r => idx >= r.start && idx < r.end);
-      if (isInside) {
-        console.log(`[QuestionSegmenter] Ignored candidate boundary "${match[0].trim()}" because it is inside a LaTeX/math expression.`);
-      }
-      return !isInside;
-    });
-    
-    if (validMatches.length === 0) {
-      // Try Roman numerals as fallback
-      const looseRegex = /(?:^|\n)[ \t]*(?:\*\*|\$|\\textbf{)?(?:([ivxlcIVXLC]+))[\.\)](?:\*\*|\$|})?[ \t]+(?=\S)/g;
-      const rawLoose = [...normalized.matchAll(looseRegex)];
-      const validLoose = rawLoose.filter(match => {
-        const idx = match.index;
-        return !mathRanges.some(r => idx >= r.start && idx < r.end);
-      });
-      
-      if (validLoose.length > 1) {
-        console.log(`[QuestionSegmenter] Found ${validLoose.length} Roman numeral-based question boundaries.`);
-        return this._splitByMatches(normalized, validLoose);
-      }
-      
-      console.log('[QuestionSegmenter] No question boundaries found. Processing single continuous segment.');
-      return [{
-        text: normalized,
-        number: null,
-        startIndex: 0,
-        endIndex: normalized.length
-      }];
-    }
-        // First pass: apply OCR normalizer to repair common OCR artifacts
-        const normalizedPre = OCRNormalizer.normalizeText(text);
-        const normalized = normalizeOcrText(normalizedPre);
-    console.log(`[QuestionSegmenter] Segmented text into ${validMatches.length} questions.`);
-    return this._splitByMatches(normalized, validMatches);
-  }
-        // Boundary Regex matches strict question headers per requirements:
-        // lines starting with "1.", "2.", "Q1.", "Q2.", "Question 1", etc.
-        const boundaryRegex = /(?:^|\n)\s*(?:Question\s+(\d+)|Q\s*(\d+)|Q(\d+)|(\d+)\.)\s+(?=\S)/g;
-  static _splitByMatches(text, matches) {
-    const segments = [];
-    for (let i = 0; i < matches.length; i++) {
-      const match = matches[i];
-      const start = match.index;
-      const end = (i + 1 < matches.length) ? matches[i + 1].index : text.length;
-      
-      const segmentText = text.substring(start, end).trim();
-      
-      let number = null;
-      for (let g = 1; g < match.length; g++) {
-        if (match[g]) {
-          number = match[g];
-          break;
-        }
-      }
-      
-      console.log(`[QuestionSegmenter] Boundary detected: Q# ${number || (i + 1)} starts at index ${start}`);
-      
-      segments.push({
-        text: segmentText,
-        number: number,
-        startIndex: start,
-        endIndex: end,
-        rawHeader: match[0]
-      });
-    }
-    return segments;
-  }
-}
-
 class MCQOptionParser {
   static parse(segmentText) {
     if (!segmentText) return null;
-    // Truncate segment if it contains an internal question header (defensive)
+
+    // Defensive: truncate if a subsequent question header exists inside
     const internalHeader = segmentText.match(/\n\s*(?:Question\s+\d+|Q\s*\d+|Q\d+|\d+\.)\s+/);
     if (internalHeader && internalHeader.index != null) {
       segmentText = segmentText.substring(0, internalHeader.index).trim();
     }
 
-    const mathRanges = getMathRanges(segmentText);
-    
-    // Label Regex looks for (A), A., A:, [A]
-    const labelRegex = /(?:^|\n|([ \t\(\[]))([A-Da-d1-4]|i{1,4}|I{1,4})([\)\]\.\:\-])(?=[ \t]+|\n|$)/g;
-    
-    const rawMatches = [];
-    let match;
-    labelRegex.lastIndex = 0;
-    while ((match = labelRegex.exec(segmentText)) !== null) {
-      rawMatches.push(match);
-    }
-          // Ensure we do NOT include a subsequent question header inside an option block
-          let rawSeg = text.substring(start, end);
-          // If the segment contains an internal question header (appears after the first line), truncate before it
-          const internalHeader = rawSeg.slice(1).match(/\n\s*(?:Question\s+\d+|Q\s*\d+|Q\d+|\d+\.)\s+/);
-          if (internalHeader && internalHeader.index != null) {
-            rawSeg = rawSeg.substring(0, 1 + internalHeader.index).trim();
-          }
+    const lines = segmentText.split('\n').map(l => l.replace(/\r/g, '').trim());
+    const optionStartRegex = /^\s*[\(\[]?\s*([A-Da-d1-4]|i{1,4}|I{1,4})\s*[\)\]\.]\s*(.*)$/;
+    const romanMap = { i: 0, ii: 1, iii: 2, iv: 3, v: 3 };
+    const numericMap = { '1': 0, '2': 1, '3': 2, '4': 3 };
+    const alphaMap = { A:0, B:1, C:2, D:3, a:0, b:1, c:2, d:3 };
 
-          const segmentText = rawSeg.trim();
-    const validMatches = rawMatches.filter(m => {
-      const idx = m.index;
-      const isInside = mathRanges.some(r => idx >= r.start && idx < r.end);
-      if (isInside) {
-        console.log(`[MCQOptionParser] Ignored candidate option label "${m[0].trim()}" because it resides within a math block.`);
-      }
-      return !isInside;
-    });
-    
-    const matches = [];
-    for (const m of validMatches) {
-      const matchIndex = m.index;
-      const rawMatchedText = m[0];
-      const prefixDelim = m[1] || '';
-      const labelChar = m[2];
-      const suffixDelim = m[3];
-      
-      let valueIndex = -1;
-      let style = '';
-      const upperChar = labelChar.toUpperCase();
-      
-      if (['A', 'B', 'C', 'D'].includes(upperChar)) {
-        valueIndex = ['A', 'B', 'C', 'D'].indexOf(upperChar);
-        style = (labelChar === upperChar) ? 'ALPHA_UPPER' : 'ALPHA_LOWER';
-      } else if (['1', '2', '3', '4'].includes(labelChar)) {
-        valueIndex = ['1', '2', '3', '4'].indexOf(labelChar);
-        style = 'NUMERIC';
-      } else if (['I', 'II', 'III', 'IV'].includes(upperChar)) {
-        valueIndex = ['I', 'II', 'III', 'IV'].indexOf(upperChar);
-        style = (labelChar === upperChar) ? 'ROMAN_UPPER' : 'ROMAN_LOWER';
-      }
-      
-      if (valueIndex !== -1) {
-        let weight = 1;
-        const prevChar = segmentText.substring(Math.max(0, matchIndex - 1), matchIndex);
-        const isNewLine = prevChar === '\n' || prevChar === '\r' || matchIndex === 0;
-        
-        if (isNewLine) weight += 5;
-        if ((prefixDelim === '(' && suffixDelim === ')') || (prefixDelim === '[' && suffixDelim === ']')) {
-          weight += 10;
-        } else if (suffixDelim === '.' || suffixDelim === ':') {
-          weight += 3;
-        }
-        
-        matches.push({
-          index: matchIndex,
-          length: rawMatchedText.length,
-          rawText: rawMatchedText,
-          labelChar: labelChar,
-          valueIndex: valueIndex,
-          style: style,
-          weight: weight
-        });
+    let questionLines = [];
+    const options = [];
+    let currentOption = null;
+    let foundFirstOptionAt = -1;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const m = line.match(optionStartRegex);
+      if (m) {
+        foundFirstOptionAt = foundFirstOptionAt === -1 ? i : foundFirstOptionAt;
+        const rawLabel = m[1];
+        const rest = m[2] || '';
+        let idx = null;
+        if (alphaMap.hasOwnProperty(rawLabel)) idx = alphaMap[rawLabel];
+        else if (numericMap.hasOwnProperty(rawLabel)) idx = numericMap[rawLabel];
+        else if (romanMap.hasOwnProperty(rawLabel.toLowerCase())) idx = romanMap[rawLabel.toLowerCase()];
+        else idx = options.length;
+
+        currentOption = { label: ['A','B','C','D'][idx] || 'A', text: rest.trim() };
+        options.push(currentOption);
+      } else if (currentOption) {
+        // continuation of previous option (multiline option)
+        currentOption.text += '\n' + line;
+      } else {
+        questionLines.push(line);
       }
     }
-    
-    if (matches.length === 0) return null;
-    
-    const bestChain = this._findBestChain(matches);
-    if (bestChain.length < 2) {
-      console.warn(`[MCQOptionParser] Malformed options block. Found labels but no coherent option chain of length >= 2 in segment.`);
-      return null;
-    }
-    
-    const options = [
-      { label: 'A', text: '' },
-      { label: 'B', text: '' },
-      { label: 'C', text: '' },
-      { label: 'D', text: '' }
-    ];
-    
-    const questionTextEnd = bestChain[0].index;
-    const questionText = segmentText.substring(0, questionTextEnd).trim();
-    
-    for (let i = 0; i < bestChain.length; i++) {
-      const currentMatch = bestChain[i];
-      const start = currentMatch.index + currentMatch.length;
-      const end = (i + 1 < bestChain.length) ? bestChain[i + 1].index : segmentText.length;
-      
-      const optionText = segmentText.substring(start, end).trim();
-      const targetLabelIndex = currentMatch.valueIndex;
-      
-      if (targetLabelIndex >= 0 && targetLabelIndex < 4) {
-        options[targetLabelIndex].text = optionText;
-      }
-    }
-    
-    let cleanQuestionText = questionText;
-    const numInfo = QuestionNumberExtractor.extract(cleanQuestionText);
-    if (numInfo) {
-      cleanQuestionText = cleanQuestionText.substring(numInfo.full.length).trim();
-    }
-    
-    console.log(`[MCQOptionParser] Successfully parsed option chain of length ${bestChain.length}. Question text length: ${cleanQuestionText.length}`);
+
+    if (options.length < 2) return null;
+
+    // Normalize options array to have 4 entries
+    while (options.length < 4) options.push({ label: ['A','B','C','D'][options.length], text: '' });
+
+    const questionText = questionLines.slice(0, foundFirstOptionAt === -1 ? questionLines.length : foundFirstOptionAt).join(' ').trim() || 'Question';
+
     return {
-      question: cleanQuestionText,
-      options: options,
-      format: 'structured-mcq'
+      question: questionText,
+      options: options.slice(0,4),
+      format: 'line-based'
     };
   }
-  
+
   static _findBestChain(matches) {
+    // fallback retained for compatibility but not used by line-based parser
     let maxWeight = 0;
     let bestChain = [];
-    
     function search(currentIndex, lastValueIndex, currentChain, currentWeight) {
-      if (currentWeight > maxWeight) {
-        maxWeight = currentWeight;
-        bestChain = [...currentChain];
-      }
-      
+      if (currentWeight > maxWeight) { maxWeight = currentWeight; bestChain = [...currentChain]; }
       for (let i = currentIndex; i < matches.length; i++) {
         const match = matches[i];
         if (match.valueIndex > lastValueIndex) {
@@ -319,7 +140,6 @@ class MCQOptionParser {
         }
       }
     }
-    
     search(0, -1, [], 0);
     return bestChain;
   }
@@ -525,6 +345,26 @@ class LatexSanitizer {
     s = this._balanceBraces(s);
     s = this._balanceDollarSigns(s);
 
+    // Normalize common OCR symbol mistakes to LaTeX-safe tokens
+    const symbolMap = {
+      '−': '-', // unicode minus
+      '×': '\\times',
+      '÷': '\\div',
+      '·': '\\cdot',
+      '—': '-',
+      '–': '-'
+    };
+    s = s.replace(/[−×÷·—–]/g, ch => symbolMap[ch] || ch);
+
+    // Repair simple frac patterns where OCR may drop braces: frac a b -> \frac{a}{b}
+    s = s.replace(/\\?frac\s*\{?\s*([^\s{}]+)\s*\}?\s*\{?\s*([^\s{}]+)\s*\}?/g, '\\frac{$1}{$2}');
+
+    // Remove duplicated operators like ++ or -- introduced by OCR
+    s = s.replace(/([+\-\/\^=])\1+/g, '$1');
+
+    // Balance parentheses and square brackets
+    s = this._balanceBrackets(s);
+
     // Fix common OCR fraction/power errors
     s = s.replace(/\^(\d)([a-zA-Z])/g, '^{$1}$2');
     s = s.replace(/_(\d)([a-zA-Z])/g, '_{$1}$2');
@@ -542,6 +382,19 @@ class LatexSanitizer {
       else if (s[i] === '}' && s[i - 1] !== '\\') closes++;
     }
     if (opens > closes) return s + '}'.repeat(Math.min(opens - closes, 10));
+    return s;
+  }
+
+  static _balanceBrackets(s) {
+    let openPar = 0, closePar = 0, openSq = 0, closeSq = 0;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === '(' && s[i - 1] !== '\\') openPar++;
+      else if (s[i] === ')' && s[i - 1] !== '\\') closePar++;
+      else if (s[i] === '[' && s[i - 1] !== '\\') openSq++;
+      else if (s[i] === ']' && s[i - 1] !== '\\') closeSq++;
+    }
+    if (openPar > closePar) s = s + ')'.repeat(Math.min(openPar - closePar, 10));
+    if (openSq > closeSq) s = s + ']'.repeat(Math.min(openSq - closeSq, 10));
     return s;
   }
 
