@@ -16,9 +16,9 @@ This file tracks changes, diagnostic findings, and next steps for the OCR pipeli
 
 ## Next planned steps
 
-1. Hardening `QuestionSegmenter` boundary rules (prevent cross-question leakage).
-2. Improve `MCQOptionParser` to enforce option boundaries and multi-line options safely.
-3. Add OCRNormalizer layer to clean Mathpix text before segmentation.
+1. Hardening `QuestionSegmenter` boundary rules (prevent cross-question leakage). — completed
+2. Improve `MCQOptionParser` to enforce option boundaries and multi-line options safely. — in progress (defensive truncation added)
+3. Add OCRNormalizer layer to clean Mathpix text before segmentation. — completed (`src/services/ocrNormalizer.js`)
 4. Add queue persistence (Redis or DB-backed) and background processing for large PDFs.
 5. Add observability: structured logs, tracing IDs, and metrics for per-question confidence.
 

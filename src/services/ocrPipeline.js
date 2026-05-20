@@ -130,11 +130,15 @@ class QuestionSegmenter {
         endIndex: normalized.length
       }];
     }
-    
+        // First pass: apply OCR normalizer to repair common OCR artifacts
+        const normalizedPre = OCRNormalizer.normalizeText(text);
+        const normalized = normalizeOcrText(normalizedPre);
     console.log(`[QuestionSegmenter] Segmented text into ${validMatches.length} questions.`);
     return this._splitByMatches(normalized, validMatches);
   }
-  
+        // Boundary Regex matches strict question headers per requirements:
+        // lines starting with "1.", "2.", "Q1.", "Q2.", "Question 1", etc.
+        const boundaryRegex = /(?:^|\n)\s*(?:Question\s+(\d+)|Q\s*(\d+)|Q(\d+)|(\d+)\.)\s+(?=\S)/g;
   static _splitByMatches(text, matches) {
     const segments = [];
     for (let i = 0; i < matches.length; i++) {
@@ -169,7 +173,12 @@ class QuestionSegmenter {
 class MCQOptionParser {
   static parse(segmentText) {
     if (!segmentText) return null;
-    
+    // Truncate segment if it contains an internal question header (defensive)
+    const internalHeader = segmentText.match(/\n\s*(?:Question\s+\d+|Q\s*\d+|Q\d+|\d+\.)\s+/);
+    if (internalHeader && internalHeader.index != null) {
+      segmentText = segmentText.substring(0, internalHeader.index).trim();
+    }
+
     const mathRanges = getMathRanges(segmentText);
     
     // Label Regex looks for (A), A., A:, [A]
@@ -181,7 +190,15 @@ class MCQOptionParser {
     while ((match = labelRegex.exec(segmentText)) !== null) {
       rawMatches.push(match);
     }
-    
+          // Ensure we do NOT include a subsequent question header inside an option block
+          let rawSeg = text.substring(start, end);
+          // If the segment contains an internal question header (appears after the first line), truncate before it
+          const internalHeader = rawSeg.slice(1).match(/\n\s*(?:Question\s+\d+|Q\s*\d+|Q\d+|\d+\.)\s+/);
+          if (internalHeader && internalHeader.index != null) {
+            rawSeg = rawSeg.substring(0, 1 + internalHeader.index).trim();
+          }
+
+          const segmentText = rawSeg.trim();
     const validMatches = rawMatches.filter(m => {
       const idx = m.index;
       const isInside = mathRanges.some(r => idx >= r.start && idx < r.end);
