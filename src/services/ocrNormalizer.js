@@ -39,8 +39,18 @@ class OCRNormalizer {
     s = s.split('\n').reduce((acc, line, idx, arr) => {
       if (idx === 0) return [line];
       const prev = acc[acc.length - 1];
-      if (prev && !/[\.\?\!:\;\)]$/.test(prev.trim()) && /^[a-z0-9\\\(\$\[]/.test(line.trim())) {
-        acc[acc.length - 1] = `${prev} ${line.trim()}`;
+      const trimmedLine = line.trim();
+      const startsQuestionHeader = /^(?:Question\s+\d+|Q\s*\d+|Q\d+|\d+\.)\s*/.test(trimmedLine);
+      const startsOptionLabel = /^[\(\[]?(?:[A-Da-d]|[1-4]|i{1,4}|I{1,4})[\)\]\.\:]\s+/.test(trimmedLine);
+
+      if (
+        prev &&
+        !startsQuestionHeader &&
+        !startsOptionLabel &&
+        !/[\.\?\!:\;\)]$/.test(prev.trim()) &&
+        /^[a-z0-9\\\(\$\[]/.test(trimmedLine)
+      ) {
+        acc[acc.length - 1] = `${prev} ${trimmedLine}`;
       } else {
         acc.push(line);
       }

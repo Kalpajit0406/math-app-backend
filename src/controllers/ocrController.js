@@ -91,3 +91,29 @@ exports.scanImage = async (req, res) => {
     return res.status(statusCode).json({ success: false, message });
   }
 };
+
+exports.getJobStatus = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const job = await OCRQueueService.getJob(jobId);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'OCR job not found' });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        jobId: job._id,
+        status: job.status,
+        attempts: job.attempts,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+        error: job.error || null,
+        result: job.status === 'done' ? job.result : null,
+      },
+    });
+  } catch (error) {
+    console.error('[OCR] getJobStatus error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to get OCR job status' });
+  }
+};

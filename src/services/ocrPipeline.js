@@ -1,5 +1,6 @@
 const { MathpixService } = require('./mathpixService');
 const { ImagePreprocessor } = require('./imagePreprocessor');
+const { OCRNormalizer } = require('./ocrNormalizer');
 
 // ─── 0. QUESTION NUMBER EXTRACTOR ──────────────────────────────────────────
 class QuestionNumberExtractor {
@@ -65,6 +66,48 @@ function getMathRanges(text) {
   }
   
   return ranges;
+}
+
+function normalizeOcrText(text) {
+  if (!text) return '';
+  let s = text;
+  s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  s = s.replace(/[ \t]+/g, ' ');
+  s = s.replace(/(?<=^|\n)\s*(\d+)\s*[\.)]\s*/g, '$1. ');
+  s = s.replace(/\n{3,}/g, '\n\n');
+  return s.trim();
+}
+
+class QuestionSegmenter {
+  static segment(text) {
+    if (!text) return [];
+    const normalized = normalizeOcrText(OCRNormalizer.normalizeText(text));
+    const mathRanges = getMathRanges(normalized);
+    const boundaryRegex = /(?:^|\n)\s*(?:Question\s+(\d+)|Q\s*(\d+)|Q(\d+)|(\d+)\.)\s+(?=\S)/g;
+
+    const rawMatches = [...normalized.matchAll(boundaryRegex)];
+    const matches = rawMatches.filter(m => !mathRanges.some(r => m.index >= r.start && m.index < r.end));
+
+    if (matches.length === 0) {
+      return [{ text: normalized, number: null, startIndex: 0, endIndex: normalized.length, rawHeader: '' }];
+    }
+
+    const segments = [];
+    for (let i = 0; i < matches.length; i++) {
+      const match = matches[i];
+      const start = match.index;
+      const end = (i + 1 < matches.length) ? matches[i + 1].index : normalized.length;
+      let seg = normalized.substring(start, end).trim();
+      const innerHeader = seg.slice(1).match(/\n\s*(?:Question\s+\d+|Q\s*\d+|Q\d+|\d+\.)\s+/);
+      if (innerHeader && innerHeader.index != null) seg = seg.substring(0, 1 + innerHeader.index).trim();
+      let number = null;
+      for (let g = 1; g < match.length; g++) {
+        if (match[g]) { number = match[g]; break; }
+      }
+      segments.push({ text: seg, number, startIndex: start, endIndex: end, rawHeader: match[0] });
+    }
+    return segments;
+  }
 }
 
 class MCQOptionParser {
@@ -687,6 +730,7 @@ class OCRPipeline {
 
 module.exports = {
   QuestionNumberExtractor,
+  QuestionSegmenter,
   MCQDetector,
   LatexSanitizer,
   QuestionQueueManager,

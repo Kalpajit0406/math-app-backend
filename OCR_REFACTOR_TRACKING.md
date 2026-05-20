@@ -24,3 +24,16 @@ This file tracks changes, diagnostic findings, and next steps for the OCR pipeli
 5. Add observability: structured logs, tracing IDs, and metrics for per-question confidence.
 
 If another agent continues work, please update this file after each completed step.
+
+## March 21, 2026 — Queue + CI hardening
+
+- Added persistent OCR queue model: `src/models/ocrJobModel.js`.
+- Added queue service: `src/services/ocrQueueService.js` with enqueue/get/mark transitions.
+- Added async OCR worker: `src/workers/ocrWorker.js`.
+- Added async enqueue in controller (`?async=true`) and polling endpoint support (`GET /ocr/jobs/:jobId`).
+- Fixed queue bug: incorrect `$inc` usage in `markProcessing`.
+- Added storage optimization: remove original image buffer from job after completion.
+- Added parser tests: `test/ocr_parser.test.js` using `node:test`.
+- Added CI workflow: `.github/workflows/ci.yml`.
+- Fixed OCRNormalizer merge logic so question boundaries/options are not merged into previous lines.
+- Verified local tests pass: `npm test` -> 2/2 passing.

@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node src/server.js",
-    "test": "mocha --exit",
+    "test": "node --test",
     "seed:teacher": "node seed_teacher.js",
     "optimize:db": "node optimize_mongodb.js"
   },

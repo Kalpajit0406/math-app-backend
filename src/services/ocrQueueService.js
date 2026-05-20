@@ -12,11 +12,18 @@ class OCRQueueService {
   }
 
   static async markProcessing(jobId) {
-    return OCRJob.findByIdAndUpdate(jobId, { status: 'processing', attempts: { $inc: 1 }, updatedAt: Date.now() }, { new: true }).exec();
+    return OCRJob.findByIdAndUpdate(
+      jobId,
+      { $set: { status: 'processing', updatedAt: Date.now() }, $inc: { attempts: 1 } },
+      { new: true }
+    ).exec();
   }
 
   static async markDone(jobId, result) {
-    return OCRJob.findByIdAndUpdate(jobId, { status: 'done', result, updatedAt: Date.now() }).exec();
+    return OCRJob.findByIdAndUpdate(
+      jobId,
+      { $set: { status: 'done', result, rawText: result?.rawText || '', latex: result?.latex || '', updatedAt: Date.now() }, $unset: { buffer: 1 } }
+    ).exec();
   }
 
   static async markFailed(jobId, error) {
