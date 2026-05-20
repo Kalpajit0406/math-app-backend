@@ -1,4 +1,5 @@
 const { OCRPipeline } = require('../services/ocrPipeline');
+const { OCRQueueService } = require('../services/ocrQueueService');
 
 /**
  * Resolves the image source for OCR.
@@ -44,6 +45,14 @@ exports.scanImage = async (req, res) => {
         success: false,
         message: 'Empty image buffer received by server.',
       });
+    }
+
+    // Support async enqueue: client may supply ?async=true or body.async = true
+    const wantsAsync = (req.query?.async === 'true') || (req.body?.async === true);
+    if (wantsAsync && source.type === 'buffer') {
+      // Enqueue and return job id for polling
+      const job = await OCRQueueService.enqueueFromBuffer({ buffer: source.buffer, mimetype: source.mimetype, filename: source.filename, sourceType: 'file' });
+      return res.status(202).json({ success: true, jobId: job._id, message: 'OCR job queued' });
     }
 
     let result;
