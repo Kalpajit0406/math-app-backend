@@ -5,4 +5,8 @@ router.get('/', (req, res) => {
   res.json({ success: true, uptime: process.uptime(), timestamp: Date.now() });
 });
 
+router.get('/health', (req, res) => {
+  res.json({ success: true, uptime: process.uptime(), timestamp: Date.now() });
+});
+
 module.exports = router;

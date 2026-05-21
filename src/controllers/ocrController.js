@@ -1,6 +1,17 @@
 const { OCRPipeline } = require('../services/ocrPipeline');
 const { OCRQueueService } = require('../services/ocrQueueService');
 
+const OCR_SCAN_TIMEOUT_MS = Number.parseInt(process.env.OCR_SCAN_TIMEOUT_MS || '30000', 10);
+
+const withTimeout = (promise, timeoutMs, timeoutMessage) => {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+    }),
+  ]);
+};
+
 /**
  * Resolves the image source for OCR.
  * Priority: 1) Multer file buffer (most reliable), 2) base64 body, 3) URL body
@@ -30,7 +41,9 @@ const resolveSource = (req) => {
 };
 
 exports.scanImage = async (req, res) => {
+  const requestStartedAt = Date.now();
   try {
+    console.log('[OCR] Upload start');
     const source = resolveSource(req);
     if (!source) {
       return res.status(400).json({
@@ -58,11 +71,23 @@ exports.scanImage = async (req, res) => {
     let result;
     if (source.type === 'buffer') {
       // ✅ Primary path: direct buffer → FormData multipart upload to Mathpix
-      result = await OCRPipeline.runFromBuffer(source.buffer, source.mimetype, source.filename);
+      console.log('[OCR] OCR pipeline start (buffer)');
+      result = await withTimeout(
+        OCRPipeline.runFromBuffer(source.buffer, source.mimetype, source.filename),
+        OCR_SCAN_TIMEOUT_MS,
+        `OCR scan timeout after ${OCR_SCAN_TIMEOUT_MS}ms`
+      );
     } else {
       // Fallback path: base64/URL (legacy compatibility)
-      result = await OCRPipeline.run(source.src);
+      console.log('[OCR] OCR pipeline start (src)');
+      result = await withTimeout(
+        OCRPipeline.run(source.src),
+        OCR_SCAN_TIMEOUT_MS,
+        `OCR scan timeout after ${OCR_SCAN_TIMEOUT_MS}ms`
+      );
     }
+
+    console.log(`[OCR] OCR pipeline complete (${Date.now() - requestStartedAt}ms)`);
 
     console.log(`[OCR] Success. Detected ${result.parsedQuestions?.length || 0} questions.`);
 
@@ -87,6 +112,7 @@ exports.scanImage = async (req, res) => {
     if (message.toLowerCase().includes('credentials')) statusCode = 500;
     else if (message.toLowerCase().includes('empty') || message.toLowerCase().includes('no file')) statusCode = 400;
     else if (message.toLowerCase().includes('too large')) statusCode = 413;
+    else if (message.toLowerCase().includes('timeout')) statusCode = 504;
 
     return res.status(statusCode).json({ success: false, message });
   }

@@ -42,4 +42,6 @@ const questionSchema = new mongoose.Schema({
   }
 });
 
+questionSchema.index({ classNo: 1, language: 1, chapter: 1 });
+
 module.exports = mongoose.model('Question', questionSchema);

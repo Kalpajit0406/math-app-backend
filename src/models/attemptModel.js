@@ -42,4 +42,6 @@ const attemptSchema = new mongoose.Schema({
   }
 });
 
+attemptSchema.index({ userId: 1, examId: 1, endTime: 1 });
+
 module.exports = mongoose.model('Attempt', attemptSchema);

@@ -2,6 +2,13 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const Student = require('../models/studentModel');
 
+const isTeacherBypassEnabled = () => {
+  const flag = String(process.env.ALLOW_TEACHER_BYPASS || '').toLowerCase();
+  return flag === 'true' || flag === '1' || flag === 'yes';
+};
+
+const getTeacherBypassPhone = () => process.env.TEACHER_BYPASS_PHONE || '';
+
 const authService = {
   register: async (studentData) => {
     if (!studentData?.studentPhone) throw new Error('Student phone is required');
@@ -16,19 +23,21 @@ const authService = {
   },
 
   login: async (studentPhone, password) => {
-    // 1. Passwordless Admin/Teacher Bypass
-    if (studentPhone === '6289855545') {
+    const teacherBypassPhone = getTeacherBypassPhone();
+
+    // Explicitly opt-in for local/dev environments only.
+    if (isTeacherBypassEnabled() && teacherBypassPhone && studentPhone === teacherBypassPhone) {
       let student = await Student.findOne({ studentPhone });
       if (!student) {
-        // Auto-provision teacher account
-        const hashedPassword = await bcrypt.hash('teacherBypassSecurePassword123', 10);
+        const bypassPasswordSeed = process.env.TEACHER_BYPASS_PASSWORD || `teacher-bypass:${teacherBypassPhone}`;
+        const hashedPassword = await bcrypt.hash(bypassPasswordSeed, 10);
         student = new Student({
           firstName: 'Teacher',
           lastName: 'Admin',
           classNo: 10,
           language: 'English',
-          studentPhone: '6289855545',
-          guardianPhone: '6289855545',
+          studentPhone: teacherBypassPhone,
+          guardianPhone: teacherBypassPhone,
           password: hashedPassword,
           role: 'teacher',
           verified: true
