@@ -16,6 +16,7 @@ const ocrRoutes = require('./routes/ocrRoutes');
 const pdfRoutes = require('./routes/pdfRoutes');
 const ratingRoutes = require('./routes/ratingRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
+const healthRoutes = require('./routes/healthRoutes');
 
 const app = express();
 
@@ -130,6 +131,21 @@ app.use('/api/v1/analytics', analyticsRoutes);
 app.use('/api/v1/admin/ocr', ocrRoutes);
 app.use('/api/v1/pdf', pdfRoutes);
 app.use('/api/v1/scan', ocrRoutes); // Backward compatibility for legacy frontend constants
+
+// Health probe for service discovery
+app.use('/api/v1/health', healthRoutes);
+
+// Direct health endpoint (fallback) to simplify probes
+app.get('/api/v1/health', (req, res) => {
+  res.json({ success: true, uptime: process.uptime(), timestamp: Date.now() });
+});
+
+// Expose a top-level /health for simpler probes and monitoring systems
+app.use('/health', healthRoutes);
+app.get('/health', (req, res) => {
+  console.log('[Health] probe received');
+  res.json({ success: true, uptime: process.uptime(), timestamp: Date.now() });
+});
 
 // Additional fallback for old API compatibility if needed
 // app.use('/auth', authRoutes);
