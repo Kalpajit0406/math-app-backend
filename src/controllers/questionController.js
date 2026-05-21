@@ -62,7 +62,8 @@ const getQuestions = async (req, res) => {
     
     let filter = {};
     if (classNo) filter.classNo = parseInt(classNo);
-    if (language) filter.language = language;
+    // Make language filter case-insensitive
+    if (language) filter.language = { $regex: `^${language}$`, $options: 'i' };
     if (chapter) filter.chapter = chapter;
 
     const result = await paginate(

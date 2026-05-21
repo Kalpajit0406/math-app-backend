@@ -23,6 +23,7 @@ const validatePassword = (password) => {
 };
 
 const validateClassNumber = (classNo) => {
+  if (classNo === 'all' || classNo === 'All') return true;
   const validClasses = [9, 10, 11, 12];
   return validClasses.includes(Number(classNo));
 };
@@ -119,6 +120,9 @@ const validationRules = {
     }
 
     const { question, options, correctAnswer, language, classNo, chapter } = req.body;
+    const normalizedLanguage = typeof language === 'string'
+      ? language.trim().charAt(0).toUpperCase() + language.trim().slice(1).toLowerCase()
+      : '';
     
     const errors = [];
     if (!question || typeof question !== 'string' || question.trim().length < 2) {
@@ -142,7 +146,7 @@ const validationRules = {
       errors.push('Correct answer is required');
     }
     
-    if (!language || !['Bengali', 'English', 'Both'].includes(language)) {
+    if (!normalizedLanguage || !['Bengali', 'English', 'Both'].includes(normalizedLanguage)) {
       errors.push('Invalid language');
     }
     
@@ -161,6 +165,7 @@ const validationRules = {
     // Sanitize LaTeX content in question and options
     req.body.question = sanitizeLatex(question);
     req.body.options = options.map(opt => sanitizeLatex(opt));
+    req.body.language = normalizedLanguage;
     
     next();
   },
