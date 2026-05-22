@@ -3,6 +3,13 @@
  * Parses options strictly within the boundaries of an isolated question segment.
  * Ensures options do not leak across question blocks and formats options to exactly 4 choices.
  */
+
+// Converts Bengali Unicode digits (০-৯) to ASCII equivalents
+function bengaliToEnglishDigits(str) {
+  if (!str) return str;
+  return str.replace(/[০-৯]/g, (ch) => String(ch.codePointAt(0) - 0x09E6));
+}
+
 class MCQOptionParser {
   /**
    * Parse MCQ options from an isolated question segment text.
@@ -13,20 +20,26 @@ class MCQOptionParser {
     if (!segmentText) return null;
 
     // Defensive check: if there is a subsequent question header leaked inside, truncate it.
-    // (Although QuestionSegmenter should prevent this, we add it as an extra safety layer.)
-    const internalHeader = segmentText.match(/\n\s*(?:Question\s+\d+|Q\s*\d+|Q\d+|\d+\.)\s+/);
+    // Also handles Bengali question headers like "প্রশ্ন 3" or "প্র. 3"
+    const internalHeaderPattern = /\n\s*(?:Question\s+\d+|Q\s*\d+|Q\d+|\d+\.|প্রশ্ন\s*[\d০-৯]+|প্র\.\s*[\d০-৯]+)\s+/;
+    const internalHeader = segmentText.match(internalHeaderPattern);
     if (internalHeader && internalHeader.index != null) {
       segmentText = segmentText.substring(0, internalHeader.index).trim();
     }
 
     const lines = segmentText.split('\n').map(l => l.replace(/\r/g, '').trim());
     
-    // Pattern matches options starting with (A), A., [A], A), etc.
-    const optionStartRegex = /^\s*[\(\[]?\s*([A-Da-d1-4]|i{1,4}|I{1,4})\s*[\)\]\.]\s*(.*)$/;
+    // Pattern matches options starting with:
+    //  - Latin:   (A), A., [A], A), 1., (1) etc.
+    //  - Bengali option labels: ক., (ক), ক), খ., গ., ঘ.
+    //  - Bengali numerals: ১., ২., ৩., ৪. (mapped via bengaliToEnglishDigits)
+    const optionStartRegex = /^\s*[\(\[]?\s*([A-Da-d1-4কখগঘ১২৩৪]|i{1,4}|I{1,4})\s*[\)\]\.]\s*(.*)$/;
     
     const romanMap = { i: 0, ii: 1, iii: 2, iv: 3, v: 3, vi: 3 };
     const numericMap = { '1': 0, '2': 1, '3': 2, '4': 3 };
     const alphaMap = { A: 0, B: 1, C: 2, D: 3, a: 0, b: 1, c: 2, d: 3 };
+    // Bengali option labels (ক=A, খ=B, গ=C, ঘ=D) and Bengali numerals as option markers
+    const bengaliLabelMap = { 'ক': 0, 'খ': 1, 'গ': 2, 'ঘ': 3, '১': 0, '২': 1, '৩': 2, '৪': 3 };
 
     let questionLines = [];
     const options = [];
@@ -48,6 +61,8 @@ class MCQOptionParser {
           idx = alphaMap[rawLabel];
         } else if (numericMap.hasOwnProperty(rawLabel)) {
           idx = numericMap[rawLabel];
+        } else if (bengaliLabelMap.hasOwnProperty(rawLabel)) {
+          idx = bengaliLabelMap[rawLabel];
         } else if (romanMap.hasOwnProperty(rawLabel.toLowerCase())) {
           idx = romanMap[rawLabel.toLowerCase()];
         } else {

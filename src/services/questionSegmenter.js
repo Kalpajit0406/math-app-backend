@@ -1,5 +1,11 @@
 const { OCRNormalizer } = require('./ocrNormalizer');
 
+// Converts Bengali Unicode digits (০-৯) to their ASCII equivalents
+function bengaliToEnglishDigits(str) {
+  if (!str) return str;
+  return str.replace(/[০-৯]/g, (ch) => String(ch.codePointAt(0) - 0x09E6));
+}
+
 // Helper for finding math ranges to preserve LaTeX blocks
 function getMathRanges(text) {
   const ranges = [];
@@ -42,14 +48,16 @@ class QuestionSegmenter {
   static _isQuestionHeader(line) {
     if (!line) return null;
 
-    const trimmed = line.trim();
+    // Normalise Bengali digits before matching
+    const trimmed = bengaliToEnglishDigits(line.trim());
     
     // Strict question header patterns:
     // 1. "Question 12:" or "Q.12 -" or "No. 12"
     // 2. "Question 12 of 20"
     // 3. "12. Evaluate ..." or "12) Evaluate ..." (number followed by delimiter and meaningful text)
+    // 4. Bengali: "প্রশ্ন 12" or "প্র. 12" (Bengali prefix with English/Bengali digits)
     const headerPatterns = [
-      /^(?:Question|Q|No\.?)\s*[:\-]?\s*(\d+)\s*(.+)$/i,
+      /^(?:Question|Q|No\.?|প্রশ্ন|প্র\.?)\s*[:\-]?\s*(\d+)\s*(.+)$/i,
       /^Question\s*(\d+)\s*[:\-]?\s*of\s*\d+\s*(.+)?$/i,
       /^([0-9]{1,3})[\.)\-:]\s+(\S.+)$/,
     ];
@@ -58,13 +66,11 @@ class QuestionSegmenter {
       const match = trimmed.match(pattern);
       if (match) {
         // Defensive: Ensure we don't treat option labels as question headers
-        const isOption = /^[\(\[]?[A-Da-d1-4ivxIVX]{1,4}[\)\]\.]\s+/.test(trimmed);
+        const isOption = /^[\(\[]?[A-Da-d1-4ivxIVX\u0995-\u0998]{1,4}[\)\]\.]\s+/.test(trimmed);
         if (isOption) {
-          // If it matches an option pattern (like A. or B. or i.), verify it's not a false positive
-          // e.g. "1. " is a question, but "A. " or "i. " might be an option.
-          // But a pure number "1. " won't start with A-D or roman i. So we are safe.
-          // Let's filter out if the matched prefix itself is an option pattern.
-          if (/^[A-Da-d]\./.test(trimmed) || /^[a-d]\)/.test(trimmed)) {
+          // Filter out Bengali option labels (ক, খ, গ, ঘ) and latin option prefixes
+          if (/^[A-Da-d]\./.test(trimmed) || /^[a-d]\)/.test(trimmed) ||
+              /^[কখগঘ][\.)\]]/.test(line.trim())) {
             continue;
           }
         }

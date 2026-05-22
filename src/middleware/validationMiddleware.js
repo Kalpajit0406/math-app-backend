@@ -154,7 +154,7 @@ const validationRules = {
       errors.push('Correct answer is required');
     }
     
-    if (!normalizedLanguage || !['Bengali', 'English', 'Both'].includes(normalizedLanguage)) {
+    if (!normalizedLanguage || !['Bengali', 'English'].includes(normalizedLanguage)) {
       errors.push('Invalid language');
     }
     
@@ -180,6 +180,21 @@ const validationRules = {
 
   // Exam validation
   createExamValidation: (req, res, next) => {
+    const isSchedulePayload = !!(req.body.date && req.body.time && req.body.classNo && req.body.language);
+    
+    if (isSchedulePayload) {
+      req.body.title = req.body.title || `Class ${req.body.classNo} ${req.body.language} Test`;
+      req.body.duration = Number(req.body.totalTime || req.body.duration || 0);
+      req.body.totalTime = req.body.duration;
+      req.body.totalQuestions = Number(req.body.totalQuestions || 0);
+      req.body.negativeMarking = Number(req.body.negativeMarking !== undefined ? req.body.negativeMarking : 0.0);
+      req.body.marksPerQuestion = Number(req.body.marksPerQuestion !== undefined ? req.body.marksPerQuestion : 1.0);
+      req.body.chapters = Array.isArray(req.body.chapters) ? req.body.chapters : [];
+      if (!req.body.questions) {
+        req.body.questions = [];
+      }
+    }
+
     const { title, description, duration, classNo, language, totalMarks, questions } = req.body;
     
     const errors = [];
@@ -203,47 +218,49 @@ const validationRules = {
     }
     
     // Validate questions array
-    if (!Array.isArray(questions) || questions.length === 0) {
-      errors.push('Exam must contain at least one question');
-    } else {
-      const seenQuestions = new Set();
-      for (let i = 0; i < questions.length; i++) {
-        const q = questions[i];
-        if (!q) {
-          errors.push(`Question at index ${i} is empty`);
-          continue;
-        }
-        
-        const qText = (q.questionText || q.question || '').trim();
-        if (!qText) {
-          errors.push(`Question at index ${i} must have question text`);
-        } else {
-          if (seenQuestions.has(qText.toLowerCase())) {
-            errors.push(`Duplicate question detected at index ${i}`);
+    if (!isSchedulePayload) {
+      if (!Array.isArray(questions) || questions.length === 0) {
+        errors.push('Exam must contain at least one question');
+      } else {
+        const seenQuestions = new Set();
+        for (let i = 0; i < questions.length; i++) {
+          const q = questions[i];
+          if (!q) {
+            errors.push(`Question at index ${i} is empty`);
+            continue;
           }
-          seenQuestions.add(qText.toLowerCase());
-        }
-
-        if (!q.type || !['mcq', 'numeric'].includes(q.type)) {
-          errors.push(`Question at index ${i} must have a valid type (mcq or numeric)`);
-        }
-
-        if (q.type === 'mcq') {
-          if (!Array.isArray(q.options) || q.options.length !== 4) {
-            errors.push(`MCQ question at index ${i} must have exactly 4 options`);
+          
+          const qText = (q.questionText || q.question || '').trim();
+          if (!qText) {
+            errors.push(`Question at index ${i} must have question text`);
           } else {
-            for (let j = 0; j < 4; j++) {
-              if (typeof q.options[j] !== 'string' || q.options[j].trim() === '') {
-                errors.push(`MCQ question at index ${i} has empty option at choice ${j + 1}`);
+            if (seenQuestions.has(qText.toLowerCase())) {
+              errors.push(`Duplicate question detected at index ${i}`);
+            }
+            seenQuestions.add(qText.toLowerCase());
+          }
+
+          if (!q.type || !['mcq', 'numeric'].includes(q.type)) {
+            errors.push(`Question at index ${i} must have a valid type (mcq or numeric)`);
+          }
+
+          if (q.type === 'mcq') {
+            if (!Array.isArray(q.options) || q.options.length !== 4) {
+              errors.push(`MCQ question at index ${i} must have exactly 4 options`);
+            } else {
+              for (let j = 0; j < 4; j++) {
+                if (typeof q.options[j] !== 'string' || q.options[j].trim() === '') {
+                  errors.push(`MCQ question at index ${i} has empty option at choice ${j + 1}`);
+                }
               }
             }
-          }
-          if (!q.correctAnswer || !['A', 'B', 'C', 'D'].includes(String(q.correctAnswer).trim().toUpperCase())) {
-            errors.push(`MCQ question at index ${i} must have correct answer of A, B, C, or D`);
-          }
-        } else if (q.type === 'numeric') {
-          if (q.correctAnswer === undefined || String(q.correctAnswer).trim() === '') {
-            errors.push(`Numeric question at index ${i} must have a correct answer`);
+            if (!q.correctAnswer || !['A', 'B', 'C', 'D'].includes(String(q.correctAnswer).trim().toUpperCase())) {
+              errors.push(`MCQ question at index ${i} must have correct answer of A, B, C, or D`);
+            }
+          } else if (q.type === 'numeric') {
+            if (q.correctAnswer === undefined || String(q.correctAnswer).trim() === '') {
+              errors.push(`Numeric question at index ${i} must have a correct answer`);
+            }
           }
         }
       }

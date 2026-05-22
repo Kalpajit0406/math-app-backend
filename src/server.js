@@ -19,6 +19,7 @@ const pdfRoutes = require('./routes/pdfRoutes');
 const ratingRoutes = require('./routes/ratingRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const healthRoutes = require('./routes/healthRoutes');
+const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
 
@@ -177,6 +178,8 @@ app.get('/health', (req, res) => {
 // app.use('/auth', authRoutes);
 // app.use('/exams', examRoutes);
 // app.use('/attempt', attemptRoutes);
+
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 3000;
 

@@ -10,18 +10,26 @@ const { QuestionValidator } = require('./questionValidator');
 const { PreviewRenderer } = require('./previewRenderer');
 const { OCRRecoveryEngine } = require('./ocrRecoveryEngine');
 
+// Converts Bengali Unicode digits (০-৯) to their ASCII equivalents
+function bengaliToEnglishDigits(str) {
+  if (!str) return str;
+  return str.replace(/[০-৯]/g, (ch) => String(ch.codePointAt(0) - 0x09E6));
+}
+
 // ─── 0. QUESTION NUMBER EXTRACTOR ──────────────────────────────────────────
 class QuestionNumberExtractor {
   /**
    * Extract question number from text start
    * Handles: "1.", "11.", "Q1.", "Question 1", "(1)", "i.", "1)"
+   * Also handles Bengali: "১.", "২.", "প্রশ্ন ১", "প্র. ২"
    */
   static extract(text) {
     if (!text) return null;
-    const trimmed = text.trim();
+    // Normalise Bengali digits first so patterns work uniformly
+    const trimmed = bengaliToEnglishDigits(text.trim());
     
     const numberPatterns = [
-      /^(?:Question|Q|No\.?)\s*[:\-]?\s*(\d+)/i,           // Question 1, Q1, No.1
+      /^(?:Question|Q|No\.?|প্রশ্ন|প্র\.?)\s*[:\-]?\s*(\d+)/i,  // Question 1, Q1, No.1, প্রশ্ন 1
       /^Question\s*(\d+)\s*[:\-]?\s*of\s*\d+/i,            // Question 1 of 10
       /^\(([ivxldmcIVXLDMC0-9]+)\)\s/,                       // (1) or (i)
       /^([ivxldmcIVXLDMC0-9]+)[\.\)\-\:]\s+(?!\w+[\.\)])/,   // 1., i), 1-
@@ -74,21 +82,28 @@ class MCQDetector {
   }
 
   /**
-   * Parse inline options (e.g. A. option B. option)
+   * Parse inline options (e.g. A. option B. option or ক. option খ. option)
    */
   static detectInlineMCQ(text) {
-    const labelRegex = /(?:^|\n|\s)[\(\[]?([A-Da-d1-4]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:](?=\s)/g;
+    const labelRegex = /(?:^|\n|\s)[\(\[]?([A-Da-d1-4কখগঘ১২৩৪]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:](?=\s)/g;
     const parts = text.split(labelRegex);
     if (parts.length >= 9) {
       const labels = ['A', 'B', 'C', 'D'];
-      const labelMap = { '1': 'A', '2': 'B', '3': 'C', '4': 'D', 'i': 'A', 'ii': 'B', 'iii': 'C', 'iv': 'D' };
+      const labelMap = {
+        '1': 'A', '2': 'B', '3': 'C', '4': 'D',
+        'i': 'A', 'ii': 'B', 'iii': 'C', 'iv': 'D',
+        // Bengali option labels
+        'ক': 'A', 'খ': 'B', 'গ': 'C', 'ঘ': 'D',
+        // Bengali numeral option markers
+        '১': 'A', '২': 'B', '৩': 'C', '৪': 'D',
+      };
       const options = [];
       for (let i = 1; i <= 8; i += 2) {
         if (i < parts.length) {
           const rawLabel = parts[i].toLowerCase();
           const optText = parts[i + 1]?.trim() || '';
           options.push({
-            label: labelMap[rawLabel] || labels[Math.floor(i/2)],
+            label: labelMap[rawLabel] || labelMap[parts[i]] || labels[Math.floor(i/2)],
             text: optText
           });
         }
@@ -105,12 +120,19 @@ class MCQDetector {
   }
 
   /**
-   * Detect option patterns line-by-line
+   * Detect option patterns line-by-line (Latin and Bengali)
    */
   static detectLineBasedMCQ(text) {
     const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-    const optionRegex = /^[\(\[]?([A-Da-d1-4]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:\-\s]+(.+)$/;
-    const labelMap = { '1': 'A', '2': 'B', '3': 'C', '4': 'D', i: 'A', ii: 'B', iii: 'C', iv: 'D', I: 'A', II: 'B', III: 'C', IV: 'D' };
+    // Extended to match Bengali option labels (ক, খ, গ, ঘ) and Bengali numerals (১-৪)
+    const optionRegex = /^[\(\[]?([A-Da-d1-4কখগঘ১২৩৪]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:\-\s]+(.+)$/;
+    const labelMap = {
+      '1': 'A', '2': 'B', '3': 'C', '4': 'D',
+      i: 'A', ii: 'B', iii: 'C', iv: 'D', I: 'A', II: 'B', III: 'C', IV: 'D',
+      // Bengali
+      'ক': 'A', 'খ': 'B', 'গ': 'C', 'ঘ': 'D',
+      '১': 'A', '২': 'B', '৩': 'C', '৪': 'D',
+    };
     const labels = ['A', 'B', 'C', 'D'];
     const options = [];
     let firstOptionIndex = -1;
@@ -121,7 +143,7 @@ class MCQDetector {
       if (match) {
         if (firstOptionIndex === -1) firstOptionIndex = i;
         const rawLabel = match[1].toLowerCase();
-        let labelStr = labelMap[rawLabel];
+        let labelStr = labelMap[rawLabel] || labelMap[match[1]];
         if (!labelStr) {
           if (rawLabel === 'iv') labelStr = 'D';
           else if (rawLabel.length === 3 && rawLabel[0] === rawLabel[1]) labelStr = ['A', 'B', 'C', 'D'][rawLabel.length - 1];
@@ -151,7 +173,7 @@ class MCQDetector {
   }
 
   /**
-   * Detect structured options key-value style
+   * Detect structured options key-value style (Latin and Bengali)
    */
   static detectStructuredMCQ(text) {
     const patterns = [
@@ -165,7 +187,8 @@ class MCQDetector {
         const opts = [];
         const labels = ['A', 'B', 'C', 'D'];
         for (const line of optLines) {
-          const om = line.match(/^[\(\[]?([A-Da-d1-4]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:\-\s]+(.+)$/);
+          // Support Bengali option labels in structured format
+          const om = line.match(/^[\(\[]?([A-Da-d1-4কখগঘ১২৩৪]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:\-\s]+(.+)$/);
           if (om) opts.push({ label: labels[opts.length] || 'A', text: om[2].trim() });
         }
         if (opts.length >= 2) {

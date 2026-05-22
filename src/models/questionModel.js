@@ -3,8 +3,8 @@ const mongoose = require('mongoose');
 const questionSchema = new mongoose.Schema({
   language: {
     type: String,
-    enum: ["Bengali", "English", "Both"],
-    required: true,
+    enum: ["Bengali", "English"],
+    required: [true, "Preferred language is required"],
   },
   chapter: {
     type: String,
@@ -20,7 +20,12 @@ const questionSchema = new mongoose.Schema({
   },
   options: {
     type: [String],
-    validate: [val => val.length === 4, 'Exactly 4 options are required'],
+    validate: {
+      validator: function (val) {
+        return Array.isArray(val) && val.length === 4;
+      },
+      message: "Exactly 4 options are required",
+    },
     required: true,
   },
   question: {
@@ -30,6 +35,12 @@ const questionSchema = new mongoose.Schema({
   diagram: {
     type: String,
     default: null,
+    validate: {
+      validator: function (url) {
+        return url === null || /^https:\/\/res\.cloudinary\.com\/.+/i.test(url);
+      },
+      message: "Invalid Cloudinary URL format",
+    },
   },
 }, { 
   timestamps: true,

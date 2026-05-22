@@ -13,6 +13,7 @@ const announcementRoutes = require('./src/routes/announcementRoutes');
 const ocrRoutes = require('./src/routes/ocrRoutes');
 const ocrSessionRoutes = require('./src/routes/ocrSessionRoutes');
 const pdfRoutes = require('./src/routes/pdfRoutes');
+const errorHandler = require('./src/middleware/errorHandler');
 
 dotenv.config();
 
@@ -29,14 +30,25 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/v1/student', authRoutes);
 app.use('/api/exams', examRoutes);
+app.use('/api/v1/tests', examRoutes);
 app.use('/api/attempt', attemptRoutes);
 app.use('/api/testResponse', attemptRoutes);
+app.use('/api/v1/testResponse', attemptRoutes);
 app.use('/api/v1/question', questionRoutes);
 app.use('/api/v1/announcements', announcementRoutes);
 app.use('/api/v1/admin/ocr', ocrRoutes);
+app.use('/api/v1/scan', ocrRoutes);
 app.use('/api/v1/admin/ocr/session', ocrSessionRoutes);
 app.use('/api/v1/pdf', pdfRoutes);
 // Health Check Endpoints
+app.get('/health', (req, res) => {
+  res.json({ 
+    success: true, 
+    message: 'Backend is healthy', 
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.get('/api/health', (req, res) => {
   res.json({ 
     success: true, 
@@ -61,10 +73,7 @@ app.get('/', (req, res) => {
 });
 
 // Error Handling Middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ success: false, message: 'Internal Server Error' });
-});
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 
