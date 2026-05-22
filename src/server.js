@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const os = require('os');
 // Mongo sanitization is handled via custom middleware below
 // XSS sanitization is handled via custom middleware below
 const connectDB = require('./config/db');
@@ -13,9 +14,12 @@ const examRoutes = require('./routes/examRoutes');
 const attemptRoutes = require('./routes/attemptRoutes');
 const announcementRoutes = require('./routes/announcementRoutes');
 const ocrRoutes = require('./routes/ocrRoutes');
+const ocrSessionRoutes = require('./routes/ocrSessionRoutes');
 const pdfRoutes = require('./routes/pdfRoutes');
 const ratingRoutes = require('./routes/ratingRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
+const healthRoutes = require('./routes/healthRoutes');
+const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
 
@@ -127,21 +131,87 @@ app.use('/api/v1/announcements', announcementRoutes);
 app.use('/api/v1/question', questionRoutes);
 app.use('/api/v1/ratings', ratingRoutes);
 app.use('/api/v1/analytics', analyticsRoutes);
+app.use('/api/v1/admin/ocr/session', ocrSessionRoutes);
 app.use('/api/v1/admin/ocr', ocrRoutes);
 app.use('/api/v1/pdf', pdfRoutes);
 app.use('/api/v1/scan', ocrRoutes); // Backward compatibility for legacy frontend constants
+
+// Health probe for service discovery
+app.use('/api', healthRoutes);
+app.use('/api/v1/health', healthRoutes);
+
+// Direct health endpoint (fallback) to simplify probes
+app.get('/api/v1/health', (req, res) => {
+  res.json({ success: true, uptime: process.uptime(), timestamp: Date.now() });
+});
+
+// Flutter compatibility health endpoint
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    mongo: 'connected',
+    ocr: 'connected',
+    uptime: process.uptime(),
+    timestamp: Date.now(),
+  });
+});
+
+// OCR compatibility health endpoint
+app.get('/api/v1/admin/ocr/health', (req, res) => {
+  res.json({
+    success: true,
+    service: 'ocr',
+    status: 'operational',
+    uptime: process.uptime(),
+    timestamp: Date.now(),
+  });
+});
+
+// Expose a top-level /health for simpler probes and monitoring systems
+app.use('/health', healthRoutes);
+app.get('/health', (req, res) => {
+  console.log('[Health] probe received');
+  res.json({ success: true, uptime: process.uptime(), timestamp: Date.now() });
+});
 
 // Additional fallback for old API compatibility if needed
 // app.use('/auth', authRoutes);
 // app.use('/exams', examRoutes);
 // app.use('/attempt', attemptRoutes);
 
+app.use(errorHandler);
+
 const PORT = process.env.PORT || 3000;
 
 connectDB()
   .then(() => {
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`Server is running on port ${PORT}`);
+    const listenHost = '0.0.0.0';
+    app.listen(PORT, listenHost, () => {
+      const interfaces = os.networkInterfaces();
+      const lanIPs = [];
+
+      for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+          if (iface.family === 'IPv4' && !iface.internal) {
+            lanIPs.push(iface.address);
+          }
+        }
+      }
+
+      console.log('\n╔════════════════════════════════════════════════════════╗');
+      console.log('║               MathsWithSD Backend Ready               ║');
+      console.log('╚════════════════════════════════════════════════════════╝');
+      console.log(`Local: http://localhost:${PORT}`);
+      if (lanIPs.length > 0) {
+        for (const ip of lanIPs) {
+          console.log(`LAN:   http://${ip}:${PORT}`);
+        }
+      } else {
+        console.log('LAN:   no external IPv4 address detected');
+      }
+      console.log(`Health: http://localhost:${PORT}/api/health`);
+      console.log(`OCR:    http://localhost:${PORT}/api/v1/admin/ocr/health`);
+      console.log(`Bind:   ${listenHost}`);
     });
   })
   .catch((error) => {

@@ -49,6 +49,18 @@ const examSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  negativeMarking: {
+    type: Number,
+    default: 0.0,
+  },
+  marksPerQuestion: {
+    type: Number,
+    default: 1.0,
+  },
+  chapters: {
+    type: [String],
+    default: [],
+  },
   questions: [questionSchema],
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,

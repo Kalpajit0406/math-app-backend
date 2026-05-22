@@ -22,7 +22,15 @@ const validatePassword = (password) => {
   return password.length >= 6;
 };
 
+const isTeacherBypassEnabled = () => {
+  const flag = String(process.env.ALLOW_TEACHER_BYPASS || '').toLowerCase();
+  return flag === 'true' || flag === '1' || flag === 'yes';
+};
+
+const getTeacherBypassPhone = () => process.env.TEACHER_BYPASS_PHONE || '';
+
 const validateClassNumber = (classNo) => {
+  if (classNo === 'all' || classNo === 'All') return true;
   const validClasses = [9, 10, 11, 12];
   return validClasses.includes(Number(classNo));
 };
@@ -56,13 +64,14 @@ const validationRules = {
   // Auth validation
   loginValidation: (req, res, next) => {
     const { studentPhone, password } = req.body;
+    const teacherBypassPhone = getTeacherBypassPhone();
+    const teacherBypassAllowed = isTeacherBypassEnabled() && studentPhone === teacherBypassPhone;
     
     const errors = [];
     if (!validatePhoneNumber(studentPhone)) {
       errors.push('Invalid phone number format');
     }
-    // Bypass password checks for the hardcoded teacher account
-    if (studentPhone !== '6289855545' && !validatePassword(password)) {
+    if (!teacherBypassAllowed && !validatePassword(password)) {
       errors.push('Invalid password');
     }
     
@@ -119,6 +128,9 @@ const validationRules = {
     }
 
     const { question, options, correctAnswer, language, classNo, chapter } = req.body;
+    const normalizedLanguage = typeof language === 'string'
+      ? language.trim().charAt(0).toUpperCase() + language.trim().slice(1).toLowerCase()
+      : '';
     
     const errors = [];
     if (!question || typeof question !== 'string' || question.trim().length < 2) {
@@ -142,7 +154,7 @@ const validationRules = {
       errors.push('Correct answer is required');
     }
     
-    if (!language || !['Bengali', 'English', 'Both'].includes(language)) {
+    if (!normalizedLanguage || !['Bengali', 'English'].includes(normalizedLanguage)) {
       errors.push('Invalid language');
     }
     
@@ -161,13 +173,29 @@ const validationRules = {
     // Sanitize LaTeX content in question and options
     req.body.question = sanitizeLatex(question);
     req.body.options = options.map(opt => sanitizeLatex(opt));
+    req.body.language = normalizedLanguage;
     
     next();
   },
 
   // Exam validation
   createExamValidation: (req, res, next) => {
-    const { title, description, duration, classNo, language, totalMarks } = req.body;
+    const isSchedulePayload = !!(req.body.date && req.body.time && req.body.classNo && req.body.language);
+    
+    if (isSchedulePayload) {
+      req.body.title = req.body.title || `Class ${req.body.classNo} ${req.body.language} Test`;
+      req.body.duration = Number(req.body.totalTime || req.body.duration || 0);
+      req.body.totalTime = req.body.duration;
+      req.body.totalQuestions = Number(req.body.totalQuestions || 0);
+      req.body.negativeMarking = Number(req.body.negativeMarking !== undefined ? req.body.negativeMarking : 0.0);
+      req.body.marksPerQuestion = Number(req.body.marksPerQuestion !== undefined ? req.body.marksPerQuestion : 1.0);
+      req.body.chapters = Array.isArray(req.body.chapters) ? req.body.chapters : [];
+      if (!req.body.questions) {
+        req.body.questions = [];
+      }
+    }
+
+    const { title, description, duration, classNo, language, totalMarks, questions } = req.body;
     
     const errors = [];
     if (!title || typeof title !== 'string' || title.length < 3 || title.length > 200) {
@@ -176,17 +204,66 @@ const validationRules = {
     if (description && (typeof description !== 'string' || description.length > 2000)) {
       errors.push('Description must be under 2000 characters');
     }
-    if (!duration || typeof duration !== 'number' || duration < 5 || duration > 240) {
-      errors.push('Duration must be 5-240 minutes');
+    if (!duration || typeof duration !== 'number' || duration <= 0) {
+      errors.push('Duration must be greater than 0 minutes');
     }
     if (!validateClassNumber(classNo)) {
       errors.push('Invalid class number');
     }
-    if (!language || !['English', 'Marathi', 'Hindi'].includes(language)) {
+    if (!language || !['English', 'Marathi', 'Hindi', 'Bengali', 'Both'].includes(language)) {
       errors.push('Invalid language');
     }
     if (totalMarks && (typeof totalMarks !== 'number' || totalMarks < 1 || totalMarks > 500)) {
       errors.push('Total marks must be 1-500');
+    }
+    
+    // Validate questions array
+    if (!isSchedulePayload) {
+      if (!Array.isArray(questions) || questions.length === 0) {
+        errors.push('Exam must contain at least one question');
+      } else {
+        const seenQuestions = new Set();
+        for (let i = 0; i < questions.length; i++) {
+          const q = questions[i];
+          if (!q) {
+            errors.push(`Question at index ${i} is empty`);
+            continue;
+          }
+          
+          const qText = (q.questionText || q.question || '').trim();
+          if (!qText) {
+            errors.push(`Question at index ${i} must have question text`);
+          } else {
+            if (seenQuestions.has(qText.toLowerCase())) {
+              errors.push(`Duplicate question detected at index ${i}`);
+            }
+            seenQuestions.add(qText.toLowerCase());
+          }
+
+          if (!q.type || !['mcq', 'numeric'].includes(q.type)) {
+            errors.push(`Question at index ${i} must have a valid type (mcq or numeric)`);
+          }
+
+          if (q.type === 'mcq') {
+            if (!Array.isArray(q.options) || q.options.length !== 4) {
+              errors.push(`MCQ question at index ${i} must have exactly 4 options`);
+            } else {
+              for (let j = 0; j < 4; j++) {
+                if (typeof q.options[j] !== 'string' || q.options[j].trim() === '') {
+                  errors.push(`MCQ question at index ${i} has empty option at choice ${j + 1}`);
+                }
+              }
+            }
+            if (!q.correctAnswer || !['A', 'B', 'C', 'D'].includes(String(q.correctAnswer).trim().toUpperCase())) {
+              errors.push(`MCQ question at index ${i} must have correct answer of A, B, C, or D`);
+            }
+          } else if (q.type === 'numeric') {
+            if (q.correctAnswer === undefined || String(q.correctAnswer).trim() === '') {
+              errors.push(`Numeric question at index ${i} must have a correct answer`);
+            }
+          }
+        }
+      }
     }
     
     if (errors.length > 0) {
@@ -195,6 +272,18 @@ const validationRules = {
     
     req.body.title = sanitizeString(title);
     req.body.description = sanitizeString(description || '');
+    if (Array.isArray(questions)) {
+      req.body.questions = questions.map(q => {
+        const qText = (q.questionText || q.question || '');
+        const opts = Array.isArray(q.options) ? q.options.map(opt => sanitizeLatex(opt)) : [];
+        return {
+          type: q.type,
+          questionText: sanitizeLatex(qText),
+          options: opts,
+          correctAnswer: String(q.correctAnswer).trim()
+        };
+      });
+    }
     
     next();
   },

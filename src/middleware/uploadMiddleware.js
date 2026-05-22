@@ -45,6 +45,24 @@ const secureMemoryUpload = multer({
 });
 
 // Disk storage engine configuration (with secure alphanumeric renaming to prevent path traversal)
+const scanFileFilter = (req, file, cb) => {
+  const allowedTypes = [
+    'application/pdf',
+    'image/jpeg',
+    'image/jpg',
+    'image/png',
+    'image/gif',
+    'image/webp'
+  ];
+  const ext = path.extname(file.originalname).toLowerCase();
+
+  if (allowedTypes.includes(file.mimetype) || ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(ext)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only PDF and image files (JPEG, PNG, GIF, WebP) are allowed!'), false);
+  }
+};
+
 const secureDiskStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, tempDir);
@@ -69,7 +87,17 @@ const secureDiskUpload = multer({
   }
 });
 
+const secureScanUpload = multer({
+  storage: secureDiskStorage,
+  fileFilter: scanFileFilter,
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB
+    files: 1
+  }
+});
+
 module.exports = {
   secureMemoryUpload,
-  secureDiskUpload
+  secureDiskUpload,
+  secureScanUpload
 };

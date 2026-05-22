@@ -62,7 +62,8 @@ const getQuestions = async (req, res) => {
     
     let filter = {};
     if (classNo) filter.classNo = parseInt(classNo);
-    if (language) filter.language = language;
+    // Make language filter case-insensitive
+    if (language) filter.language = { $regex: `^${language}$`, $options: 'i' };
     if (chapter) filter.chapter = chapter;
 
     const result = await paginate(
@@ -140,4 +141,22 @@ const deleteQuestion = async (req, res) => {
   }
 };
 
-module.exports = { addQuestion, getQuestions, updateQuestion, deleteQuestion };
+const getFilteredQuestions = async (req, res) => {
+  try {
+    const { classNo, language } = req.params;
+    const filter = {};
+    if (classNo) filter.classNo = parseInt(classNo);
+    if (language) filter.language = language;
+    
+    const questions = await Question.find(filter);
+    res.status(200).json({
+      success: true,
+      count: questions.length,
+      data: questions,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+module.exports = { addQuestion, getQuestions, updateQuestion, deleteQuestion, getFilteredQuestions };

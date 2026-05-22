@@ -1,6 +1,11 @@
 const FormData = require('form-data');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
+const OCR_TIMEOUT_MS = Number.parseInt(process.env.OCR_TIMEOUT_MS || '20000', 10);
+const OCR_MAX_RETRIES = Number.parseInt(process.env.OCR_MAX_RETRIES || '2', 10);
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * MathpixService — multipart FormData upload approach (from reference backend).
  * Sends image buffer directly to Mathpix v3/text endpoint.
@@ -32,7 +37,7 @@ class MathpixService {
       rm_spaces: true,
     });
 
-    const maxRetries = 3;
+    const maxRetries = OCR_MAX_RETRIES;
     let attempt = 0;
     let delay = 1500;
 
@@ -50,18 +55,35 @@ class MathpixService {
         });
         form.append('options_json', optionsJson);
 
-        const response = await fetch('https://api.mathpix.com/v3/text', {
-          method: 'POST',
-          headers: {
-            ...form.getHeaders(),
-            'app_id': appId,
-            'app_key': appKey,
-          },
-          body: form,
-          timeout: 60000,
-        });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), OCR_TIMEOUT_MS);
 
-        const result = await response.json();
+        const requestStartedAt = Date.now();
+        let response;
+        try {
+          response = await fetch('https://api.mathpix.com/v3/text', {
+            method: 'POST',
+            headers: {
+              ...form.getHeaders(),
+              'app_id': appId,
+              'app_key': appKey,
+            },
+            body: form,
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeoutId);
+        }
+
+        console.log(`[MathpixService] Mathpix response received in ${Date.now() - requestStartedAt}ms`);
+
+        const responseText = await response.text();
+        let result;
+        try {
+          result = JSON.parse(responseText);
+        } catch (parseErr) {
+          throw new Error(`Mathpix returned non-JSON response: ${responseText.substring(0, 120)}`);
+        }
 
         console.log(`[MathpixService] Status: ${response.status}`, {
           hasText: !!result.text,
@@ -96,11 +118,20 @@ class MathpixService {
         return { rawText, latex, confidence: result.confidence ?? null };
 
       } catch (err) {
-        console.warn(`[MathpixService] Attempt ${attempt} failed: ${err.message}`);
+        if (err.name === 'AbortError') {
+          console.warn(`[MathpixService] Attempt ${attempt} timed out after ${OCR_TIMEOUT_MS}ms`);
+        } else {
+          console.warn(`[MathpixService] Attempt ${attempt} failed: ${err.message}`);
+        }
+
         if (attempt >= maxRetries) {
+          if (err.name === 'AbortError') {
+            throw new Error(`Mathpix API timed out after ${OCR_TIMEOUT_MS}ms (${maxRetries} attempts)`);
+          }
           throw new Error(`Mathpix API exhausted ${maxRetries} attempts. Last error: ${err.message}`);
         }
-        await new Promise(r => setTimeout(r, delay));
+
+        await sleep(delay);
         delay *= 2;
       }
     }

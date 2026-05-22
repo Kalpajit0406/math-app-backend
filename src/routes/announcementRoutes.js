@@ -9,6 +9,6 @@ const { validationRules } = require('../middleware/validationMiddleware');
 router.get('/', announcementController.getAnnouncements);
 
 // Create announcement
-router.post('/admin', authMiddleware, authorizeRoles('admin'), validationRules.createAnnouncementValidation, announcementController.createAnnouncement);
+router.post('/admin', authMiddleware, authorizeRoles('admin', 'teacher'), validationRules.createAnnouncementValidation, announcementController.createAnnouncement);
 
 module.exports = router;

@@ -1,19 +1,35 @@
-const { MathpixService } = require('./mathpixService');
+const { UploadHandler } = require('./uploadHandler');
 const { ImagePreprocessor } = require('./imagePreprocessor');
+const { OCRProviderAdapter } = require('./ocrProviderAdapter');
 const { OCRNormalizer } = require('./ocrNormalizer');
+const { QuestionSegmenter } = require('./questionSegmenter');
+const { MCQOptionParser } = require('./mcqOptionParser');
+const { LatexSanitizer } = require('./latexSanitizer');
+const { VerificationQueueManager } = require('./verificationQueueManager');
+const { QuestionValidator } = require('./questionValidator');
+const { PreviewRenderer } = require('./previewRenderer');
+const { OCRRecoveryEngine } = require('./ocrRecoveryEngine');
+
+// Converts Bengali Unicode digits (০-৯) to their ASCII equivalents
+function bengaliToEnglishDigits(str) {
+  if (!str) return str;
+  return str.replace(/[০-৯]/g, (ch) => String(ch.codePointAt(0) - 0x09E6));
+}
 
 // ─── 0. QUESTION NUMBER EXTRACTOR ──────────────────────────────────────────
 class QuestionNumberExtractor {
   /**
    * Extract question number from text start
    * Handles: "1.", "11.", "Q1.", "Question 1", "(1)", "i.", "1)"
+   * Also handles Bengali: "১.", "২.", "প্রশ্ন ১", "প্র. ২"
    */
   static extract(text) {
     if (!text) return null;
-    const trimmed = text.trim();
+    // Normalise Bengali digits first so patterns work uniformly
+    const trimmed = bengaliToEnglishDigits(text.trim());
     
     const numberPatterns = [
-      /^(?:Question|Q|No\.?)\s*[:\-]?\s*(\d+)/i,           // Question 1, Q1, No.1
+      /^(?:Question|Q|No\.?|প্রশ্ন|প্র\.?)\s*[:\-]?\s*(\d+)/i,  // Question 1, Q1, No.1, প্রশ্ন 1
       /^Question\s*(\d+)\s*[:\-]?\s*of\s*\d+/i,            // Question 1 of 10
       /^\(([ivxldmcIVXLDMC0-9]+)\)\s/,                       // (1) or (i)
       /^([ivxldmcIVXLDMC0-9]+)[\.\)\-\:]\s+(?!\w+[\.\)])/,   // 1., i), 1-
@@ -30,166 +46,11 @@ class QuestionNumberExtractor {
   }
 }
 
-// Helper for finding math ranges to preserve LaTeX blocks
-function getMathRanges(text) {
-  const ranges = [];
-  if (!text) return ranges;
-  
-  // Find $$ ... $$
-  const displayMathRegex = /\$\$.*?\$\$/gs;
-  let match;
-  while ((match = displayMathRegex.exec(text)) !== null) {
-    ranges.push({ start: match.index, end: match.index + match[0].length });
-  }
-  
-  // Find \[ ... \]
-  const bracketMathRegex = /\\\[.*?\\\]/gs;
-  while ((match = bracketMathRegex.exec(text)) !== null) {
-    ranges.push({ start: match.index, end: match.index + match[0].length });
-  }
-  
-  // Find \( ... \)
-  const parenMathRegex = /\\\(.*?\\\)/gs;
-  while ((match = parenMathRegex.exec(text)) !== null) {
-    ranges.push({ start: match.index, end: match.index + match[0].length });
-  }
-  
-  // Find $ ... $ (avoiding double dollar matches)
-  const inlineMathRegex = /(?<!\$)\$.*?\$(?!\$)/gs;
-  while ((match = inlineMathRegex.exec(text)) !== null) {
-    const start = match.index;
-    const end = match.index + match[0].length;
-    const isOverlapping = ranges.some(r => (start >= r.start && start < r.end) || (end > r.start && end <= r.end));
-    if (!isOverlapping) {
-      ranges.push({ start, end });
-    }
-  }
-  
-  return ranges;
-}
-
-function normalizeOcrText(text) {
-  if (!text) return '';
-  let s = text;
-  s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  s = s.replace(/[ \t]+/g, ' ');
-  s = s.replace(/(?<=^|\n)\s*(\d+)\s*[\.)]\s*/g, '$1. ');
-  s = s.replace(/\n{3,}/g, '\n\n');
-  return s.trim();
-}
-
-class QuestionSegmenter {
-  static segment(text) {
-    if (!text) return [];
-    const normalized = normalizeOcrText(OCRNormalizer.normalizeText(text));
-    const mathRanges = getMathRanges(normalized);
-    const boundaryRegex = /(?:^|\n)\s*(?:Question\s+(\d+)|Q\s*(\d+)|Q(\d+)|(\d+)\.)\s+(?=\S)/g;
-
-    const rawMatches = [...normalized.matchAll(boundaryRegex)];
-    const matches = rawMatches.filter(m => !mathRanges.some(r => m.index >= r.start && m.index < r.end));
-
-    if (matches.length === 0) {
-      return [{ text: normalized, number: null, startIndex: 0, endIndex: normalized.length, rawHeader: '' }];
-    }
-
-    const segments = [];
-    for (let i = 0; i < matches.length; i++) {
-      const match = matches[i];
-      const start = match.index;
-      const end = (i + 1 < matches.length) ? matches[i + 1].index : normalized.length;
-      let seg = normalized.substring(start, end).trim();
-      const innerHeader = seg.slice(1).match(/\n\s*(?:Question\s+\d+|Q\s*\d+|Q\d+|\d+\.)\s+/);
-      if (innerHeader && innerHeader.index != null) seg = seg.substring(0, 1 + innerHeader.index).trim();
-      let number = null;
-      for (let g = 1; g < match.length; g++) {
-        if (match[g]) { number = match[g]; break; }
-      }
-      segments.push({ text: seg, number, startIndex: start, endIndex: end, rawHeader: match[0] });
-    }
-    return segments;
-  }
-}
-
-class MCQOptionParser {
-  static parse(segmentText) {
-    if (!segmentText) return null;
-
-    // Defensive: truncate if a subsequent question header exists inside
-    const internalHeader = segmentText.match(/\n\s*(?:Question\s+\d+|Q\s*\d+|Q\d+|\d+\.)\s+/);
-    if (internalHeader && internalHeader.index != null) {
-      segmentText = segmentText.substring(0, internalHeader.index).trim();
-    }
-
-    const lines = segmentText.split('\n').map(l => l.replace(/\r/g, '').trim());
-    const optionStartRegex = /^\s*[\(\[]?\s*([A-Da-d1-4]|i{1,4}|I{1,4})\s*[\)\]\.]\s*(.*)$/;
-    const romanMap = { i: 0, ii: 1, iii: 2, iv: 3, v: 3 };
-    const numericMap = { '1': 0, '2': 1, '3': 2, '4': 3 };
-    const alphaMap = { A:0, B:1, C:2, D:3, a:0, b:1, c:2, d:3 };
-
-    let questionLines = [];
-    const options = [];
-    let currentOption = null;
-    let foundFirstOptionAt = -1;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const m = line.match(optionStartRegex);
-      if (m) {
-        foundFirstOptionAt = foundFirstOptionAt === -1 ? i : foundFirstOptionAt;
-        const rawLabel = m[1];
-        const rest = m[2] || '';
-        let idx = null;
-        if (alphaMap.hasOwnProperty(rawLabel)) idx = alphaMap[rawLabel];
-        else if (numericMap.hasOwnProperty(rawLabel)) idx = numericMap[rawLabel];
-        else if (romanMap.hasOwnProperty(rawLabel.toLowerCase())) idx = romanMap[rawLabel.toLowerCase()];
-        else idx = options.length;
-
-        currentOption = { label: ['A','B','C','D'][idx] || 'A', text: rest.trim() };
-        options.push(currentOption);
-      } else if (currentOption) {
-        // continuation of previous option (multiline option)
-        currentOption.text += '\n' + line;
-      } else {
-        questionLines.push(line);
-      }
-    }
-
-    if (options.length < 2) return null;
-
-    // Normalize options array to have 4 entries
-    while (options.length < 4) options.push({ label: ['A','B','C','D'][options.length], text: '' });
-
-    const questionText = questionLines.slice(0, foundFirstOptionAt === -1 ? questionLines.length : foundFirstOptionAt).join(' ').trim() || 'Question';
-
-    return {
-      question: questionText,
-      options: options.slice(0,4),
-      format: 'line-based'
-    };
-  }
-
-  static _findBestChain(matches) {
-    // fallback retained for compatibility but not used by line-based parser
-    let maxWeight = 0;
-    let bestChain = [];
-    function search(currentIndex, lastValueIndex, currentChain, currentWeight) {
-      if (currentWeight > maxWeight) { maxWeight = currentWeight; bestChain = [...currentChain]; }
-      for (let i = currentIndex; i < matches.length; i++) {
-        const match = matches[i];
-        if (match.valueIndex > lastValueIndex) {
-          currentChain.push(match);
-          search(i + 1, match.valueIndex, currentChain, currentWeight + match.weight);
-          currentChain.pop();
-        }
-      }
-    }
-    search(0, -1, [], 0);
-    return bestChain;
-  }
-}
-
-// ─── 1. MCQ DETECTOR (enhanced for multi-question) ───────────────────────────
+// ─── 1. MCQ DETECTOR ───────────────────────────────────────────────────────────
 class MCQDetector {
+  /**
+   * Split a block of text into segment components using the QuestionSegmenter.
+   */
   static splitMultipleQuestions(text) {
     if (!text) return [];
     
@@ -201,6 +62,147 @@ class MCQDetector {
     }));
   }
 
+  /**
+   * Main parsing method to detect and format MCQ options and questions.
+   */
+  static detect(text) {
+    if (!text || typeof text !== 'string') return null;
+    const cleaned = text.trim();
+    
+    const parsed = MCQOptionParser.parse(cleaned);
+    if (parsed) return parsed;
+    
+    // Fallback options mapping for inline and structured layouts
+    return (
+      this.detectStructuredMCQ(cleaned) ||
+      this.detectLineBasedMCQ(cleaned) ||
+      this.detectInlineMCQ(cleaned) ||
+      null
+    );
+  }
+
+  /**
+   * Parse inline options (e.g. A. option B. option or ক. option খ. option)
+   */
+  static detectInlineMCQ(text) {
+    const labelRegex = /(?:^|\n|\s)[\(\[]?([A-Da-d1-4কখগঘ১২৩৪]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:](?=\s)/g;
+    const parts = text.split(labelRegex);
+    if (parts.length >= 9) {
+      const labels = ['A', 'B', 'C', 'D'];
+      const labelMap = {
+        '1': 'A', '2': 'B', '3': 'C', '4': 'D',
+        'i': 'A', 'ii': 'B', 'iii': 'C', 'iv': 'D',
+        // Bengali option labels
+        'ক': 'A', 'খ': 'B', 'গ': 'C', 'ঘ': 'D',
+        // Bengali numeral option markers
+        '১': 'A', '২': 'B', '৩': 'C', '৪': 'D',
+      };
+      const options = [];
+      for (let i = 1; i <= 8; i += 2) {
+        if (i < parts.length) {
+          const rawLabel = parts[i].toLowerCase();
+          const optText = parts[i + 1]?.trim() || '';
+          options.push({
+            label: labelMap[rawLabel] || labelMap[parts[i]] || labels[Math.floor(i/2)],
+            text: optText
+          });
+        }
+      }
+      if (options.length === 4 && options.some(o => o.text.length > 0)) {
+        return { 
+          question: (parts[0]?.trim() || 'Question').substring(0, 500),
+          options: options, 
+          format: 'inline' 
+        };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Detect option patterns line-by-line (Latin and Bengali)
+   */
+  static detectLineBasedMCQ(text) {
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    // Extended to match Bengali option labels (ক, খ, গ, ঘ) and Bengali numerals (১-৪)
+    const optionRegex = /^[\(\[]?([A-Da-d1-4কখগঘ১২৩৪]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:\-\s]+(.+)$/;
+    const labelMap = {
+      '1': 'A', '2': 'B', '3': 'C', '4': 'D',
+      i: 'A', ii: 'B', iii: 'C', iv: 'D', I: 'A', II: 'B', III: 'C', IV: 'D',
+      // Bengali
+      'ক': 'A', 'খ': 'B', 'গ': 'C', 'ঘ': 'D',
+      '১': 'A', '২': 'B', '৩': 'C', '৪': 'D',
+    };
+    const labels = ['A', 'B', 'C', 'D'];
+    const options = [];
+    let firstOptionIndex = -1;
+    let currentOption = null;
+
+    for (let i = 0; i < lines.length; i++) {
+      const match = lines[i].match(optionRegex);
+      if (match) {
+        if (firstOptionIndex === -1) firstOptionIndex = i;
+        const rawLabel = match[1].toLowerCase();
+        let labelStr = labelMap[rawLabel] || labelMap[match[1]];
+        if (!labelStr) {
+          if (rawLabel === 'iv') labelStr = 'D';
+          else if (rawLabel.length === 3 && rawLabel[0] === rawLabel[1]) labelStr = ['A', 'B', 'C', 'D'][rawLabel.length - 1];
+          else labelStr = labels[options.length] || 'A';
+        }
+        currentOption = {
+          label: labelStr,
+          text: match[2].trim(),
+        };
+        options.push(currentOption);
+      } else if (currentOption && firstOptionIndex >= 0) {
+        currentOption.text += '\n' + lines[i];
+      }
+    }
+
+    if (options.length >= 2) {
+      const questionText = firstOptionIndex > 0 ? lines.slice(0, firstOptionIndex).join('\n').trim() : 'Question';
+      while (options.length < 4) options.push({ label: labels[options.length], text: '' });
+      return { 
+        question: questionText || 'Question',
+        options: options.slice(0, 4),
+        format: 'line-based',
+        optionCount: Math.min(options.length, 4)
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Detect structured options key-value style (Latin and Bengali)
+   */
+  static detectStructuredMCQ(text) {
+    const patterns = [
+      /question\s*[:\-]?\s*(.+?)\s*(?:options?|choice|answer)\s*[:\-]?\s*(.*)/is,
+      /(\d+\.\s+.+?)\s*option\s*a\s*[:\-]?\s*(.+?)(?=option|choice|$)/is,
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match) {
+        const optLines = match[2].trim().split(/\n/).filter(l => l.trim());
+        const opts = [];
+        const labels = ['A', 'B', 'C', 'D'];
+        for (const line of optLines) {
+          // Support Bengali option labels in structured format
+          const om = line.match(/^[\(\[]?([A-Da-d1-4কখগঘ১২৩৪]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:\-\s]+(.+)$/);
+          if (om) opts.push({ label: labels[opts.length] || 'A', text: om[2].trim() });
+        }
+        if (opts.length >= 2) {
+          while (opts.length < 4) opts.push({ label: labels[opts.length], text: '' });
+          return { question: match[1].trim(), options: opts.slice(0, 4), format: 'structured' };
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Detect multiple MCQ items from structured text.
+   */
   static detectMultiple(text, rawText = null) {
     const chunks = this.splitMultipleQuestions(text);
     const results = [];
@@ -237,250 +239,14 @@ class MCQDetector {
     }
     return results;
   }
-
-  static detect(text) {
-    if (!text || typeof text !== 'string') return null;
-    const cleaned = text.trim();
-    
-    const parsed = MCQOptionParser.parse(cleaned);
-    if (parsed) return parsed;
-    
-    // Legacy support fallback
-    const cleanedLegacy = cleaned.replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
-    return (
-      this.detectStructuredMCQ(cleanedLegacy) ||
-      this.detectLineBasedMCQ(cleanedLegacy) ||
-      this.detectInlineMCQ(cleanedLegacy) ||
-      null
-    );
-  }
-
-  static detectInlineMCQ(text) {
-    const labelRegex = /(?:^|\n|\s)[\(\[]?([A-Da-d1-4]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:](?=\s)/g;
-    const parts = text.split(labelRegex);
-    if (parts.length >= 9) {
-      const labels = ['A', 'B', 'C', 'D'];
-      const labelMap = { '1': 'A', '2': 'B', '3': 'C', '4': 'D', 'i': 'A', 'ii': 'B', 'iii': 'C', 'iv': 'D' };
-      const options = [];
-      for (let i = 1; i <= 8; i += 2) {
-        if (i < parts.length) {
-          const rawLabel = parts[i].toLowerCase();
-          const optText = parts[i + 1]?.trim() || '';
-          options.push({
-            label: labelMap[rawLabel] || labels[Math.floor(i/2)],
-            text: optText
-          });
-        }
-      }
-      if (options.length === 4 && options.some(o => o.text.length > 0)) {
-        return { 
-          question: (parts[0]?.trim() || 'Question').substring(0, 500),
-          options: options, 
-          format: 'inline' 
-        };
-      }
-    }
-    return null;
-  }
-
-  static detectLineBasedMCQ(text) {
-    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-    const optionRegex = /^[\(\[]?([A-Da-d1-4]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:\-\s]+(.+)$/;
-    const labelMap = { '1': 'A', '2': 'B', '3': 'C', '4': 'D', i: 'A', ii: 'B', iii: 'C', iv: 'D', I: 'A', II: 'B', III: 'C', IV: 'D' };
-    const labels = ['A', 'B', 'C', 'D'];
-    const options = [];
-    let firstOptionIndex = -1;
-    let currentOption = null;
-
-    for (let i = 0; i < lines.length; i++) {
-      const match = lines[i].match(optionRegex);
-      if (match) {
-        if (firstOptionIndex === -1) firstOptionIndex = i;
-        const rawLabel = match[1].toLowerCase();
-        let labelStr = labelMap[rawLabel];
-        if (!labelStr) {
-          if (rawLabel === 'iv') labelStr = 'D';
-          else if (rawLabel.length === 3 && rawLabel[0] === rawLabel[1]) labelStr = ['A', 'B', 'C', 'D'][rawLabel.length - 1];
-          else labelStr = labels[options.length] || 'A';
-        }
-        currentOption = {
-          label: labelStr,
-          text: match[2].trim(),
-        };
-        options.push(currentOption);
-      } else if (currentOption && firstOptionIndex >= 0) {
-        currentOption.text += '\n' + lines[i];
-      }
-    }
-
-    if (options.length >= 2) {
-      const questionText = firstOptionIndex > 0 ? lines.slice(0, firstOptionIndex).join('\n').trim() : 'Question';
-      while (options.length < 4) options.push({ label: labels[options.length], text: '' });
-      return { 
-        question: questionText || 'Question',
-        options: options.slice(0, 4),
-        format: 'line-based',
-        optionCount: Math.min(options.length, 4)
-      };
-    }
-    return null;
-  }
-
-  static detectStructuredMCQ(text) {
-    const patterns = [
-      /question\s*[:\-]?\s*(.+?)\s*(?:options?|choice|answer)\s*[:\-]?\s*(.*)/is,
-      /(\d+\.\s+.+?)\s*option\s*a\s*[:\-]?\s*(.+?)(?=option|choice|$)/is,
-    ];
-    for (const pattern of patterns) {
-      const match = text.match(pattern);
-      if (match) {
-        const optLines = match[2].trim().split(/\n/).filter(l => l.trim());
-        const opts = [];
-        const labels = ['A', 'B', 'C', 'D'];
-        for (const line of optLines) {
-          const om = line.match(/^[\(\[]?([A-Da-d1-4]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:\-\s]+(.+)$/);
-          if (om) opts.push({ label: labels[opts.length] || 'A', text: om[2].trim() });
-        }
-        if (opts.length >= 2) {
-          while (opts.length < 4) opts.push({ label: labels[opts.length], text: '' });
-          return { question: match[1].trim(), options: opts.slice(0, 4), format: 'structured' };
-        }
-      }
-    }
-    return null;
-  }
 }
 
-// ─── 2. LATEX SANITIZER (improved per-question handling) ─────────────────────
-class LatexSanitizer {
-  /**
-   * Sanitize entire LaTeX block
-   */
-  static sanitize(latex) {
-    if (!latex) return '';
-    let s = latex;
-
-    // Convert display block math delimiters
-    s = s.replace(/\\\[/g, '$$').replace(/\\\]/g, '$$');
-    s = s.replace(/\\\(/g, '$').replace(/\\\)/g, '$');
-
-    // Remove OCR spacing artifacts
-    s = s.replace(/\\\s+/g, '\\');
-    s = s.replace(/}\s*\\left/g, '}\\left');
-    s = s.replace(/\$\s+/g, '$');
-    s = s.replace(/\s+\$/g, '$');
-
-    // Remove dangerous LaTeX commands
-    const dangerous = ['input', 'write', 'immediate', 'openout', 'closeout', 'special',
-      'usepackage', 'documentclass', 'def', 'let', 'catcode', 'edef', 'xdef', 'expandafter'];
-    for (const cmd of dangerous) {
-      s = s.replace(new RegExp(`\\\\${cmd}\\s*{[^}]*}`, 'g'), '');
-    }
-
-    // Balance environments
-    for (const env of ['matrix', 'pmatrix', 'bmatrix', 'align', 'cases', 'array', 'equation']) {
-      const opens = (s.match(new RegExp(`\\\\begin{${env}}`, 'g')) || []).length;
-      const closes = (s.match(new RegExp(`\\\\end{${env}}`, 'g')) || []).length;
-      if (opens > closes) s += ` \\end{${env}}`.repeat(opens - closes);
-    }
-
-    // Balance braces and dollar signs (assign returned corrected text)
-    s = this._balanceBraces(s);
-    s = this._balanceDollarSigns(s);
-
-    // Normalize common OCR symbol mistakes to LaTeX-safe tokens
-    const symbolMap = {
-      '−': '-', // unicode minus
-      '×': '\\times',
-      '÷': '\\div',
-      '·': '\\cdot',
-      '—': '-',
-      '–': '-'
-    };
-    s = s.replace(/[−×÷·—–]/g, ch => symbolMap[ch] || ch);
-
-    // Repair simple frac patterns where OCR may drop braces: frac a b -> \frac{a}{b}
-    s = s.replace(/\\?frac\s*\{?\s*([^\s{}]+)\s*\}?\s*\{?\s*([^\s{}]+)\s*\}?/g, '\\frac{$1}{$2}');
-
-    // Remove duplicated operators like ++ or -- introduced by OCR
-    s = s.replace(/([+\-\/\^=])\1+/g, '$1');
-
-    // Balance parentheses and square brackets
-    s = this._balanceBrackets(s);
-
-    // Fix common OCR fraction/power errors
-    s = s.replace(/\^(\d)([a-zA-Z])/g, '^{$1}$2');
-    s = s.replace(/_(\d)([a-zA-Z])/g, '_{$1}$2');
-
-    return s.trim();
-  }
-
-  /**
-   * Balance braces in text
-   */
-  static _balanceBraces(s) {
-    let opens = 0, closes = 0;
-    for (let i = 0; i < s.length; i++) {
-      if (s[i] === '{' && s[i - 1] !== '\\') opens++;
-      else if (s[i] === '}' && s[i - 1] !== '\\') closes++;
-    }
-    if (opens > closes) return s + '}'.repeat(Math.min(opens - closes, 10));
-    return s;
-  }
-
-  static _balanceBrackets(s) {
-    let openPar = 0, closePar = 0, openSq = 0, closeSq = 0;
-    for (let i = 0; i < s.length; i++) {
-      if (s[i] === '(' && s[i - 1] !== '\\') openPar++;
-      else if (s[i] === ')' && s[i - 1] !== '\\') closePar++;
-      else if (s[i] === '[' && s[i - 1] !== '\\') openSq++;
-      else if (s[i] === ']' && s[i - 1] !== '\\') closeSq++;
-    }
-    if (openPar > closePar) s = s + ')'.repeat(Math.min(openPar - closePar, 10));
-    if (openSq > closeSq) s = s + ']'.repeat(Math.min(openSq - closeSq, 10));
-    return s;
-  }
-
-  /**
-   * Balance dollar signs (inline math delimiters)
-   */
-  static _balanceDollarSigns(s) {
-    let dollars = 0;
-    for (let i = 0; i < s.length; i++) {
-      if (s[i] === '$' && s[i - 1] !== '\\') dollars++;
-    }
-    if (dollars % 2 !== 0) return s + '$';
-    return s;
-  }
-
-  /**
-   * Extract and preserve LaTeX for a specific question chunk
-   */
-  static extractChunkLatex(latex, chunk) {
-    if (!latex || !chunk) return chunk;
-    
-    // Find the position of this chunk in the full text
-    // This is a simplified approach - returns the whole latex for now
-    // In production, could do more sophisticated matching
-    return latex;
-  }
-}
-
-// ─── 3. QUESTION QUEUE MANAGER ────────────────────────────────────────────────
-/**
- * Manages temporary storage of extracted questions during verification workflow
- */
+// ─── 2. IN-MEMORY QUEUE MANAGER (COMPATIBILITY FALLBACK) ────────────────────
 class QuestionQueueManager {
   constructor() {
     this.queues = new Map(); // userId -> { items: [], createdAt, expiresAt }
   }
 
-  /**
-   * Store extracted questions for a user session
-   * @param {string} sessionId - Unique session ID
-   * @param {Array} questions - Array of parsed question objects
-   * @param {number} ttlSeconds - Time to live in seconds (default 3600 = 1 hour)
-   */
   storeQuestions(sessionId, questions, ttlSeconds = 3600) {
     const expiresAt = Date.now() + (ttlSeconds * 1000);
     this.queues.set(sessionId, {
@@ -492,9 +258,6 @@ class QuestionQueueManager {
     return { sessionId, count: questions.length, expiresAt };
   }
 
-  /**
-   * Get current question from queue
-   */
   getCurrentQuestion(sessionId) {
     const queue = this.queues.get(sessionId);
     if (!queue || this._isExpired(queue)) {
@@ -504,9 +267,6 @@ class QuestionQueueManager {
     return queue.items[queue.currentIndex] || null;
   }
 
-  /**
-   * Get all questions in queue
-   */
   getQueueItems(sessionId) {
     const queue = this.queues.get(sessionId);
     if (!queue || this._isExpired(queue)) {
@@ -516,9 +276,6 @@ class QuestionQueueManager {
     return queue.items;
   }
 
-  /**
-   * Move to next question
-   */
   nextQuestion(sessionId) {
     const queue = this.queues.get(sessionId);
     if (!queue) return null;
@@ -530,9 +287,6 @@ class QuestionQueueManager {
     return queue.items[queue.currentIndex];
   }
 
-  /**
-   * Move to previous question
-   */
   prevQuestion(sessionId) {
     const queue = this.queues.get(sessionId);
     if (!queue) return null;
@@ -542,9 +296,6 @@ class QuestionQueueManager {
     return queue.items[queue.currentIndex];
   }
 
-  /**
-   * Get queue status
-   */
   getStatus(sessionId) {
     const queue = this.queues.get(sessionId);
     if (!queue) return null;
@@ -558,9 +309,6 @@ class QuestionQueueManager {
     };
   }
 
-  /**
-   * Remove question from queue
-   */
   removeQuestion(sessionId, index) {
     const queue = this.queues.get(sessionId);
     if (!queue) return false;
@@ -571,23 +319,14 @@ class QuestionQueueManager {
     return true;
   }
 
-  /**
-   * Clear queue
-   */
   clearQueue(sessionId) {
     this.queues.delete(sessionId);
   }
 
-  /**
-   * Check if queue is expired
-   */
   _isExpired(queue) {
     return Date.now() > queue.expiresAt;
   }
 
-  /**
-   * Clean up expired queues periodically
-   */
   cleanup() {
     const now = Date.now();
     for (const [sessionId, queue] of this.queues.entries()) {
@@ -598,7 +337,7 @@ class QuestionQueueManager {
   }
 }
 
-// ─── 4. OCR RESULT VALIDATOR ──────────────────────────────────────────────────
+// ─── 3. OCR RESULT VALIDATOR ──────────────────────────────────────────────────
 class OCRResultValidator {
   static validate(rawText, latex, confidence) {
     const conf = confidence != null ? confidence : 1.0;
@@ -611,97 +350,170 @@ class OCRResultValidator {
   }
 }
 
-// ─── 5. UNIFIED OCR PIPELINE ─────────────────────────────────────────────────
+// ─── 4. UNIFIED OCR PIPELINE ─────────────────────────────────────────────────
 class OCRPipeline {
   /**
-   * Run the full OCR pipeline on a raw image buffer.
-   * Enhanced with raw data preservation and multi-question detection.
-   * @param {Buffer} buffer   - Raw image bytes from multer
+   * Run the modularized, coordinated OCR pipeline on an image buffer.
+   * @param {Buffer} buffer   - Raw image buffer from multer memoryStorage
    * @param {string} mimetype - MIME type (e.g. 'image/jpeg')
    * @param {string} filename - Original filename
    */
   static async runFromBuffer(buffer, mimetype, filename) {
-    // Step 0: Preprocess image buffer to improve OCR quality and detect issues
+    // Layer 1: Upload validation
+    UploadHandler.validate({ buffer, mimetype, size: buffer.length });
+
+    // Layer 2: Image preprocessing
     let preprocessInfo = null;
+    let workingBuffer = buffer;
     try {
       preprocessInfo = await ImagePreprocessor.preprocessBuffer(buffer);
-      buffer = preprocessInfo.buffer;
+      workingBuffer = preprocessInfo.buffer;
     } catch (err) {
       console.warn('[OCRPipeline] Image preprocessing failed, proceeding with original buffer:', err.message);
     }
 
-    // Step 1: Call Mathpix with FormData multipart upload
-    const mathpixResult = await MathpixService.processBuffer(buffer, mimetype, filename);
-    const { rawText, latex: rawLatex, confidence } = mathpixResult;
+    // Layer 3: OCR provider processing
+    let ocrResult;
+    try {
+      ocrResult = await OCRProviderAdapter.processImage(workingBuffer, mimetype, filename);
+    } catch (err) {
+      // Layer 11: OCR Recovery on API Failure
+      console.error('[OCRPipeline] OCR Provider Adapter failure, calling recovery engine:', err.message);
+      const fallbackItem = OCRRecoveryEngine.generateFallbackQuestion(err, filename);
+      return {
+        rawText: '',
+        latex: '',
+        parsedQuestions: [fallbackItem],
+        confidence: 0.0,
+        qualityRating: 'low',
+        isValid: false,
+        detectionQuality: {
+          source: 'recovery',
+          multipleDetected: false,
+          questionCount: 1
+        }
+      };
+    }
 
-    // Step 2: Sanitize LaTeX
+    const { rawText, latex: rawLatex, confidence } = ocrResult;
+
+    // Check if recovery is needed due to low confidence or empty OCR response
+    if (OCRRecoveryEngine.needsRecovery({ rawText, latex: rawLatex, confidence })) {
+      console.warn('[OCRPipeline] Low confidence or empty output, engaging recovery engine.');
+      const fallbackItem = OCRRecoveryEngine.generateFallbackQuestion(rawText || 'Low confidence OCR output', filename);
+      return {
+        rawText: rawText || '',
+        latex: rawLatex || '',
+        parsedQuestions: [fallbackItem],
+        confidence: confidence ?? 0.0,
+        qualityRating: 'low',
+        isValid: false,
+        detectionQuality: {
+          source: 'recovery',
+          multipleDetected: false,
+          questionCount: 1
+        }
+      };
+    }
+
+    // Layer 4: OCR output text normalization
+    const normalizedText = OCRNormalizer.normalizeText(rawText);
+
+    // Layer 7: LaTeX sanitization
     const sanitizedLatex = LatexSanitizer.sanitize(rawLatex);
 
-    // Step 3: Detect MCQ structure for potentially multiple questions
-    // Try LaTeX first (higher quality), then fallback to raw text
-    let parsedQuestions = MCQDetector.detectMultiple(sanitizedLatex);
+    // Layer 5: Question segmentation
+    // Try segmenting on LaTeX first, fall back to normalized text if no questions detected
+    let segments = QuestionSegmenter.segment(sanitizedLatex);
     let sourceUsed = 'latex';
-    
-    if (!parsedQuestions || parsedQuestions.length === 0) {
-      const fallback = MCQDetector.detectMultiple(rawText);
-      if (fallback && fallback.length > 0) {
-        parsedQuestions = fallback;
+
+    if (segments.length === 0 || (segments.length === 1 && !segments[0].number)) {
+      const textSegments = QuestionSegmenter.segment(normalizedText);
+      if (textSegments.length > 0) {
+        segments = textSegments;
         sourceUsed = 'rawText';
       }
     }
 
-    // Step 4: Enrich each question with raw OCR data
-    const enrichedQuestions = (parsedQuestions || []).map((q, idx) => ({
-      ...q,
-      // Preserve raw OCR data for debugging/recovery
-      rawOcrData: {
+    // Layer 6: MCQ option parsing & Layer 9: validation & Layer 10: preview preparation
+    const parsedQuestions = segments.map((seg, idx) => {
+      // Parse options inside the segment text
+      const parsedMCQ = MCQDetector.detect(seg.text) || {
+        question: seg.text,
+        options: [{ label: 'A', text: '' }, { label: 'B', text: '' }, { label: 'C', text: '' }, { label: 'D', text: '' }],
+        format: 'descriptive'
+      };
+
+      // Enrich raw OCR trace metrics
+      const rawOcrData = {
         sourceUsed,
-        rawText: rawText,
-        rawLatex: rawLatex,
-        sanitizedLatex: sanitizedLatex,
-        confidence: confidence,
-        chunkText: q.rawChunk || '',
+        rawText,
+        rawLatex,
+        sanitizedLatex,
+        confidence,
+        chunkText: seg.text,
         preprocessing: preprocessInfo ? preprocessInfo.diagnostics : null,
         preprocessingQuality: preprocessInfo ? preprocessInfo.qualityRating : null
-      },
-      // Store OCR confidence at question level
-      ocrConfidence: confidence,
-      // Tracking
-      detectionOrder: idx + 1,
-      verified: false
-    }));
+      };
 
-    // Step 5: Validate quality
-    const validation = OCRResultValidator.validate(rawText, sanitizedLatex, confidence);
+      const enrichedQuestion = {
+        question: parsedMCQ.question,
+        options: parsedMCQ.options,
+        format: parsedMCQ.format || 'line-based',
+        questionNumber: seg.number || (idx + 1).toString(),
+        rawChunk: seg.text,
+        ocrConfidence: confidence,
+        detectionOrder: idx + 1,
+        verified: false,
+        rawOcrData
+      };
 
-    console.log('[OCRPipeline] Complete:', {
-      rawTextLength: rawText?.length || 0,
-      latexLength: sanitizedLatex?.length || 0,
-      questionsDetected: enrichedQuestions.length,
+      // Layer 9: question validator
+      const validationResult = QuestionValidator.validate(enrichedQuestion);
+      enrichedQuestion.validation = validationResult;
+
+      // Layer 10: KaTeX preview rendering
+      const previewData = PreviewRenderer.prepareQuestionPreview({
+        questionText: enrichedQuestion.question,
+        options: enrichedQuestion.options,
+        questionNumber: enrichedQuestion.questionNumber,
+        detectionOrder: enrichedQuestion.detectionOrder
+      });
+      
+      if (previewData) {
+        enrichedQuestion.preview = previewData;
+      }
+
+      return enrichedQuestion;
+    });
+
+    // Layer 9: overall quality validation
+    const pipelineValidation = OCRResultValidator.validate(rawText, sanitizedLatex, confidence);
+
+    console.log('[OCRPipeline] Modular Execution Complete:', {
+      questionsDetected: parsedQuestions.length,
       sourceUsed,
-      confidence: validation.confidence,
-      qualityRating: validation.rating,
+      confidence: pipelineValidation.confidence,
+      qualityRating: pipelineValidation.rating
     });
 
     return {
       rawText: rawText || '',
       latex: sanitizedLatex,
-      parsedQuestions: enrichedQuestions,
-      confidence: validation.confidence,
-      qualityRating: validation.rating,
-      isValid: validation.isValid,
+      parsedQuestions,
+      confidence: pipelineValidation.confidence,
+      qualityRating: pipelineValidation.rating,
+      isValid: pipelineValidation.isValid,
       detectionQuality: {
         source: sourceUsed,
-        multipleDetected: enrichedQuestions.length > 1,
-        questionCount: enrichedQuestions.length,
+        multipleDetected: parsedQuestions.length > 1,
+        questionCount: parsedQuestions.length
       }
     };
   }
 
   /**
-   * Legacy compatibility: run from base64 data URI or URL.
-   * Converts to buffer then calls runFromBuffer.
-   * @param {string} src - base64 data URI or http URL
+   * Helper utility for base64 / URL strings (compatibility handler)
    */
   static async run(src) {
     let buffer;
@@ -735,5 +547,5 @@ module.exports = {
   LatexSanitizer,
   QuestionQueueManager,
   OCRResultValidator,
-  OCRPipeline,
+  OCRPipeline
 };
