@@ -101,7 +101,7 @@ const validationRules = {
     if (!validateClassNumber(classNo)) {
       errors.push('Invalid class number (must be 9, 10, 11, or 12)');
     }
-    if (!language || !['English', 'Marathi', 'Hindi'].includes(language)) {
+    if (!language || !['English', 'Bengali', 'Both'].includes(language)) {
       errors.push('Invalid language');
     }
     
@@ -154,7 +154,7 @@ const validationRules = {
       errors.push('Correct answer is required');
     }
     
-    if (!normalizedLanguage || !['Bengali', 'English'].includes(normalizedLanguage)) {
+    if (!normalizedLanguage || !['Bengali', 'English', 'Both'].includes(normalizedLanguage)) {
       errors.push('Invalid language');
     }
     
@@ -210,7 +210,7 @@ const validationRules = {
     if (!validateClassNumber(classNo)) {
       errors.push('Invalid class number');
     }
-    if (!language || !['English', 'Marathi', 'Hindi', 'Bengali', 'Both'].includes(language)) {
+    if (!language || !['English', 'Bengali', 'Both'].includes(language)) {
       errors.push('Invalid language');
     }
     if (totalMarks && (typeof totalMarks !== 'number' || totalMarks < 1 || totalMarks > 500)) {

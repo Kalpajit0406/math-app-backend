@@ -9,8 +9,8 @@ router.post('/register', validationRules.registerValidation, authController.regi
 router.post('/login', validationRules.loginValidation, authController.login);
 router.get('/me', authMiddleware, authController.me);
 
-router.get('/students', authMiddleware, authorizeRoles('admin'), authController.getAllStudents);
-router.post('/accept', authMiddleware, authorizeRoles('admin'), authController.acceptStudent);
-router.post('/reject', authMiddleware, authorizeRoles('admin'), authController.rejectStudent);
+router.get('/students', authMiddleware, authorizeRoles('admin', 'teacher'), authController.getAllStudents);
+router.post('/accept', authMiddleware, authorizeRoles('admin', 'teacher'), authController.acceptStudent);
+router.post('/reject', authMiddleware, authorizeRoles('admin', 'teacher'), authController.rejectStudent);
 
 module.exports = router;

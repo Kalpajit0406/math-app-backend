@@ -68,7 +68,7 @@ const getTestsByClassAndLanguage = asyncHandler(async (req, res) => {
   const { classNo, language } = req.params;
 
   const validClasses = [9, 10, 11, 12];
-  const validLanguages = ["Bengali", "English"];
+  const validLanguages = ["Bengali", "English", "Both"];
 
   if (
     !validClasses.includes(Number(classNo)) ||
@@ -77,9 +77,16 @@ const getTestsByClassAndLanguage = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid class number or language");
   }
 
+  let testLanguageFilter;
+  if (language === "Both") {
+    testLanguageFilter = { $in: ["Bengali", "English", "Both"] };
+  } else {
+    testLanguageFilter = { $in: [language, "Both"] };
+  }
+
   const tests = await TestConfig.find({
     classNo: Number(classNo),
-    language,
+    language: testLanguageFilter,
   }).sort({ createdAt: -1 });
 
   return res.status(200).json(tests);

@@ -17,7 +17,7 @@ const testConfigSchema = new mongoose.Schema(
     },
     language: {
       type: String,
-      enum: ["Bengali", "English"],
+      enum: ["Bengali", "English", "Both"],
       required: [true, "Preferred language is required"],
     },
     totalMarks: {
