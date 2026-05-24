@@ -12,7 +12,9 @@ const getExamsOrTests = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   
   if (userAgent.includes('Dart') || authHeader) {
-    return examController.getExams(req, res, next);
+    return authMiddleware(req, res, () => {
+      examController.getExams(req, res, next);
+    });
   } else {
     return testConfigController.getAllStudentTests(req, res, next);
   }

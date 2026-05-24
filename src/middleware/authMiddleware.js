@@ -52,6 +52,7 @@ const authMiddleware = (req, res, next) => {
     req.user = decoded;
     next();
   } catch (err) {
+    console.error('[authMiddleware] JWT verification failed:', err.message, err.stack);
     if (err.name === 'TokenExpiredError') {
       return authFail(res, 'Token expired. Please login again.', 'token_expired');
     }

@@ -16,9 +16,13 @@ const normalizeExamData = async (examData = {}) => {
 
   // Query random questions matching criteria
   const filter = {
-    classNo: Number(examData.classNo),
-    language: examData.language
+    classNo: Number(examData.classNo)
   };
+  if (examData.language === 'Both') {
+    filter.language = { $in: ['Bengali', 'English', 'Both'] };
+  } else {
+    filter.language = { $in: [examData.language, 'Both'] };
+  }
   if (chapters.length > 0) {
     filter.chapter = { $in: chapters };
   }
@@ -64,6 +68,19 @@ const examService = {
 
   getExams: async () => {
     return await Exam.find().sort({ createdAt: -1 });
+  },
+
+  getExamsForStudent: async (classNo, language) => {
+    let testLanguageFilter;
+    if (language === 'Both') {
+      testLanguageFilter = { $in: ['Bengali', 'English', 'Both'] };
+    } else {
+      testLanguageFilter = { $in: [language, 'Both'] };
+    }
+    return await Exam.find({
+      classNo: Number(classNo),
+      language: testLanguageFilter,
+    }).sort({ createdAt: -1 });
   },
 
   getExamById: async (id) => {

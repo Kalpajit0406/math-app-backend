@@ -62,8 +62,13 @@ const getQuestions = async (req, res) => {
     
     let filter = {};
     if (classNo) filter.classNo = parseInt(classNo);
-    // Make language filter case-insensitive
-    if (language) filter.language = { $regex: `^${language}$`, $options: 'i' };
+    if (language) {
+      if (language.toLowerCase() === 'both') {
+        filter.language = { $in: ['Bengali', 'English', 'Both'] };
+      } else {
+        filter.language = { $in: [new RegExp(`^${language}$`, 'i'), 'Both'] };
+      }
+    }
     if (chapter) filter.chapter = chapter;
 
     const result = await paginate(
@@ -146,7 +151,13 @@ const getFilteredQuestions = async (req, res) => {
     const { classNo, language } = req.params;
     const filter = {};
     if (classNo) filter.classNo = parseInt(classNo);
-    if (language) filter.language = language;
+    if (language) {
+      if (language.toLowerCase() === 'both') {
+        filter.language = { $in: ['Bengali', 'English', 'Both'] };
+      } else {
+        filter.language = { $in: [new RegExp(`^${language}$`, 'i'), 'Both'] };
+      }
+    }
     
     const questions = await Question.find(filter);
     res.status(200).json({

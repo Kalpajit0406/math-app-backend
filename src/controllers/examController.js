@@ -1,4 +1,5 @@
 const examService = require('../services/examService');
+const Student = require('../models/studentModel');
 
 const createExam = async (req, res) => {
   try {
@@ -11,7 +12,16 @@ const createExam = async (req, res) => {
 
 const getExams = async (req, res) => {
   try {
-    const exams = await examService.getExams();
+    let exams;
+    if (req.user && req.user.role === 'student') {
+      const student = await Student.findById(req.user.id);
+      if (!student) {
+        return res.status(404).json({ success: false, message: 'Student not found' });
+      }
+      exams = await examService.getExamsForStudent(student.classNo, student.language);
+    } else {
+      exams = await examService.getExams();
+    }
     res.json({ success: true, data: exams });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
