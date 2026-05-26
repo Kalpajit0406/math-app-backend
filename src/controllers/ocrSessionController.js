@@ -55,6 +55,14 @@ const startSession = async (req, res) => {
       });
     }
 
+    if (source.type === 'buffer' && (!source.buffer || source.buffer.length === 0)) {
+      console.error('[ocrSessionController] Received empty buffer in controller');
+      return res.status(400).json({
+        success: false,
+        message: 'Empty file buffer received.',
+      });
+    }
+
     console.log(`[ocrSessionController] startSession: source=${source.type}`);
 
     let result;
@@ -110,8 +118,12 @@ const startSession = async (req, res) => {
   } catch (error) {
     console.error('[ocrSessionController] startSession error:', error);
     const message = String(error?.message || 'OCR session startup failed');
-    const isTimeout = message.toLowerCase().includes('timeout');
-    res.status(isTimeout ? 504 : 500).json({ success: false, message });
+    let statusCode = 502; // Default: bad gateway (upstream Mathpix failure)
+    if (message.toLowerCase().includes('credentials')) statusCode = 500;
+    else if (message.toLowerCase().includes('empty') || message.toLowerCase().includes('no file') || message.toLowerCase().includes('invalid file type')) statusCode = 400;
+    else if (message.toLowerCase().includes('too large') || message.toLowerCase().includes('exceeds')) statusCode = 413;
+    else if (message.toLowerCase().includes('timeout')) statusCode = 504;
+    res.status(statusCode).json({ success: false, message });
   }
 };
 

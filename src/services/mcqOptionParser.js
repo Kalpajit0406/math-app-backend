@@ -27,6 +27,60 @@ class MCQOptionParser {
       segmentText = segmentText.substring(0, internalHeader.index).trim();
     }
 
+    // ── PASS 0: INLINE OPTION EXTRACTION ─────────────────────────────────────
+    // Handles Mathpix printed-exam format where all options appear on ONE LINE:
+    //   "...is- (A) $\frac{1}{18}$(B)$\frac{1}{9}$(C)$\frac{1}{12}$(D)$\frac{5}{36}$"
+    //
+    // CRITICAL: Use negative lookbehind (?<![A-Za-z0-9\\]) so that probability
+    // expressions like P(A), P(A∪B), P(A∩B) are NOT mistaken for option markers.
+    // Only a standalone (A)/(B)/(C)/(D) after whitespace or punctuation qualifies.
+    const inlineOptionPattern = /(?<![A-Za-z0-9\\])\(([ABCDabcd])\)\s*([\s\S]*?)(?=\s*(?<![A-Za-z0-9\\])\([ABCDabcd]\)|$)/g;
+    const inlineSingleLine = segmentText.replace(/\n+/g, ' '); // flatten to one line for matching
+    const inlineMatches = [...inlineSingleLine.matchAll(inlineOptionPattern)];
+
+    // Accept if we got at least 3 distinct option labels (A, B, C, D or a, b, c, d)
+    if (inlineMatches.length >= 3) {
+      const alphaMap = { A: 0, B: 1, C: 2, D: 3, a: 0, b: 1, c: 2, d: 3 };
+      const targetLabels = ['A', 'B', 'C', 'D'];
+      const inlineOptions = [
+        { label: 'A', text: '' },
+        { label: 'B', text: '' },
+        { label: 'C', text: '' },
+        { label: 'D', text: '' },
+      ];
+
+      for (const match of inlineMatches) {
+        const rawLabel = match[1];
+        const idx = alphaMap[rawLabel];
+        if (idx !== undefined) {
+          inlineOptions[idx].text = match[2].trim().replace(/\s+/g, ' ');
+        }
+      }
+
+      // Question body is everything before the first STANDALONE option marker (A)/(a).
+      // Use exec() to get the actual match.index (not indexOf which finds the wrong occurrence).
+      // The negative lookbehind (?<![A-Za-z0-9\\]) ensures P(A) is NOT matched.
+      const standaloneOptionRegex = /(?<![A-Za-z0-9\\])\([ABCDabcd]\)/;
+      const firstStandaloneMatch = standaloneOptionRegex.exec(inlineSingleLine);
+      const firstOptionStart = firstStandaloneMatch ? firstStandaloneMatch.index : -1;
+      const inlineQuestionText = firstOptionStart > 0
+        ? inlineSingleLine.substring(0, firstOptionStart).replace(/^\d+[\.\)]\s*/, '').trim()
+        : 'Question Text';
+
+
+
+      // Only return if at least 2 options have actual content
+      const filledOptions = inlineOptions.filter(o => o.text.trim().length > 0);
+      if (filledOptions.length >= 2) {
+        return {
+          question: inlineQuestionText || 'Question Text',
+          options: inlineOptions,
+          format: 'inline-mcq',
+        };
+      }
+    }
+
+    // ── PASS 1: LINE-BY-LINE OPTION EXTRACTION (existing logic) ──────────────
     const lines = segmentText.split('\n').map(l => l.replace(/\r/g, '').trim());
     
     // Pattern matches options starting with:

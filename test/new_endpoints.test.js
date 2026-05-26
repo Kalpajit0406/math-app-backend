@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
+const sharp = require('sharp');
 
 const BASE_URL = 'http://localhost:5000';
 const STUDENT_PHONE = '6289855545'; // bypass teacher phone triggers student login details in bypass mode
@@ -170,5 +171,56 @@ test('Test Config and Test Response API Verification', async (t) => {
     assert.equal(res.status, 200);
     const body = JSON.parse(res.body);
     assert.ok(body.success);
+  });
+
+  // 11. Start OCR Session (valid image)
+  let ocrSessionId = '';
+  await t.test('POST /api/v1/admin/ocr/session/start (valid image)', async () => {
+    const imageBuffer = await sharp({
+      create: {
+        width: 10,
+        height: 10,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 1 }
+      }
+    }).png().toBuffer();
+
+    const formData = new FormData();
+    const fileBlob = new Blob([imageBuffer], { type: 'image/png' });
+    formData.append('image', fileBlob, 'test_image.png');
+
+    const res = await fetch(`${BASE_URL}/api/v1/admin/ocr/session/start`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+
+    assert.equal(res.status, 201);
+    const body = await res.json();
+    assert.ok(body.success);
+    assert.ok(body.data.sessionId);
+    ocrSessionId = body.data.sessionId;
+  });
+
+  // 12. Start OCR Session (empty image)
+  await t.test('POST /api/v1/admin/ocr/session/start (empty image)', async () => {
+    const formData = new FormData();
+    const emptyBlob = new Blob([], { type: 'image/png' });
+    formData.append('image', emptyBlob, 'empty_image.png');
+
+    const res = await fetch(`${BASE_URL}/api/v1/admin/ocr/session/start`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.success, false);
+    assert.ok(body.message.toLowerCase().includes('empty'));
   });
 });
