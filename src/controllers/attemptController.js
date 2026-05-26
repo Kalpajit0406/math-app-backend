@@ -55,4 +55,15 @@ const syncOfflineAttempt = async (req, res) => {
   }
 };
 
-module.exports = { startAttempt, submitAttempt, getResult, getLeaderboard, syncOfflineAttempt };
+const getCompletedExamIds = async (req, res) => {
+  try {
+    const Attempt = require('../models/attemptModel');
+    const attempts = await Attempt.find({ userId: req.user.id, endTime: { $exists: true } });
+    const examIds = attempts.map(a => a.examId.toString());
+    res.json({ success: true, data: examIds });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+module.exports = { startAttempt, submitAttempt, getResult, getLeaderboard, syncOfflineAttempt, getCompletedExamIds };
