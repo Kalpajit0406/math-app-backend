@@ -1,5 +1,6 @@
 const MathpixPdfService = require('../services/mathpixPdfService');
 const { MCQDetector, LatexSanitizer, QuestionQueueManager } = require('../services/ocrPipeline');
+const { VerificationQueueManager } = require('../services/verificationQueueManager');
 const multer = require('multer');
 
 /**
@@ -310,18 +311,29 @@ class PdfController {
         });
       }
 
-      // Create queue session
+      // Create queue session persistently in MongoDB
       const sessionId = `pdf_${pdfId}_${Date.now()}`;
-      this.queueManager.storeQuestions(sessionId, parsedQuestions, 3600);
+      const userId = req.user?.id || req.user?._id;
+      
+      const session = await VerificationQueueManager.createSession(
+        sessionId,
+        userId,
+        parsedQuestions,
+        86400 // 24 hours TTL, consistent with image sessions
+      );
 
       return res.json({
         success: true,
         data: {
           pdfId,
-          totalQuestions: parsedQuestions.length,
-          questions: parsedQuestions,
+          sessionId: session.sessionId,
+          queueSessionId: session.sessionId, // keep backward compatibility
+          currentIndex: VerificationQueueManager.getFilteredIndex(session, session.currentIndex),
+          total: session.items.filter(i => !i.isDeleted).length,
+          items: session.items.filter(i => !i.isDeleted),
+          expiresAt: session.expiresAt,
+          questions: parsedQuestions, // keep backward compatibility
           rawMarkdown: markdown,
-          queueSessionId: sessionId,
           message: `Extracted ${parsedQuestions.length} questions from PDF`
         }
       });

@@ -9,6 +9,26 @@ const responseSchema = new mongoose.Schema({
   isCorrect: Boolean,
 });
 
+const violationSchema = new mongoose.Schema({
+  type: {
+    type: String,
+    required: true,
+  },
+  severity: {
+    type: String,
+    enum: ['low', 'medium', 'critical'],
+    required: true,
+  },
+  message: {
+    type: String,
+    required: true,
+  },
+  timestamp: {
+    type: Date,
+    default: Date.now,
+  },
+});
+
 const attemptSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -25,6 +45,20 @@ const attemptSchema = new mongoose.Schema({
     default: 0,
   },
   responses: [responseSchema],
+  violations: [violationSchema],
+  isAutoSubmitted: {
+    type: Boolean,
+    default: false,
+  },
+  autoSubmitReason: String,
+  emulatorDetected: {
+    type: Boolean,
+    default: false,
+  },
+  rootDetected: {
+    type: Boolean,
+    default: false,
+  },
   startTime: {
     type: Date,
     default: Date.now,

@@ -45,7 +45,7 @@ function getMathRanges(text) {
 }
 
 class QuestionSegmenter {
-  static _isQuestionHeader(line) {
+  static _isQuestionHeader(line, current = null) {
     if (!line) return null;
 
     // Normalise Bengali digits before matching
@@ -65,17 +65,35 @@ class QuestionSegmenter {
     for (const pattern of headerPatterns) {
       const match = trimmed.match(pattern);
       if (match) {
-        // Defensive: Ensure we don't treat option labels as question headers
-        const isOption = /^[\(\[]?[A-Da-d1-4ivxIVX\u0995-\u0998]{1,4}[\)\]\.]\s+/.test(trimmed);
+        const numStr = match[1];
+        const num = parseInt(numStr, 10);
+        
+        // Defensive: Check if it's an option label instead of a question header
+        const isOption = /^[\(\[]?(?:[A-Da-d1-4কখগঘ১২৩৪]|i{1,4}|I{1,4})[\)\]\.\:]\s*/.test(trimmed);
         if (isOption) {
-          // Filter out Bengali option labels (ক, খ, গ, ঘ) and latin option prefixes
-          if (/^[A-Da-d]\./.test(trimmed) || /^[a-d]\)/.test(trimmed) ||
-              /^[কখগঘ][\.)\]]/.test(line.trim())) {
+          // If it is a letter option (A-D, ক-ঘ), it is ALWAYS an option, never a question
+          if (/^[A-Da-dকখগঘ][\.\)\]]/i.test(trimmed.replace(/^[\(\[]/, ''))) {
+            continue;
+          }
+          // If it is a number or Roman option:
+          // Check if it is the successor of the current question number.
+          if (current) {
+            if (current.number) {
+              const currentNum = parseInt(current.number, 10);
+              if (!isNaN(currentNum) && num === currentNum + 1) {
+                // Successor question: treat as question header
+                return {
+                  number: numStr,
+                  text: (match[2] || '').trim(),
+                };
+              }
+            }
+            // If current exists but is not the successor, treat as option (skip)
             continue;
           }
         }
         return {
-          number: match[1],
+          number: numStr,
           text: (match[2] || '').trim(),
         };
       }
@@ -86,18 +104,42 @@ class QuestionSegmenter {
 
   /**
    * Segments text into individual question blocks.
+   * 
+   * Uses a two-pass approach:
+   *  Pass 1 (Lookahead Split): Split the text wherever a question number
+   *          boundary appears, even inline (e.g. "...answer$12. Next...").
+   *          This mirrors the reference backend (mmdHandling.ts line 424).
+   *  Pass 2 (Line-by-line): Process each pre-split block with the existing
+   *          header detector for numbering and structure extraction.
+   *
    * @param {string} text
    */
   static segment(text) {
     if (!text) return [];
-    
+
     // Normalize text first using OCRNormalizer
     const normalized = OCRNormalizer.normalizeText(text);
-    const mathRanges = getMathRanges(normalized);
-    const lines = normalized.split('\n');
+
+    // ── PASS 1: LOOKAHEAD PRE-SPLIT ──────────────────────────────────────────
+    // Split at any position where a question number header starts, even if
+    // it appears mid-line (e.g. after a closing "$" in Mathpix inline output).
+    //
+    // Pattern breakdown:
+    //   (?<![\d])      lookbehind: NOT preceded by a digit
+    //                  (prevents splitting INSIDE "11." at position 1)
+    //   (?=            lookahead (zero-width – keeps delimiter in next chunk)
+    //     \n?\s*       optional newline + whitespace
+    //     \d{1,3}      1–3 digit question number
+    //     [\.\)\-:]    followed by . ) - or :
+    //     \s+          at least one space (distinguishes "12. Q..." from "12.5")
+    //     (?!\d)       NOT another digit (avoids splitting on decimal numbers)
+    //   )
+    const lookaheadPattern = /(?<![a-zA-Z\d])(?=\n?\s*\d{1,3}[\.\)\-:]\s+(?!\d))/;
+    const rawBlocks = normalized.split(lookaheadPattern);
+
+    // ── PASS 2: LINE-BY-LINE HEADER EXTRACTION PER BLOCK ────────────────────
     const segments = [];
     let current = null;
-    let cursor = 0;
 
     const flushCurrent = (endIndex) => {
       if (!current) return;
@@ -114,49 +156,60 @@ class QuestionSegmenter {
       current = null;
     };
 
-    for (const line of lines) {
-      const lineStart = cursor;
-      cursor += line.length + 1;
+    for (const block of rawBlocks) {
+      if (!block.trim()) continue;
 
-      // Skip lines inside multi-line LaTeX blocks
-      const withinMath = mathRanges.some(r => lineStart >= r.start && lineStart < r.end);
-      if (withinMath) {
-        if (current) current.lines.push(line);
-        continue;
-      }
+      const mathRanges = getMathRanges(block);
+      const lines = block.split('\n');
+      let cursor = 0;
 
-      const header = QuestionSegmenter._isQuestionHeader(line);
+      for (const line of lines) {
+        const lineStart = cursor;
+        cursor += line.length + 1;
 
-      if (header) {
-        const hasQuestionBody = current && current.lines.some(existingLine => existingLine.trim().length > 0);
-        const hasOptionContent = current && current.lines.some(existingLine => /^\s*\(?[A-Da-d1-4ivxIVX]{1,4}[\)\.]\s+/.test(existingLine.trim()));
-        
-        // Start a new segment if we don't have a current one, or if the current one already has body or option content
-        if (!current || hasQuestionBody || hasOptionContent) {
-          flushCurrent(lineStart - 1);
+        // Skip lines inside multi-line LaTeX blocks
+        const withinMath = mathRanges.some(r => lineStart >= r.start && lineStart < r.end);
+        if (withinMath) {
+          if (current) current.lines.push(line);
+          continue;
+        }
+
+        const header = QuestionSegmenter._isQuestionHeader(line, current);
+
+        if (header) {
+          const hasQuestionBody = current && current.lines.some(l => l.trim().length > 0);
+          const hasOptionContent = current && current.lines.some(l =>
+            /^\s*\(?[A-Da-d1-4ivxIVX]{1,4}[\)\.\s]+/.test(l.trim())
+          );
+
+          if (!current || hasQuestionBody || hasOptionContent) {
+            flushCurrent(lineStart - 1);
+            current = {
+              number: header.number,
+              rawHeader: line.trim(),
+              startIndex: lineStart,
+              lines: [line],
+            };
+            continue;
+          }
+        }
+
+        if (!current) {
           current = {
-            number: header.number,
-            rawHeader: line.trim(),
+            number: null,
+            rawHeader: '',
             startIndex: lineStart,
             lines: [line],
           };
-          continue;
+        } else {
+          current.lines.push(line);
         }
-      }
-
-      if (!current) {
-        current = {
-          number: null,
-          rawHeader: '',
-          startIndex: lineStart,
-          lines: [line],
-        };
-      } else {
-        current.lines.push(line);
       }
     }
 
-    flushCurrent(normalized.length);
+    if (current) {
+      flushCurrent(normalized.length);
+    }
 
     if (segments.length === 0) {
       return [{ text: normalized, number: null, startIndex: 0, endIndex: normalized.length, rawHeader: '' }];

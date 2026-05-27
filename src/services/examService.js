@@ -32,8 +32,9 @@ const normalizeExamData = async (examData = {}) => {
     { $sample: { size: totalQuestions || 10 } }
   ]);
 
-  if (sampleQuestions.length === 0) {
-    throw new Error(`No questions found matching the criteria (Class ${examData.classNo}, Language ${examData.language})`);
+  const requiredQuestions = totalQuestions || 10;
+  if (sampleQuestions.length < requiredQuestions) {
+    throw new Error(`Insufficient questions in database. Requested: ${requiredQuestions}, Available: ${sampleQuestions.length} for Class ${examData.classNo}, Language ${examData.language}`);
   }
 
   const questions = sampleQuestions.map(q => ({

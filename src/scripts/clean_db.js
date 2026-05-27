@@ -1,8 +1,8 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
-const connectDB = require('./src/config/db');
-const Student = require('./src/models/studentModel');
-const User = require('./src/models/userModel');
+const connectDB = require('../config/db');
+const Student = require('../models/studentModel');
+const User = require('../models/userModel');
 
 const cleanDB = async () => {
   try {

@@ -11,6 +11,7 @@ router.post('/submit', authMiddleware, validationRules.submitAttemptValidation, 
 router.post('/sync-offline', authMiddleware, validationRules.syncOfflineAttemptValidation, attemptController.syncOfflineAttempt);
 router.get('/result/:id', authMiddleware, attemptController.getResult);
 router.get('/leaderboard/:examId', authMiddleware, attemptController.getLeaderboard);
+router.get('/completed-exam-ids', authMiddleware, attemptController.getCompletedExamIds);
 
 // TestResponse routes (Web)
 router.post('/', authMiddleware, testResponseController.saveStudentTest);

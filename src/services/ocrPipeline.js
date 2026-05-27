@@ -10,42 +10,6 @@ const { QuestionValidator } = require('./questionValidator');
 const { PreviewRenderer } = require('./previewRenderer');
 const { OCRRecoveryEngine } = require('./ocrRecoveryEngine');
 
-// Converts Bengali Unicode digits (০-৯) to their ASCII equivalents
-function bengaliToEnglishDigits(str) {
-  if (!str) return str;
-  return str.replace(/[০-৯]/g, (ch) => String(ch.codePointAt(0) - 0x09E6));
-}
-
-// ─── 0. QUESTION NUMBER EXTRACTOR ──────────────────────────────────────────
-class QuestionNumberExtractor {
-  /**
-   * Extract question number from text start
-   * Handles: "1.", "11.", "Q1.", "Question 1", "(1)", "i.", "1)"
-   * Also handles Bengali: "১.", "২.", "প্রশ্ন ১", "প্র. ২"
-   */
-  static extract(text) {
-    if (!text) return null;
-    // Normalise Bengali digits first so patterns work uniformly
-    const trimmed = bengaliToEnglishDigits(text.trim());
-    
-    const numberPatterns = [
-      /^(?:Question|Q|No\.?|প্রশ্ন|প্র\.?)\s*[:\-]?\s*(\d+)/i,  // Question 1, Q1, No.1, প্রশ্ন 1
-      /^Question\s*(\d+)\s*[:\-]?\s*of\s*\d+/i,            // Question 1 of 10
-      /^\(([ivxldmcIVXLDMC0-9]+)\)\s/,                       // (1) or (i)
-      /^([ivxldmcIVXLDMC0-9]+)[\.\)\-\:]\s+(?!\w+[\.\)])/,   // 1., i), 1-
-      /^([0-9]+)\s*$/,                                       // Just number
-    ];
-
-    for (const pattern of numberPatterns) {
-      const match = trimmed.match(pattern);
-      if (match) {
-        return { raw: match[1], full: match[0] };
-      }
-    }
-    return null;
-  }
-}
-
 // ─── 1. MCQ DETECTOR ───────────────────────────────────────────────────────────
 class MCQDetector {
   /**
@@ -245,17 +209,22 @@ class MCQDetector {
 class QuestionQueueManager {
   constructor() {
     this.queues = new Map(); // userId -> { items: [], createdAt, expiresAt }
+    this.maxQueueSize = 100;
   }
 
   storeQuestions(sessionId, questions, ttlSeconds = 3600) {
     const expiresAt = Date.now() + (ttlSeconds * 1000);
+    const cappedQuestions = Array.isArray(questions) ? questions.slice(0, this.maxQueueSize) : [];
+    if (Array.isArray(questions) && questions.length > this.maxQueueSize) {
+      console.warn(`[QuestionQueueManager] Queue capped at ${this.maxQueueSize} items for session ${sessionId}.`);
+    }
     this.queues.set(sessionId, {
-      items: questions,
+      items: cappedQuestions,
       createdAt: Date.now(),
       expiresAt: expiresAt,
       currentIndex: 0
     });
-    return { sessionId, count: questions.length, expiresAt };
+    return { sessionId, count: cappedQuestions.length, expiresAt };
   }
 
   getCurrentQuestion(sessionId) {
@@ -541,7 +510,6 @@ class OCRPipeline {
 }
 
 module.exports = {
-  QuestionNumberExtractor,
   QuestionSegmenter,
   MCQDetector,
   LatexSanitizer,
