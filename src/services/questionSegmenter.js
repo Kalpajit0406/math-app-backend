@@ -45,7 +45,7 @@ function getMathRanges(text) {
 }
 
 class QuestionSegmenter {
-  static _isQuestionHeader(line) {
+  static _isQuestionHeader(line, current = null) {
     if (!line) return null;
 
     // Normalise Bengali digits before matching
@@ -65,17 +65,35 @@ class QuestionSegmenter {
     for (const pattern of headerPatterns) {
       const match = trimmed.match(pattern);
       if (match) {
-        // Defensive: Ensure we don't treat option labels as question headers
-        const isOption = /^[\(\[]?[A-Da-d1-4ivxIVX\u0995-\u0998]{1,4}[\)\]\.]\s+/.test(trimmed);
+        const numStr = match[1];
+        const num = parseInt(numStr, 10);
+        
+        // Defensive: Check if it's an option label instead of a question header
+        const isOption = /^[\(\[]?(?:[A-Da-d1-4কখগঘ১২৩৪]|i{1,4}|I{1,4})[\)\]\.\:]\s*/.test(trimmed);
         if (isOption) {
-          // Filter out Bengali option labels (ক, খ, গ, ঘ) and latin option prefixes
-          if (/^[A-Da-d]\./.test(trimmed) || /^[a-d]\)/.test(trimmed) ||
-              /^[কখগঘ][\.)\]]/.test(line.trim())) {
+          // If it is a letter option (A-D, ক-ঘ), it is ALWAYS an option, never a question
+          if (/^[A-Da-dকখগঘ][\.\)\]]/i.test(trimmed.replace(/^[\(\[]/, ''))) {
+            continue;
+          }
+          // If it is a number or Roman option:
+          // Check if it is the successor of the current question number.
+          if (current) {
+            if (current.number) {
+              const currentNum = parseInt(current.number, 10);
+              if (!isNaN(currentNum) && num === currentNum + 1) {
+                // Successor question: treat as question header
+                return {
+                  number: numStr,
+                  text: (match[2] || '').trim(),
+                };
+              }
+            }
+            // If current exists but is not the successor, treat as option (skip)
             continue;
           }
         }
         return {
-          number: match[1],
+          number: numStr,
           text: (match[2] || '').trim(),
         };
       }
@@ -116,34 +134,34 @@ class QuestionSegmenter {
     //     \s+          at least one space (distinguishes "12. Q..." from "12.5")
     //     (?!\d)       NOT another digit (avoids splitting on decimal numbers)
     //   )
-    const lookaheadPattern = /(?<![\d])(?=\n?\s*\d{1,3}[\.\)\-:]\s+(?!\d))/;
+    const lookaheadPattern = /(?<![a-zA-Z\d])(?=\n?\s*\d{1,3}[\.\)\-:]\s+(?!\d))/;
     const rawBlocks = normalized.split(lookaheadPattern);
 
     // ── PASS 2: LINE-BY-LINE HEADER EXTRACTION PER BLOCK ────────────────────
     const segments = [];
+    let current = null;
+
+    const flushCurrent = (endIndex) => {
+      if (!current) return;
+      const segmentText = current.lines.join('\n').trim();
+      if (segmentText) {
+        segments.push({
+          text: segmentText,
+          number: current.number,
+          startIndex: current.startIndex,
+          endIndex,
+          rawHeader: current.rawHeader,
+        });
+      }
+      current = null;
+    };
 
     for (const block of rawBlocks) {
       if (!block.trim()) continue;
 
       const mathRanges = getMathRanges(block);
       const lines = block.split('\n');
-      let current = null;
       let cursor = 0;
-
-      const flushCurrent = (endIndex) => {
-        if (!current) return;
-        const segmentText = current.lines.join('\n').trim();
-        if (segmentText) {
-          segments.push({
-            text: segmentText,
-            number: current.number,
-            startIndex: current.startIndex,
-            endIndex,
-            rawHeader: current.rawHeader,
-          });
-        }
-        current = null;
-      };
 
       for (const line of lines) {
         const lineStart = cursor;
@@ -156,7 +174,7 @@ class QuestionSegmenter {
           continue;
         }
 
-        const header = QuestionSegmenter._isQuestionHeader(line);
+        const header = QuestionSegmenter._isQuestionHeader(line, current);
 
         if (header) {
           const hasQuestionBody = current && current.lines.some(l => l.trim().length > 0);
@@ -187,8 +205,10 @@ class QuestionSegmenter {
           current.lines.push(line);
         }
       }
+    }
 
-      flushCurrent(block.length);
+    if (current) {
+      flushCurrent(normalized.length);
     }
 
     if (segments.length === 0) {

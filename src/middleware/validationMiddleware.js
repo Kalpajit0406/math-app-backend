@@ -155,7 +155,7 @@ const validationRules = {
     }
     
     if (!normalizedLanguage || !['Bengali', 'English', 'Both'].includes(normalizedLanguage)) {
-      errors.push('Invalid language');
+      errors.push(`Invalid language: ${normalizedLanguage || language}`);
     }
     
     if (!classNo || ![9, 10, 11, 12].includes(Number(classNo))) {

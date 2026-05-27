@@ -98,3 +98,13 @@ createMcqCase(
   }
 );
 
+createSegmentationCase(
+  'numeric option labels do not cause split',
+  `Q9. Solve\n1. one\n2. two\n3. three\n4. four`,
+  1,
+  (segs) => {
+    assert.equal(segs.length, 1, `Expected exactly 1 segment for numeric option labels, but got ${segs.length}`);
+    assert.equal(segs[0].number, '9');
+  }
+);
+

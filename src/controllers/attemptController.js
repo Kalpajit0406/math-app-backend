@@ -12,8 +12,14 @@ const startAttempt = async (req, res) => {
 
 const submitAttempt = async (req, res) => {
   try {
-    const { attemptId, responses } = req.body;
-    const result = await attemptService.submitAttempt(req.user.id, attemptId, responses);
+    const { attemptId, responses, violations, isAutoSubmitted, autoSubmitReason, emulatorDetected, rootDetected } = req.body;
+    const result = await attemptService.submitAttempt(req.user.id, attemptId, responses, {
+      violations,
+      isAutoSubmitted,
+      autoSubmitReason,
+      emulatorDetected,
+      rootDetected
+    });
     res.json({ success: true, data: result });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -47,8 +53,14 @@ const getLeaderboard = async (req, res) => {
 
 const syncOfflineAttempt = async (req, res) => {
   try {
-    const { examId, responses } = req.body;
-    const result = await attemptService.syncOfflineAttempt(req.user.id, examId, responses);
+    const { examId, responses, violations, isAutoSubmitted, autoSubmitReason, emulatorDetected, rootDetected } = req.body;
+    const result = await attemptService.syncOfflineAttempt(req.user.id, examId, responses, {
+      violations,
+      isAutoSubmitted,
+      autoSubmitReason,
+      emulatorDetected,
+      rootDetected
+    });
     res.json({ success: true, data: result });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });

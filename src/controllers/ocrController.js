@@ -4,12 +4,16 @@ const { OCRQueueService } = require('../services/ocrQueueService');
 const OCR_SCAN_TIMEOUT_MS = Number.parseInt(process.env.OCR_SCAN_TIMEOUT_MS || '30000', 10);
 
 const withTimeout = (promise, timeoutMs, timeoutMessage) => {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
-    }),
-  ]);
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  });
 };
 
 /**
@@ -42,9 +46,10 @@ const resolveSource = (req) => {
 
 exports.scanImage = async (req, res) => {
   const requestStartedAt = Date.now();
+  let source = null;
   try {
     console.log('[OCR] Upload start');
-    const source = resolveSource(req);
+    source = resolveSource(req);
     if (!source) {
       return res.status(400).json({
         success: false,
@@ -106,6 +111,24 @@ exports.scanImage = async (req, res) => {
   } catch (error) {
     console.error('[OCR] Controller error:', error.message);
     const message = error.message || 'Failed to process image';
+
+    if (source?.type === 'buffer' && message.toLowerCase().includes('timeout')) {
+      try {
+        const job = await OCRQueueService.enqueueFromBuffer({
+          buffer: source.buffer,
+          mimetype: source.mimetype,
+          filename: source.filename,
+          sourceType: 'file',
+        });
+        return res.status(202).json({
+          success: true,
+          jobId: job._id,
+          message: 'OCR scan timed out; job queued for retry',
+        });
+      } catch (queueError) {
+        console.error('[OCR] Failed to enqueue timed-out OCR job:', queueError.message);
+      }
+    }
 
     // Return appropriate status code based on error type
     let statusCode = 502; // Default: bad gateway (upstream Mathpix failure)

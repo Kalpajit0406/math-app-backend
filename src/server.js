@@ -46,7 +46,7 @@ const apiLimiter = rateLimit({
   max: 200,
   message: { success: false, message: 'Too many requests from this IP, please try again after 15 minutes.' },
   standardHeaders: true,
-  legacyHeaders: false,
+  legacyHeaders: true,
 });
 
 // Tight Rate Limiting for Auth & OCR to prevent brute force and Mathpix key depletion
@@ -55,7 +55,7 @@ const authOcrLimiter = rateLimit({
   max: 50, // 50 requests per 15 mins
   message: { success: false, message: 'High load detected from this IP on secure channels. Locked for 15 minutes.' },
   standardHeaders: true,
-  legacyHeaders: false,
+  legacyHeaders: true,
 });
 
 app.use('/api/', apiLimiter);
