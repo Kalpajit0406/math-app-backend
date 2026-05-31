@@ -247,12 +247,11 @@ function extractMCQOptions(text) {
 
 // Enhanced question-option separation with multiple strategies
 function separateQuestionFromOptions(text) {
-    const cleanedText = cleanMathpixContent(text);
-    
-    // Remove question number at the beginning (Latin digits AND Bengali digits)
-    const textWithoutNumber = cleanedText
-      .replace(/^\s*[\d০-৯]+\.\s*/, '') // Latin or Bengali digits like "৩."
-      .replace(/^\s*(?:প্রশ্ন|প্র\.?)\s*[\d০-৯]+\.?\s*/, ''); // Bengali prefix
+    // Note: 'text' is already cleaned by cleanMathpixContent at the document level.
+    // We just remove the question number at the beginning.
+    const textWithoutNumber = text
+      .replace(/^\s*[\d০-৯]+[\.\)]\s*/, '') // Latin or Bengali digits like "৩." or "3)"
+      .replace(/^\s*(?:প্রশ্ন|প্র\.?)\s*[\d০-৯]+[\.\)]?\s*/, ''); // Bengali prefix
     
     console.log("=== Separating Question from Options ===");
     console.log("Text after number removal:", textWithoutNumber.substring(0, 200) + "...");

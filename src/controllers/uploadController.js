@@ -83,7 +83,7 @@ const processPDF = async (file) => {
         console.log(`PDF uploaded successfully. PDF ID: ${pdf_id}`);
         
         // Poll for completion with exponential backoff
-        const maxAttempts = 6;
+        const maxAttempts = 15;
         const baseInterval = 5000; // Start with 5 seconds
         let attempts = 0;
         let totalWaitTime = 0;
@@ -432,7 +432,7 @@ const upload = async (req, res) => {
                 questions: transformedQuestions,
                 processing_time: `${(totalTime / 1000).toFixed(1)} seconds`,
                 original_filename: uploadedFile.originalname,
-                detailed_info: {
+                detailed_info: (req.query.debug === 'true' || (req.body && req.body.debug === true)) ? {
                     file_info: {
                         type: fileType,
                         original_filename: uploadedFile.originalname,
@@ -454,7 +454,7 @@ const upload = async (req, res) => {
                         average_confidence: result.confidence || null,
                         extraction_method_used: 'mathpix_basic_compatible'
                     }
-                }
+                } : undefined
             }
         });
         
