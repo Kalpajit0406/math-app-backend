@@ -94,12 +94,32 @@ const startSession = async (req, res) => {
       });
     }
 
+    // Upload scanned image to Cloudinary to attach it as a photo/diagram of the questions
+    let scannedImageUrl = null;
+    if (req.file) {
+      const fs = require('fs');
+      const path = require('path');
+      const tempFilePath = path.join(__dirname, `../../public/temp/${Date.now()}-scan.jpg`);
+      try {
+        fs.writeFileSync(tempFilePath, req.file.buffer);
+        const uploadResult = await uploadOnCloudinary(tempFilePath);
+        if (uploadResult?.secure_url) {
+          scannedImageUrl = uploadResult.secure_url;
+        }
+      } catch (err) {
+        console.error('[ocrSessionController] Error uploading scanned image to Cloudinary:', err);
+      }
+    } else if (req.body?.imageUrl) {
+      scannedImageUrl = req.body.imageUrl;
+    }
+
     // Persistently store the session in MongoDB
     const session = await VerificationQueueManager.createSession(
       sessionId,
       userId,
       result.parsedQuestions,
-      86400 // 24 hours TTL
+      86400, // 24 hours TTL
+      scannedImageUrl
     );
 
     console.log(`[ocrSessionController] startSession: queue created with ${session.items?.length || 0} items`);
@@ -261,6 +281,11 @@ const verifyItem = async (req, res) => {
       if (uploadResult?.secure_url) {
         diagramUrl = uploadResult.secure_url;
       }
+    }
+
+    // If no custom diagram was uploaded, fall back to the session's scannedImageUrl
+    if (!diagramUrl && session.scannedImageUrl) {
+      diagramUrl = session.scannedImageUrl;
     }
 
     // Build the new verified Question

@@ -16,7 +16,8 @@ const verificationSessionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
   items: [verificationItemSchema],
   currentIndex: { type: Number, default: 0 },
-  expiresAt: { type: Date, required: true, index: { expires: 0 } } // TTL Index
+  expiresAt: { type: Date, required: true, index: { expires: 0 } }, // TTL Index
+  scannedImageUrl: { type: String, default: null }
 }, { timestamps: true });
 
 module.exports = mongoose.model('VerificationSession', verificationSessionSchema);

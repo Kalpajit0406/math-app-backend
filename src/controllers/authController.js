@@ -93,4 +93,71 @@ const rejectStudent = async (req, res) => {
   }
 };
 
-module.exports = { register, login, me, getAllStudents, acceptStudent, rejectStudent };
+const bulkAcceptStudents = async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, message: 'Student ids must be a non-empty array' });
+    }
+    const result = await Student.updateMany(
+      { _id: { $in: ids } },
+      { verified: true, isRejected: false }
+    );
+    res.json({
+      success: true,
+      message: `${result.modifiedCount || 0} student(s) accepted`,
+      modifiedCount: result.modifiedCount
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const bulkRejectStudents = async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, message: 'Student ids must be a non-empty array' });
+    }
+    const result = await Student.updateMany(
+      { _id: { $in: ids } },
+      { verified: false, isRejected: true }
+    );
+    res.json({
+      success: true,
+      message: `${result.modifiedCount || 0} student(s) rejected`,
+      modifiedCount: result.modifiedCount
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const bulkDeleteStudents = async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, message: 'Student ids must be a non-empty array' });
+    }
+    const result = await Student.deleteMany({ _id: { $in: ids } });
+    res.json({
+      success: true,
+      message: `${result.deletedCount || 0} student(s) deleted`,
+      deletedCount: result.deletedCount
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+module.exports = {
+  register,
+  login,
+  me,
+  getAllStudents,
+  acceptStudent,
+  rejectStudent,
+  bulkAcceptStudents,
+  bulkRejectStudents,
+  bulkDeleteStudents
+};

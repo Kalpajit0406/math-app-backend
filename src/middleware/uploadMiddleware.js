@@ -39,7 +39,7 @@ const secureMemoryUpload = multer({
   storage: multer.memoryStorage(),
   fileFilter: imageFileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024, // Increased to 10MB for high-res camera photos
+    fileSize: 2 * 1024 * 1024, // Maximum photo size limit of 2MB
     files: 1 // Only allow one file at a time
   }
 });
@@ -82,7 +82,7 @@ const secureDiskUpload = multer({
   storage: secureDiskStorage,
   fileFilter: imageFileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024, // Increased to 10MB
+    fileSize: 2 * 1024 * 1024, // Maximum photo size limit of 2MB
     files: 1
   }
 });

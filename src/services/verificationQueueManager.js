@@ -13,7 +13,7 @@ class VerificationQueueManager {
    * @param {Array} parsedQuestions - Parsed questions from OCR
    * @param {number} ttlSeconds - Session expiration time (default 24 hours = 86400)
    */
-  static async createSession(sessionId, userId, parsedQuestions, ttlSeconds = 86400) {
+  static async createSession(sessionId, userId, parsedQuestions, ttlSeconds = 86400, scannedImageUrl = null) {
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
 
     const items = parsedQuestions.map((q, idx) => {
@@ -44,7 +44,8 @@ class VerificationQueueManager {
       userId,
       items,
       currentIndex: 0,
-      expiresAt
+      expiresAt,
+      scannedImageUrl
     });
 
     return session;
