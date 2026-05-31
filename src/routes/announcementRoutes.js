@@ -11,4 +11,7 @@ router.get('/', announcementController.getAnnouncements);
 // Create announcement
 router.post('/admin', authMiddleware, authorizeRoles('admin', 'teacher'), validationRules.createAnnouncementValidation, announcementController.createAnnouncement);
 
+// Bulk delete announcements
+router.post('/bulk-delete', authMiddleware, authorizeRoles('admin', 'teacher'), announcementController.bulkDeleteAnnouncements);
+
 module.exports = router;
