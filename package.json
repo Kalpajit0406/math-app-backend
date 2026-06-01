@@ -15,10 +15,7 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
-  "devDependencies": {
-    "mocha": "^10.2.0",
-    "chai": "^4.3.7"
-  },
+  "devDependencies": {},
   "dependencies": {
     "bcrypt": "^6.0.0",
     "cloudinary": "^2.10.0",
