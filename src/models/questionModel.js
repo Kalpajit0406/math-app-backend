@@ -37,9 +37,10 @@ const questionSchema = new mongoose.Schema({
     default: null,
     validate: {
       validator: function (url) {
-        return url === null || /^https:\/\/res\.cloudinary\.com\/.+/i.test(url);
+        if (url === null || url === '') return true;
+        return /^https?:\/\//i.test(url) || /^\/?public\//.test(url);
       },
-      message: "Invalid Cloudinary URL format",
+      message: "Invalid diagram URL or path format",
     },
   },
 }, { 
