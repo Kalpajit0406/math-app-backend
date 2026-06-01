@@ -8,12 +8,19 @@ const studentSchema = new mongoose.Schema({
   classNo: { type: Number, enum: [9, 10, 11, 12], required: true },
   language: { type: String, enum: ['Bengali', 'English', 'Both'], required: true },
   fatherName: { type: String, trim: true },
+  motherName: { type: String, trim: true },
   studentPhone: { type: String, required: true, unique: true, trim: true },
   guardianPhone: { type: String, required: true, trim: true },
   password: { type: String, required: true },
   role: { type: String, enum: ['student', 'admin', 'teacher'], default: 'student' },
   verified: { type: Boolean, default: false },
   isRejected: { type: Boolean, default: false },
+  classChangeHistory: [{ type: Date }],
+  pendingProfileEdit: {
+    classNo: { type: Number, enum: [9, 10, 11, 12] },
+    language: { type: String, enum: ['Bengali', 'English', 'Both'] },
+    requestedAt: { type: Date }
+  },
 }, { 
   timestamps: true,
   toJSON: {

@@ -8,6 +8,9 @@ const { validationRules } = require('../middleware/validationMiddleware');
 router.post('/register', validationRules.registerValidation, authController.register);
 router.post('/login', validationRules.loginValidation, authController.login);
 router.get('/me', authMiddleware, authController.me);
+router.post('/profile-edit-request', authMiddleware, authController.submitProfileEditRequest);
+router.get('/pending-profile-edits', authMiddleware, authorizeRoles('admin', 'teacher'), authController.getPendingProfileEdits);
+router.post('/approve-profile-edit', authMiddleware, authorizeRoles('admin', 'teacher'), authController.approveProfileEdit);
 
 router.get('/students', authMiddleware, authorizeRoles('admin', 'teacher'), authController.getAllStudents);
 router.post('/accept', authMiddleware, authorizeRoles('admin', 'teacher'), authController.acceptStudent);

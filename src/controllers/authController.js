@@ -150,6 +150,104 @@ const bulkDeleteStudents = async (req, res) => {
   }
 };
 
+const submitProfileEditRequest = async (req, res) => {
+  try {
+    const studentId = req.user.id;
+    const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    const { classNo, language } = req.body;
+
+    if (classNo !== undefined) {
+      const clsNum = Number(classNo);
+      if (![9, 10, 11, 12].includes(clsNum)) {
+        return res.status(400).json({ success: false, message: 'Invalid class number' });
+      }
+
+      if (clsNum !== student.classNo) {
+        const oneYearAgo = new Date();
+        oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+        const changesInLastYear = (student.classChangeHistory || []).filter(date => new Date(date) >= oneYearAgo).length;
+
+        if (changesInLastYear >= 2) {
+          return res.status(400).json({ success: false, message: 'You can only change your class twice a year' });
+        }
+      }
+    }
+
+    if (language !== undefined) {
+      if (!['Bengali', 'English', 'Both'].includes(language)) {
+        return res.status(400).json({ success: false, message: 'Invalid language value' });
+      }
+    }
+
+    student.pendingProfileEdit = {
+      classNo: classNo !== undefined ? Number(classNo) : student.classNo,
+      language: language !== undefined ? language : student.language,
+      requestedAt: new Date()
+    };
+
+    await student.save();
+    res.json({ success: true, message: 'Profile edit request submitted for approval', data: student });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const getPendingProfileEdits = async (req, res) => {
+  try {
+    const students = await Student.find({ 'pendingProfileEdit.classNo': { $exists: true } });
+    res.json({ success: true, data: students });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const approveProfileEdit = async (req, res) => {
+  try {
+    const { id, approve } = req.body;
+    if (!id) {
+      return res.status(400).json({ success: false, message: 'Student id is required' });
+    }
+
+    const student = await Student.findById(id);
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    if (!student.pendingProfileEdit || student.pendingProfileEdit.classNo === undefined) {
+      return res.status(400).json({ success: false, message: 'No pending edit request found' });
+    }
+
+    if (approve === true || approve === 'true') {
+      const oldClass = student.classNo;
+      const newClass = student.pendingProfileEdit.classNo;
+
+      student.classNo = newClass;
+      student.language = student.pendingProfileEdit.language;
+
+      if (oldClass !== newClass) {
+        if (!student.classChangeHistory) {
+          student.classChangeHistory = [];
+        }
+        student.classChangeHistory.push(new Date());
+      }
+
+      student.pendingProfileEdit = undefined;
+      await student.save();
+      res.json({ success: true, message: 'Profile edit approved successfully' });
+    } else {
+      student.pendingProfileEdit = undefined;
+      await student.save();
+      res.json({ success: true, message: 'Profile edit rejected/cleared' });
+    }
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -159,5 +257,8 @@ module.exports = {
   rejectStudent,
   bulkAcceptStudents,
   bulkRejectStudents,
-  bulkDeleteStudents
+  bulkDeleteStudents,
+  submitProfileEditRequest,
+  getPendingProfileEdits,
+  approveProfileEdit
 };
