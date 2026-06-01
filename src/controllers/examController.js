@@ -18,7 +18,7 @@ const getExams = async (req, res) => {
       if (!student) {
         return res.status(404).json({ success: false, message: 'Student not found' });
       }
-      exams = await examService.getExamsForStudent(student.classNo, student.language);
+      exams = await examService.getExamsForStudent(student.classNo, student.language, !!student.isJoint);
     } else {
       exams = await examService.getExams();
     }

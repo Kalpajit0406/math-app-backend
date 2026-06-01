@@ -158,7 +158,13 @@ const submitProfileEditRequest = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
-    const { classNo, language } = req.body;
+    const { classNo, language, isJoint } = req.body;
+    const targetClassNo = classNo !== undefined ? Number(classNo) : student.classNo;
+    const targetIsJoint = isJoint !== undefined ? !!isJoint : student.isJoint;
+
+    if (targetIsJoint && ![11, 12].includes(targetClassNo)) {
+      return res.status(400).json({ success: false, message: 'Joint Entrance is only available for classes 11 and 12' });
+    }
 
     if (classNo !== undefined) {
       const clsNum = Number(classNo);
@@ -186,6 +192,7 @@ const submitProfileEditRequest = async (req, res) => {
     student.pendingProfileEdit = {
       classNo: classNo !== undefined ? Number(classNo) : student.classNo,
       language: language !== undefined ? language : student.language,
+      isJoint: targetIsJoint,
       requestedAt: new Date()
     };
 
@@ -227,6 +234,9 @@ const approveProfileEdit = async (req, res) => {
 
       student.classNo = newClass;
       student.language = student.pendingProfileEdit.language;
+      if (student.pendingProfileEdit.isJoint !== undefined) {
+        student.isJoint = student.pendingProfileEdit.isJoint;
+      }
 
       if (oldClass !== newClass) {
         if (!student.classChangeHistory) {

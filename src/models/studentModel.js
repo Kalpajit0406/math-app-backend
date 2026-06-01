@@ -7,6 +7,7 @@ const studentSchema = new mongoose.Schema({
   gender: { type: String, enum: ['Male', 'Female', 'Other'] },
   classNo: { type: Number, enum: [9, 10, 11, 12], required: true },
   language: { type: String, enum: ['Bengali', 'English', 'Both'], required: true },
+  isJoint: { type: Boolean, default: false },
   fatherName: { type: String, trim: true },
   motherName: { type: String, trim: true },
   studentPhone: { type: String, required: true, unique: true, trim: true },
@@ -19,6 +20,7 @@ const studentSchema = new mongoose.Schema({
   pendingProfileEdit: {
     classNo: { type: Number, enum: [9, 10, 11, 12] },
     language: { type: String, enum: ['Bengali', 'English', 'Both'] },
+    isJoint: { type: Boolean },
     requestedAt: { type: Date }
   },
 }, { 
