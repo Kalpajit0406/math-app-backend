@@ -105,6 +105,9 @@ const startSession = async (req, res) => {
         const uploadResult = await uploadOnCloudinary(tempFilePath);
         if (uploadResult?.secure_url) {
           scannedImageUrl = uploadResult.secure_url;
+        } else {
+          const filename = path.basename(tempFilePath);
+          scannedImageUrl = `/public/temp/${filename}`;
         }
       } catch (err) {
         console.error('[ocrSessionController] Error uploading scanned image to Cloudinary:', err);
@@ -280,6 +283,10 @@ const verifyItem = async (req, res) => {
       const uploadResult = await uploadOnCloudinary(req.file.path);
       if (uploadResult?.secure_url) {
         diagramUrl = uploadResult.secure_url;
+      } else {
+        const path = require('path');
+        const filename = path.basename(req.file.path);
+        diagramUrl = `/public/temp/${filename}`;
       }
     }
 

@@ -21,7 +21,9 @@ const analyticsRoutes = require('./routes/analyticsRoutes');
 const healthRoutes = require('./routes/healthRoutes');
 const errorHandler = require('./middleware/errorHandler');
 
+const path = require('path');
 const app = express();
+app.use('/public', express.static(path.join(__dirname, '../public')));
 
 // Request logger middleware
 app.use((req, res, next) => {

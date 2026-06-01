@@ -17,8 +17,8 @@ exports.uploadOnCloudinary = async (localFilePath) => {
     fs.unlinkSync(localFilePath);
     return response;
   } catch (error) {
-    // Remove locally saved temporary file if upload failed
-    if (fs.existsSync(localFilePath)) fs.unlinkSync(localFilePath);
+    // Retain locally saved temporary file if upload failed to allow local fallback serving
+    console.error('[Cloudinary] Upload failed, retaining file for local fallback:', error.message);
     return null;
   }
 };

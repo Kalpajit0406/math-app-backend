@@ -1,5 +1,6 @@
 const Question = require('../models/questionModel');
 const { uploadOnCloudinary } = require('../utils/cloudinary');
+const path = require('path');
 const { PaginationParams, paginate, formatPaginatedResponse } = require('../utils/pagination');
 
 const addQuestion = async (req, res) => {
@@ -33,6 +34,9 @@ const addQuestion = async (req, res) => {
       const uploadResult = await uploadOnCloudinary(req.file.path);
       if (uploadResult?.secure_url) {
         diagramUrl = uploadResult.secure_url;
+      } else {
+        const filename = path.basename(req.file.path);
+        diagramUrl = `/public/temp/${filename}`;
       }
     }
 
@@ -125,6 +129,9 @@ const updateQuestion = async (req, res) => {
       const uploadResult = await uploadOnCloudinary(req.file.path);
       if (uploadResult?.secure_url) {
         updateData.diagram = uploadResult.secure_url;
+      } else {
+        const filename = path.basename(req.file.path);
+        updateData.diagram = `/public/temp/${filename}`;
       }
     }
 
