@@ -36,4 +36,21 @@ const getAnnouncements = async (req, res) => {
   }
 };
 
-module.exports = { createAnnouncement, getAnnouncements };
+const bulkDeleteAnnouncements = async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, message: 'Announcement ids must be a non-empty array' });
+    }
+    const result = await Announcement.deleteMany({ _id: { $in: ids } });
+    res.json({
+      success: true,
+      message: `${result.deletedCount || 0} announcement(s) deleted`,
+      deletedCount: result.deletedCount
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+module.exports = { createAnnouncement, getAnnouncements, bulkDeleteAnnouncements };
