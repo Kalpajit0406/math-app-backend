@@ -54,10 +54,9 @@ const addQuestion = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
-
 const getQuestions = async (req, res) => {
   try {
-    const { classNo, language, chapter } = req.query;
+    const { classNo, language, chapter, search } = req.query;
     const pagination = new PaginationParams(req);
     
     let filter = {};
@@ -70,6 +69,9 @@ const getQuestions = async (req, res) => {
       }
     }
     if (chapter) filter.chapter = chapter;
+    if (search && search.trim() !== '') {
+      filter.question = { $regex: search.trim(), $options: 'i' };
+    }
 
     const result = await paginate(
       Question,
