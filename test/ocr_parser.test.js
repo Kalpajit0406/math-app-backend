@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { MCQDetector, QuestionSegmenter } = require('../src/services/ocrPipeline');
+const { MCQDetector, QuestionSegmenter, LatexSanitizer } = require('../src/services/ocrPipeline');
 
 function createSegmentationCase(name, input, expectedMinSegments, assertions = null) {
   test(`[segment] ${name}`, () => {
@@ -107,4 +107,62 @@ createSegmentationCase(
     assert.equal(segs[0].number, '9');
   }
 );
+
+// ── NEW: Bengali digits and Option Labels ────────────────────────────────────
+
+createSegmentationCase(
+  'Bengali question prefix and digits segmenting',
+  `প্রশ্ন ১০. সমাধান করো:\nপ্রশ্ন ১১. প্রখ্যাত গণিতবিদ`,
+  2,
+  (segs) => {
+    assert.equal(segs.length, 2, `Expected 2 segments but got ${segs.length}`);
+    assert.equal(segs[0].number, '10');
+    assert.equal(segs[1].number, '11');
+  }
+);
+
+createMcqCase(
+  'Bengali option labels (ক, খ, গ, ঘ)',
+  `প্রশ্ন ৫. একটি আয়তক্ষেত্রের ক্ষেত্রফল ২৫ বর্গ মিটার।\nক. ১০ মিটার\nখ. ১৫ মিটার\nগ. ২০ মিটার\nঘ. ২৫ মিটার`,
+  (parsed) => {
+    assert.equal(parsed.options.length, 4);
+    assert.equal(parsed.options[0].label, 'A');
+    assert.equal(parsed.options[0].text, '১০ মিটার');
+    assert.equal(parsed.options[1].label, 'B');
+    assert.equal(parsed.options[1].text, '১৫ মিটার');
+    assert.equal(parsed.options[2].label, 'C');
+    assert.equal(parsed.options[2].text, '২০ মিটার');
+    assert.equal(parsed.options[3].label, 'D');
+    assert.equal(parsed.options[3].text, '২৫ মিটার');
+  }
+);
+
+createMcqCase(
+  'Bengali numeral option labels (১, ২, ৩, ৪)',
+  `প্রশ্ন ৬. বৃত্তের ব্যাসার্ধ কত?\n১. ৫ সেমি\n২. ১০ সেমি\n৩. ১৫ সেমি\n৪. ২০ সেমি`,
+  (parsed) => {
+    assert.equal(parsed.options.length, 4);
+    assert.equal(parsed.options[0].label, 'A');
+    assert.equal(parsed.options[1].label, 'B');
+    assert.equal(parsed.options[2].label, 'C');
+    assert.equal(parsed.options[3].label, 'D');
+  }
+);
+
+// ── NEW: Malformed LaTeX Sanitization ────────────────────────────────────────
+
+test('[latex] sanitizes unbalanced braces, dollars and environments', () => {
+  const malformed = `\\begin{matrix} 1 & 2 \\\\ 3 & 4 \\frac{1}{2`;
+  const sanitized = LatexSanitizer.sanitize(malformed);
+  assert.ok(sanitized.includes('\\end{matrix}'), 'Should automatically close environment');
+  assert.ok(sanitized.endsWith('}'), 'Should balance unclosed braces');
+
+  const unclosedDollars = `Find $x + y where $x=2$`;
+  const sanitizedDollars = LatexSanitizer.sanitize(unclosedDollars);
+  assert.ok(sanitizedDollars.endsWith('$'), 'Should balance unclosed dollar signs');
+
+  const unclosedBrackets = `Evaluate [x + y`;
+  const sanitizedBrackets = LatexSanitizer.sanitize(unclosedBrackets);
+  assert.ok(sanitizedBrackets.endsWith(']'), 'Should balance unclosed brackets');
+});
 

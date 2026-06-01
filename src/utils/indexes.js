@@ -3,6 +3,29 @@
  * Improves query performance significantly
  */
 
+function isIgnorableIndexError(error) {
+  if (!error) return false;
+  const message = String(error.message || '').toLowerCase();
+  return (
+    error.code === 85 ||
+    error.codeName === 'IndexOptionsConflict' ||
+    message.includes('already exists with a different name') ||
+    message.includes('equivalent index already exists')
+  );
+}
+
+async function safeCreateIndex(collection, key, options = {}) {
+  try {
+    await collection.createIndex(key, options);
+  } catch (error) {
+    if (isIgnorableIndexError(error)) {
+      console.log(`- Skipping existing index ${JSON.stringify(key)}: ${error.message}`);
+      return;
+    }
+    throw error;
+  }
+}
+
 async function ensureIndexes(mongoose) {
   try {
     const Student = require('../models/studentModel');
@@ -11,31 +34,31 @@ async function ensureIndexes(mongoose) {
     const Attempt = require('../models/attemptModel');
 
     // Student indexes
-    await Student.collection.createIndex({ studentPhone: 1 }, { unique: true });
-    await Student.collection.createIndex({ role: 1 });
-    await Student.collection.createIndex({ classNo: 1 });
-    await Student.collection.createIndex({ createdAt: -1 });
+    await safeCreateIndex(Student.collection, { studentPhone: 1 }, { unique: true });
+    await safeCreateIndex(Student.collection, { role: 1 });
+    await safeCreateIndex(Student.collection, { classNo: 1 });
+    await safeCreateIndex(Student.collection, { createdAt: -1 });
     console.log('✓ Student indexes created');
 
     // Question indexes
-    await Question.collection.createIndex({ classNo: 1, chapter: 1 });
-    await Question.collection.createIndex({ language: 1 });
-    await Question.collection.createIndex({ createdAt: -1 });
-    await Question.collection.createIndex({ classNo: 1, language: 1 });
+    await safeCreateIndex(Question.collection, { classNo: 1, chapter: 1 });
+    await safeCreateIndex(Question.collection, { language: 1 });
+    await safeCreateIndex(Question.collection, { createdAt: -1 });
+    await safeCreateIndex(Question.collection, { classNo: 1, language: 1 });
     console.log('✓ Question indexes created');
 
     // Exam indexes
-    await Exam.collection.createIndex({ createdBy: 1 });
-    await Exam.collection.createIndex({ classNo: 1 });
-    await Exam.collection.createIndex({ createdAt: -1 });
+    await safeCreateIndex(Exam.collection, { createdBy: 1 });
+    await safeCreateIndex(Exam.collection, { classNo: 1 });
+    await safeCreateIndex(Exam.collection, { createdAt: -1 });
     console.log('✓ Exam indexes created');
 
     // Attempt indexes
-    await Attempt.collection.createIndex({ userId: 1, examId: 1 });
-    await Attempt.collection.createIndex({ examId: 1 });
-    await Attempt.collection.createIndex({ userId: 1 });
-    await Attempt.collection.createIndex({ createdAt: -1 });
-    await Attempt.collection.createIndex({ endTime: 1 }); // For finding submitted attempts
+    await safeCreateIndex(Attempt.collection, { userId: 1, examId: 1 });
+    await safeCreateIndex(Attempt.collection, { examId: 1 });
+    await safeCreateIndex(Attempt.collection, { userId: 1 });
+    await safeCreateIndex(Attempt.collection, { createdAt: -1 });
+    await safeCreateIndex(Attempt.collection, { endTime: 1 }); // For finding submitted attempts
     console.log('✓ Attempt indexes created');
 
     console.log('✓ All database indexes created successfully');

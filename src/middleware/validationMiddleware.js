@@ -31,7 +31,7 @@ const getTeacherBypassPhone = () => process.env.TEACHER_BYPASS_PHONE || '';
 
 const validateClassNumber = (classNo) => {
   if (classNo === 'all' || classNo === 'All') return true;
-  const validClasses = [9, 10, 11, 12];
+  const validClasses = [9, 10, 11, 12, 13];
   return validClasses.includes(Number(classNo));
 };
 
@@ -98,8 +98,12 @@ const validationRules = {
     if (!lastName || typeof lastName !== 'string' || lastName.length > 100) {
       errors.push('Invalid last name');
     }
-    if (!validateClassNumber(classNo)) {
+    const validStudentClasses = [9, 10, 11, 12];
+    if (!validStudentClasses.includes(Number(classNo))) {
       errors.push('Invalid class number (must be 9, 10, 11, or 12)');
+    }
+    if (req.body.isJoint && ![11, 12].includes(Number(classNo))) {
+      errors.push('Joint Entrance is only available for classes 11 and 12');
     }
     if (!language || !['English', 'Bengali', 'Both'].includes(language)) {
       errors.push('Invalid language');
@@ -158,12 +162,19 @@ const validationRules = {
       errors.push(`Invalid language: ${normalizedLanguage || language}`);
     }
     
-    if (!classNo || ![9, 10, 11, 12].includes(Number(classNo))) {
-      errors.push('Invalid class number (must be 9, 10, 11, or 12)');
+    const clsNum = Number(classNo);
+    if (!classNo || ![9, 10, 11, 12, 13].includes(clsNum)) {
+      errors.push('Invalid class number (must be 9, 10, 11, 12, or 13)');
     }
     
-    if (!chapter || typeof chapter !== 'string' || chapter.trim() === '') {
-      errors.push('Chapter is required');
+    if (clsNum === 13) {
+      if (!['11', '12', 'Joint'].includes(chapter)) {
+        errors.push('Invalid chapter for Joint Entrance (must be 11, 12, or Joint)');
+      }
+    } else {
+      if (!chapter || typeof chapter !== 'string' || chapter.trim() === '') {
+        errors.push('Chapter is required');
+      }
     }
     
     if (errors.length > 0) {

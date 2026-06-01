@@ -202,6 +202,46 @@ async function runTests() {
     if (res.status !== 201) throw new Error(`Expected 201, got ${res.status}`);
   });
 
+  // Test 11: Create Joint Entrance Question
+  let jointQuestionId = null;
+  await test('Create Joint Entrance Question', async () => {
+    const res = await request(
+      'POST',
+      '/api/v1/question/addQuestion',
+      {
+        question: 'What is 2+2 in Joint Entrance?',
+        options: ['1', '2', '3', '4'],
+        correctAnswer: '4',
+        language: 'English',
+        classNo: 13,
+        chapter: '11'
+      },
+      { Authorization: `Bearer ${token}` }
+    );
+    if (res.status !== 201) throw new Error(`Expected 201, got ${res.status}`);
+    const body = JSON.parse(res.body);
+    if (!body.data || !body.data._id) throw new Error('No question ID');
+    jointQuestionId = body.data._id;
+  });
+
+  // Test 12: Create Joint Entrance Question with Invalid Chapter
+  await test('Create Joint Entrance Question with Invalid Chapter', async () => {
+    const res = await request(
+      'POST',
+      '/api/v1/question/addQuestion',
+      {
+        question: 'What is 2+2 in Joint Entrance?',
+        options: ['1', '2', '3', '4'],
+        correctAnswer: '4',
+        language: 'English',
+        classNo: 13,
+        chapter: 'Calculus'
+      },
+      { Authorization: `Bearer ${token}` }
+    );
+    if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  });
+
   // Summary
   console.log('\n=== Test Summary ===');
   console.log(`Passed: ${testsPassed}`);

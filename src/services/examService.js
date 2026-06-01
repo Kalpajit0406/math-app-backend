@@ -71,17 +71,31 @@ const examService = {
     return await Exam.find().sort({ createdAt: -1 });
   },
 
-  getExamsForStudent: async (classNo, language) => {
+  getExamsForStudent: async (classNo, language, isJoint = false) => {
     let testLanguageFilter;
     if (language === 'Both') {
       testLanguageFilter = { $in: ['Bengali', 'English', 'Both'] };
     } else {
       testLanguageFilter = { $in: [language, 'Both'] };
     }
-    return await Exam.find({
-      classNo: Number(classNo),
+    
+    const query = {
       language: testLanguageFilter,
-    }).sort({ createdAt: -1 });
+    };
+
+    if (isJoint && (Number(classNo) === 11 || Number(classNo) === 12)) {
+      query.$or = [
+        { classNo: Number(classNo) },
+        {
+          classNo: 13,
+          chapters: { $in: [String(classNo), 'Joint'] }
+        }
+      ];
+    } else {
+      query.classNo = Number(classNo);
+    }
+
+    return await Exam.find(query).sort({ createdAt: -1 });
   },
 
   getExamById: async (id) => {

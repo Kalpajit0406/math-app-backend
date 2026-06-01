@@ -37,6 +37,23 @@ const attemptService = {
     const exam = await Exam.findById(examId);
     if (!exam) throw new Error('Exam not found');
 
+    const Student = require('../models/studentModel');
+    const student = await Student.findById(userId);
+    if (!student) throw new Error('Student not found');
+
+    if (exam.classNo === 13) {
+      if (!student.isJoint || (student.classNo !== 11 && student.classNo !== 12)) {
+        throw new Error('You are not eligible for Joint Entrance exams');
+      }
+      if (exam.chapters && exam.chapters.length > 0) {
+        const studentEligibleChapters = [String(student.classNo), 'Joint'];
+        const hasEligibleChapter = exam.chapters.some(ch => studentEligibleChapters.includes(ch));
+        if (!hasEligibleChapter) {
+          throw new Error('You are not eligible for this specific Joint Entrance exam');
+        }
+      }
+    }
+
     let attempt = await Attempt.findOne({ userId, examId, endTime: { $exists: false } });
     if (attempt) {
       // Calculate remaining seconds using server time
@@ -148,6 +165,23 @@ const attemptService = {
     try {
       const exam = await Exam.findById(examId);
       if (!exam) throw new Error('Exam not found');
+
+      const Student = require('../models/studentModel');
+      const student = await Student.findById(userId);
+      if (!student) throw new Error('Student not found');
+
+      if (exam.classNo === 13) {
+        if (!student.isJoint || (student.classNo !== 11 && student.classNo !== 12)) {
+          throw new Error('You are not eligible for Joint Entrance exams');
+        }
+        if (exam.chapters && exam.chapters.length > 0) {
+          const studentEligibleChapters = [String(student.classNo), 'Joint'];
+          const hasEligibleChapter = exam.chapters.some(ch => studentEligibleChapters.includes(ch));
+          if (!hasEligibleChapter) {
+            throw new Error('You are not eligible for this specific Joint Entrance exam');
+          }
+        }
+      }
 
       // Check if a completed attempt already exists
       let attempt = await Attempt.findOne({ userId, examId, endTime: { $exists: true } });
