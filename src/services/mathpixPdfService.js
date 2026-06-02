@@ -16,7 +16,10 @@ const path = require('path');
  * - Data retention management
  */
 class MathpixPdfService {
-  constructor(appId = process.env.MATHPIX_APP_ID, appKey = process.env.MATHPIX_APP_KEY) {
+  constructor(
+    appId = process.env.MATHPIX_APP_ID || process.env.MATHPIX_API_ID,
+    appKey = process.env.MATHPIX_APP_KEY || process.env.MATHPIX_API_KEY
+  ) {
     this.appId = appId;
     this.appKey = appKey;
     this.baseUrl = 'https://api.mathpix.com/v3';

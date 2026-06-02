@@ -20,28 +20,71 @@ class MCQOptionParser {
     if (!segmentText) return null;
 
     // Defensive check: if there is a subsequent question header leaked inside, truncate it.
-    // Also handles Bengali question headers like "প্রশ্ন 3" or "প্র. 3"
-    const internalHeaderPattern = /\n\s*(?:Question\s+\d+|Q\s*\d+|Q\d+|\d+\.|প্রশ্ন\s*[\d০-৯]+|প্র\.\s*[\d০-৯]+)\s+/;
+    // Matches Question X or Q X or digits >= 5 / multi-digits followed by dot, and Bengali counterparts.
+    const internalHeaderPattern = /\n\s*(?:Question\s+\d+|Q\s*\d+|Q\d+|(?:(?:[5-9]|\d{2,})|(?:[৫-৯]|[০-৯]{2,}))\.|প্রশ্ন\s*[\d০-৯]+|প্র\.\s*[\d০-৯]+)\s+/;
     const internalHeader = segmentText.match(internalHeaderPattern);
     if (internalHeader && internalHeader.index != null) {
       segmentText = segmentText.substring(0, internalHeader.index).trim();
     }
 
-    // ── PASS 0: INLINE OPTION EXTRACTION ─────────────────────────────────────
-    // Handles Mathpix printed-exam format where all options appear on ONE LINE:
-    //   "...is- (A) $\frac{1}{18}$(B)$\frac{1}{9}$(C)$\frac{1}{12}$(D)$\frac{5}{36}$"
-    //
-    // CRITICAL: Use negative lookbehind (?<![A-Za-z0-9\\]) so that probability
-    // expressions like P(A), P(A∪B), P(A∩B) are NOT mistaken for option markers.
-    // Only a standalone (A)/(B)/(C)/(D) after whitespace or punctuation qualifies.
-    const inlineOptionPattern = /(?<![A-Za-z0-9\\])\(([ABCDabcd])\)\s*([\s\S]*?)(?=\s*(?<![A-Za-z0-9\\])\([ABCDabcd]\)|$)/g;
-    const inlineSingleLine = segmentText.replace(/\n+/g, ' '); // flatten to one line for matching
+    // Try structured layout first
+    const structured = this.detectStructured(segmentText);
+    if (structured) return structured;
+
+    // Try inline layout
+    const inline = this.detectInline(segmentText);
+    if (inline) return inline;
+
+    // Try line-by-line layout
+    const lineBased = this.detectLineBased(segmentText);
+    if (lineBased) return lineBased;
+
+    return null;
+  }
+
+  /**
+   * Detect structured options key-value style
+   */
+  static detectStructured(text) {
+    const patterns = [
+      /question\s*[:\-]?\s*(.+?)\s*(?:options?|choice|answer)\s*[:\-]?\s*(.*)/is,
+      /(\d+\.\s+.+?)\s*option\s*a\s*[:\-]?\s*(.+?)(?=option|choice|$)/is,
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match) {
+        const optLines = match[2].trim().split(/\n/).filter(l => l.trim());
+        const opts = [];
+        const labels = ['A', 'B', 'C', 'D'];
+        for (const line of optLines) {
+          // Support Bengali option labels in structured format
+          const om = line.match(/^[\(\[]?([A-Da-d1-4কখগঘ১২৩৪]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:\-\s]+(.+)$/);
+          if (om) opts.push({ label: labels[opts.length] || 'A', text: om[2].trim() });
+        }
+        if (opts.length >= 2) {
+          while (opts.length < 4) opts.push({ label: labels[opts.length], text: '' });
+          return { question: match[1].trim(), options: opts.slice(0, 4), format: 'structured' };
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Parse inline options (e.g. A. option B. option or ক. option খ. option)
+   */
+  static detectInline(text) {
+    // 1. Mathpix specific inline options: (A) option (B) option...
+    const inlineOptionPattern = /(?<![A-Za-z0-9\\])\(([ABCDabcdকখগঘ১২৩৪])\)\s*([\s\S]*?)(?=\s*(?<![A-Za-z0-9\\])\([ABCDabcdকখগঘ১২৩৪]\)|$)/g;
+    const inlineSingleLine = text.replace(/\n+/g, ' '); // flatten to one line for matching
     const inlineMatches = [...inlineSingleLine.matchAll(inlineOptionPattern)];
 
-    // Accept if we got at least 3 distinct option labels (A, B, C, D or a, b, c, d)
     if (inlineMatches.length >= 3) {
-      const alphaMap = { A: 0, B: 1, C: 2, D: 3, a: 0, b: 1, c: 2, d: 3 };
-      const targetLabels = ['A', 'B', 'C', 'D'];
+      const labelMap = {
+        A: 0, B: 1, C: 2, D: 3, a: 0, b: 1, c: 2, d: 3,
+        'ক': 0, 'খ': 1, 'গ': 2, 'ঘ': 3,
+        '১': 0, '২': 1, '৩': 2, '৪': 3
+      };
       const inlineOptions = [
         { label: 'A', text: '' },
         { label: 'B', text: '' },
@@ -51,25 +94,20 @@ class MCQOptionParser {
 
       for (const match of inlineMatches) {
         const rawLabel = match[1];
-        const idx = alphaMap[rawLabel];
+        const idx = labelMap[rawLabel];
         if (idx !== undefined) {
           inlineOptions[idx].text = match[2].trim().replace(/\s+/g, ' ');
         }
       }
 
-      // Question body is everything before the first STANDALONE option marker (A)/(a).
-      // Use exec() to get the actual match.index (not indexOf which finds the wrong occurrence).
-      // The negative lookbehind (?<![A-Za-z0-9\\]) ensures P(A) is NOT matched.
-      const standaloneOptionRegex = /(?<![A-Za-z0-9\\])\([ABCDabcd]\)/;
+      // Reconstruct question body
+      const standaloneOptionRegex = /(?<![A-Za-z0-9\\])\([ABCDabcdকখগঘ১২৩৪]\)/;
       const firstStandaloneMatch = standaloneOptionRegex.exec(inlineSingleLine);
       const firstOptionStart = firstStandaloneMatch ? firstStandaloneMatch.index : -1;
       const inlineQuestionText = firstOptionStart > 0
         ? inlineSingleLine.substring(0, firstOptionStart).replace(/^\d+[\.\)]\s*/, '').trim()
         : 'Question Text';
 
-
-
-      // Only return if at least 2 options have actual content
       const filledOptions = inlineOptions.filter(o => o.text.trim().length > 0);
       if (filledOptions.length >= 2) {
         return {
@@ -80,19 +118,50 @@ class MCQOptionParser {
       }
     }
 
-    // ── PASS 1: LINE-BY-LINE OPTION EXTRACTION (existing logic) ──────────────
-    const lines = segmentText.split('\n').map(l => l.replace(/\r/g, '').trim());
-    
-    // Pattern matches options starting with:
-    //  - Latin:   (A), A., [A], A), 1., (1) etc.
-    //  - Bengali option labels: ক., (ক), ক), খ., গ., ঘ.
-    //  - Bengali numerals: ১., ২., ৩., ৪. (mapped via bengaliToEnglishDigits)
+    // 2. Generic label splitting fallback (Bengali & Roman numerals)
+    const labelRegex = /(?:^|\n|\s)[\(\[]?([A-Da-d1-4কখগঘ১২৩৪]|i{1,3}|iv|v|I{1,3}|IV|V)[\)\]\.\:](?=\s)/g;
+    const parts = text.split(labelRegex);
+    if (parts.length >= 9) {
+      const labels = ['A', 'B', 'C', 'D'];
+      const labelMap = {
+        '1': 'A', '2': 'B', '3': 'C', '4': 'D',
+        'i': 'A', 'ii': 'B', 'iii': 'C', 'iv': 'D',
+        'ক': 'A', 'খ': 'B', 'গ': 'C', 'ঘ': 'D',
+        '১': 'A', '২': 'B', '৩': 'C', '৪': 'D',
+      };
+      const options = [];
+      for (let i = 1; i <= 8; i += 2) {
+        if (i < parts.length) {
+          const rawLabel = parts[i].toLowerCase();
+          const optText = parts[i + 1]?.trim() || '';
+          options.push({
+            label: labelMap[rawLabel] || labelMap[parts[i]] || labels[Math.floor(i/2)],
+            text: optText
+          });
+        }
+      }
+      if (options.length === 4 && options.some(o => o.text.length > 0)) {
+        return { 
+          question: (parts[0]?.trim() || 'Question').substring(0, 500),
+          options: options, 
+          format: 'inline-mcq' 
+        };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Detect option patterns line-by-line (Latin and Bengali)
+   */
+  static detectLineBased(text) {
+    const lines = text.split('\n').map(l => l.replace(/\r/g, '').trim());
     const optionStartRegex = /^\s*[\(\[]?\s*([A-Da-d1-4কখগঘ১২৩৪]|i{1,4}|I{1,4})\s*[\)\]\.]\s*(.*)$/;
     
     const romanMap = { i: 0, ii: 1, iii: 2, iv: 3, v: 3, vi: 3 };
     const numericMap = { '1': 0, '2': 1, '3': 2, '4': 3 };
     const alphaMap = { A: 0, B: 1, C: 2, D: 3, a: 0, b: 1, c: 2, d: 3 };
-    // Bengali option labels (ক=A, খ=B, গ=C, ঘ=D) and Bengali numerals as option markers
     const bengaliLabelMap = { 'ক': 0, 'খ': 1, 'গ': 2, 'ঘ': 3, '১': 0, '২': 1, '৩': 2, '৪': 3 };
 
     let questionLines = [];
@@ -135,7 +204,7 @@ class MCQOptionParser {
     }
 
     if (options.length < 2) {
-      return null; // Not enough options to qualify as an MCQ
+      return null; // Not enough options
     }
 
     // Normalize options array to have exactly 4 entries (A, B, C, D)
@@ -147,7 +216,6 @@ class MCQOptionParser {
       if (matched) {
         normalizedOptions.push({ label: targetLabels[i], text: matched.text });
       } else {
-        // If not found in parsed options, check if we can grab from index
         if (options[i]) {
           normalizedOptions.push({ label: targetLabels[i], text: options[i].text });
         } else {

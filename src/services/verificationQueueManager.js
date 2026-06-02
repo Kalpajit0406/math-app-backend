@@ -15,8 +15,9 @@ class VerificationQueueManager {
    */
   static async createSession(sessionId, userId, parsedQuestions, ttlSeconds = 86400, scannedImageUrl = null) {
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+    const questions = Array.isArray(parsedQuestions) ? parsedQuestions : [];
 
-    const items = parsedQuestions.map((q, idx) => {
+    const items = questions.map((q, idx) => {
       // Map options array of object {label, text} to simple string array if needed
       let optionsArray = [];
       if (Array.isArray(q.options)) {

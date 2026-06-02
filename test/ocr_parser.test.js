@@ -166,3 +166,36 @@ test('[latex] sanitizes unbalanced braces, dollars and environments', () => {
   assert.ok(sanitizedBrackets.endsWith(']'), 'Should balance unclosed brackets');
 });
 
+const { ContentClassificationEngine } = require('../src/services/contentClassificationEngine');
+
+test('[classification] ignores textbook headers and page metadata', () => {
+  const textWithNoise = `CHHAYA MATHEMATICS
+EXERCISE 8
+Class XI
+Semester-I
+Unit-1
+1. What is 2 + 2?
+A. 3
+B. 4
+C. 5
+D. 6
+Mark 1
+Level 1
+Page 45
+ANSWERS`;
+  const filtered = ContentClassificationEngine.filterNoise(textWithNoise);
+  
+  assert.ok(!filtered.includes('CHHAYA'), 'Should filter publisher brand name');
+  assert.ok(!filtered.includes('EXERCISE'), 'Should filter exercise title');
+  assert.ok(!filtered.includes('Class XI'), 'Should filter class metadata');
+  assert.ok(!filtered.includes('Semester-I'), 'Should filter semester');
+  assert.ok(!filtered.includes('Unit-1'), 'Should filter unit');
+  assert.ok(!filtered.includes('Mark 1'), 'Should filter marks label');
+  assert.ok(!filtered.includes('Level 1'), 'Should filter level label');
+  assert.ok(!filtered.includes('Page 45'), 'Should filter page number');
+  assert.ok(!filtered.includes('ANSWERS'), 'Should filter answer sections');
+  
+  assert.ok(filtered.includes('What is 2 + 2?'), 'Should retain actual question text');
+  assert.ok(filtered.includes('A. 3'), 'Should retain options');
+});
+

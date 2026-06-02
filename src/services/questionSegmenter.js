@@ -1,4 +1,5 @@
 const { OCRNormalizer } = require('./ocrNormalizer');
+const { ContentClassificationEngine } = require('./contentClassificationEngine');
 
 // Converts Bengali Unicode digits (০-৯) to their ASCII equivalents
 function bengaliToEnglishDigits(str) {
@@ -120,6 +121,9 @@ class QuestionSegmenter {
     // Normalize text first using OCRNormalizer
     const normalized = OCRNormalizer.normalizeText(text);
 
+    // Filter out page numbers, brandings, metadata headers, levels, etc.
+    const filteredText = ContentClassificationEngine.filterNoise(normalized);
+
     // ── PASS 1: LOOKAHEAD PRE-SPLIT ──────────────────────────────────────────
     // Split at any position where a question number header starts, even if
     // it appears mid-line (e.g. after a closing "$" in Mathpix inline output).
@@ -135,7 +139,7 @@ class QuestionSegmenter {
     //     (?!\d)       NOT another digit (avoids splitting on decimal numbers)
     //   )
     const lookaheadPattern = /(?<![a-zA-Z\d])(?=\n?\s*\d{1,3}[\.\)\-:]\s+(?!\d))/;
-    const rawBlocks = normalized.split(lookaheadPattern);
+    const rawBlocks = filteredText.split(lookaheadPattern);
 
     // ── PASS 2: LINE-BY-LINE HEADER EXTRACTION PER BLOCK ────────────────────
     const segments = [];
@@ -208,11 +212,11 @@ class QuestionSegmenter {
     }
 
     if (current) {
-      flushCurrent(normalized.length);
+      flushCurrent(filteredText.length);
     }
 
     if (segments.length === 0) {
-      return [{ text: normalized, number: null, startIndex: 0, endIndex: normalized.length, rawHeader: '' }];
+      return [{ text: filteredText, number: null, startIndex: 0, endIndex: filteredText.length, rawHeader: '' }];
     }
 
     return segments;
