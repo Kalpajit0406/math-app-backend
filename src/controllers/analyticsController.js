@@ -65,6 +65,7 @@ exports.getClassPerformance = async (req, res) => {
 exports.getMyPerformance = async (req, res) => {
   try {
     const userId = req.user?.id;
+    const { timeframe } = req.query;
 
     if (!userId) {
       return res.status(401).json({
@@ -73,7 +74,7 @@ exports.getMyPerformance = async (req, res) => {
       });
     }
 
-    const performance = await PerformanceAnalytics.getStudentPerformance(userId);
+    const performance = await PerformanceAnalytics.getStudentPerformance(userId, timeframe);
 
     res.json({
       success: true,

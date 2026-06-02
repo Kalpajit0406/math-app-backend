@@ -77,5 +77,6 @@ const attemptSchema = new mongoose.Schema({
 });
 
 attemptSchema.index({ userId: 1, examId: 1, endTime: 1 });
+attemptSchema.index({ createdAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
 
 module.exports = mongoose.model('Attempt', attemptSchema);

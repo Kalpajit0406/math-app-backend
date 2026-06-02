@@ -59,4 +59,6 @@ const testResponseSchema = new mongoose.Schema(
   }
 );
 
+testResponseSchema.index({ createdAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
+
 module.exports = mongoose.model('TestResponse', testResponseSchema);
