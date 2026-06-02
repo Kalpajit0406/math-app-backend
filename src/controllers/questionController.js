@@ -102,7 +102,8 @@ const updateQuestion = async (req, res) => {
       correctAnswer,
       options,
       question,
-      language
+      language,
+      diagram
     } = req.body;
 
     let parsedOptions = options;
@@ -123,6 +124,12 @@ const updateQuestion = async (req, res) => {
 
     // Remove undefined fields
     Object.keys(updateData).forEach(key => updateData[key] === undefined && delete updateData[key]);
+
+    if (diagram !== undefined) {
+      if (diagram === 'null' || diagram === '' || diagram === null) {
+        updateData.diagram = null;
+      }
+    }
 
     // Handle diagram update
     if (req.file) {
