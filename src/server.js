@@ -23,6 +23,7 @@ const errorHandler = require('./middleware/errorHandler');
 
 const path = require('path');
 const app = express();
+app.set('trust proxy', true);
 app.use('/public', express.static(path.join(__dirname, '../public')));
 
 // Request logger middleware

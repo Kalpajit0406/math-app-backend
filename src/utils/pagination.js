@@ -41,10 +41,11 @@ class PaginationParams {
 /**
  * Mongoose pagination helper
  */
-async function paginate(model, query = {}, pagination) {
+async function paginate(model, query = {}, pagination, sort = { createdAt: -1 }) {
   const total = await model.countDocuments(query);
   const data = await model
     .find(query)
+    .sort(sort)
     .skip(pagination.skip)
     .limit(pagination.limit)
     .lean();
