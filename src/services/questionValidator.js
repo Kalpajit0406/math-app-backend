@@ -21,22 +21,32 @@ class QuestionValidator {
     }
 
     const options = questionItem.options;
-    if (!Array.isArray(options)) {
-      errors.push('Options must be a valid array.');
-    } else {
-      // Filter blank options or check options length
-      const optionTexts = options.map(opt => (typeof opt === 'object' && opt !== null) ? opt.text : opt);
-      
-      const emptyOptions = optionTexts.filter(text => !text || text.trim() === '');
-      if (emptyOptions.length > 2) {
-        errors.push('At least two options must have valid text contents.');
-      }
+    const format = questionItem.format || questionItem.type || '';
+    const isMCQ = format !== 'fill_in_blank' && format !== 'column_matching' && format !== 'descriptive';
 
-      // Check for duplicate options (non-empty ones)
-      const filledOptions = optionTexts.filter(text => text && text.trim() !== '');
-      const uniqueFilledOptions = new Set(filledOptions.map(t => t.trim()));
-      if (filledOptions.length !== uniqueFilledOptions.size) {
-        errors.push('Duplicate option texts are not allowed.');
+    if (isMCQ) {
+      if (!Array.isArray(options)) {
+        errors.push('Options must be a valid array.');
+      } else {
+        // Filter blank options or check options length
+        const optionTexts = options.map(opt => (typeof opt === 'object' && opt !== null) ? opt.text : opt);
+        
+        const emptyOptions = optionTexts.filter(text => !text || text.trim() === '');
+        if (emptyOptions.length > 2) {
+          errors.push('At least two options must have valid text contents.');
+        }
+
+        // Check for duplicate options (non-empty ones)
+        const filledOptions = optionTexts.filter(text => text && text.trim() !== '');
+        const uniqueFilledOptions = new Set(filledOptions.map(t => t.trim()));
+        if (filledOptions.length !== uniqueFilledOptions.size) {
+          errors.push('Duplicate option texts are not allowed.');
+        }
+      }
+    } else {
+      // For non-MCQ, just verify options is an array (even if empty/padded)
+      if (options && !Array.isArray(options)) {
+        errors.push('Options must be a valid array.');
       }
     }
 

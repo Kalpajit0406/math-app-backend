@@ -211,3 +211,80 @@ ANSWERS`;
   assert.strictEqual(ContentClassificationEngine.classifyLine('\\section*{Conventional Type}'), 'SECTION_TITLE');
 });
 
+const { OCRPipeline } = require('../src/services/ocrPipeline');
+
+test('[latex] preserves valid fraction and rejects blind brace corruption', () => {
+  // Valid math should not be corrupted
+  const rawFrac = `\\frac{1+\\cos 2\\theta}{1-\\cos 2\\theta}`;
+  const sanitized = LatexSanitizer.sanitize(rawFrac);
+  assert.strictEqual(sanitized, rawFrac, 'Valid fraction should remain untouched');
+
+  // Verify that simple powers and sgrts are not corrupted by brace insertion
+  const rawPower = `x^2`;
+  const sanitizedPower = LatexSanitizer.sanitize(rawPower);
+  assert.strictEqual(sanitizedPower, `x^2`, 'Simple power should remain untouched');
+
+  const rawSqrt = `\\sqrt{3}`;
+  const sanitizedSqrt = LatexSanitizer.sanitize(rawSqrt);
+  assert.strictEqual(sanitizedSqrt, `\\sqrt{3}`, 'Simple sqrt should remain untouched');
+});
+
+test('[answer detection] blocks answer pages', () => {
+  const answerPage = `
+    ANSWERS
+    5. (B)
+    6. (A)
+    7. (C)
+  `;
+  const isAns = ContentClassificationEngine.isAnswerKeyPage(answerPage);
+  assert.ok(isAns, 'Should identify dense answers as answer page');
+});
+
+test('[section routing] routes tables and fill-in-blanks correctly', async () => {
+  const ocrInput = `
+    \\section*{Column Matching}
+    1. Match Column A and Column B
+    | Column A | Column B |
+    |---|---|
+    | (i) a | [ii]-[d] |
+    
+    \\section*{Fill in the Blanks}
+    2. The sum of 2 + 2 is _____
+    
+    \\section*{MCQ Questions}
+    3. What is 3 + 3?
+    A. 6
+    B. 7
+    C. 8
+    D. 9
+  `;
+
+  const { OCRProviderAdapter } = require('../src/services/ocrProviderAdapter');
+  const originalProcessImage = OCRProviderAdapter.processImage;
+  OCRProviderAdapter.processImage = async () => {
+    return {
+      rawText: ocrInput,
+      latex: ocrInput,
+      confidence: 0.95
+    };
+  };
+
+  try {
+    const result = await OCRPipeline.runFromBuffer(Buffer.from('mock'), 'image/jpeg', 'test.jpg');
+    assert.strictEqual(result.parsedQuestions.length, 3);
+    
+    // Q1 should be column matching
+    assert.strictEqual(result.parsedQuestions[0].format, 'column_matching');
+    assert.ok(result.parsedQuestions[0].rawOcrData.diagnostics.tableDetected);
+    
+    // Q2 should be fill in blank
+    assert.strictEqual(result.parsedQuestions[1].format, 'fill_in_blank');
+    
+    // Q3 should be mcq
+    assert.ok(result.parsedQuestions[2].format.includes('mcq') || result.parsedQuestions[2].format === 'structured' || result.parsedQuestions[2].format === 'line-based');
+  } finally {
+    OCRProviderAdapter.processImage = originalProcessImage;
+  }
+});
+
+

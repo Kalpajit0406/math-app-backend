@@ -1,4 +1,5 @@
 // Enhanced Mathpix Question Extraction - JavaScript Implementation
+const { LatexSanitizer } = require('../services/latexSanitizer');
 
 // Helper function to escape special regex characters
 function escapeRegExp(string) {
@@ -224,19 +225,21 @@ function classifyLine(line) {
 
 // PART 3: ANSWER PAGE DETECTION
 function isAnswerKeyPage(pageText) {
-    const lines = pageText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-    if (lines.length === 0) return false;
-
-    // Check for explicit answer sheet keywords
-    const explicitHeadingRegex = /(?:answer\s*key|answers|answer\s*sheet|উত্তরমালা|উত্তর|সংক্ষিপ্ত\s*উত্তরমালা|conventional\s*type\s*answers?)/i;
-    if (explicitHeadingRegex.test(pageText)) {
+    if (!pageText) return false;
+    const normalized = pageText.toLowerCase();
+    
+    // Explicit keywords
+    const explicitHeadingRegex = /(?:answer\s*key|answers|answer\s*sheet|উত্তরমালা|উত্তর|সংক্ষিপ্ত\s*উত্তরমালা|conventional\s*type\s*answers?|correct\s*options?|key\s*answers?)/i;
+    if (explicitHeadingRegex.test(normalized)) {
         return true;
     }
 
-    // Density audit for answer keys on the page
+    const lines = pageText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length === 0) return false;
+
     let answerPatternCount = 0;
-    const singleAnswerRegex = /^\d{1,3}\s*[\.\)]\s*\(?[a-dABCDক-ঘi-iv-xI-XV-X]\)?\s*$/i;
-    const multipleAnswersRegex = /(?:\d{1,3}\s*[\.\)]\s*\(?[a-dABCDক-ঘi-iv-xI-XV-X]\)?\s*){2,}/i;
+    const singleAnswerRegex = /^\d{1,3}\s*[\.\-\):\s]\s*\(?[A-DABCDকখগঘ১২৩৪i-ivI-IV]\)?\s*$/i;
+    const multipleAnswersRegex = /^(?:\d{1,3}\s*[\.\-\):\s]\s*\(?[A-DABCDকখগঘ১২৩৪i-ivI-IV]\)?(?:\s+|$)){2,}$/i;
 
     for (const line of lines) {
         if (singleAnswerRegex.test(line) || multipleAnswersRegex.test(line)) {
@@ -245,10 +248,46 @@ function isAnswerKeyPage(pageText) {
     }
 
     const ratio = answerPatternCount / lines.length;
-    if (ratio > 0.25 || answerPatternCount >= 5) {
+    if (ratio > 0.20 || answerPatternCount >= 4) {
         return true;
     }
 
+    return false;
+}
+
+// Helpers for section routing
+function detectTableOrGrid(text) {
+    if (!text) return false;
+    const normalized = text.toLowerCase();
+    if (normalized.includes('\\begin{matrix}') || normalized.includes('\\begin{pmatrix}') || normalized.includes('\\begin{bmatrix}') || normalized.includes('\\begin{array}')) {
+        return true;
+    }
+    if (normalized.includes('\\begin{tabular}') || normalized.includes('\\end{tabular}')) {
+        return true;
+    }
+    if (normalized.includes('column a') || normalized.includes('column b') || 
+        normalized.includes('স্তম্ভ a') || normalized.includes('স্তম্ভ b') || 
+        normalized.includes('স্তম্ভ-i') || normalized.includes('স্তম্ভ-ii') ||
+        normalized.includes('match the column') || normalized.includes('स्तंभ')) {
+        return true;
+    }
+    if (/\[[a-d1-4i-v]\]\s*-\s*\[[a-d1-4i-v]\]/i.test(text) || /\([a-d1-4i-v]\)\s*-\s*\(?[a-d1-4i-v]\)?/i.test(text)) {
+        return true;
+    }
+    const pipeCount = (text.match(/\|/g) || []).length;
+    if (pipeCount >= 4) return true;
+    return false;
+}
+
+function detectFillInBlank(text) {
+    if (!text) return false;
+    const normalized = text.toLowerCase();
+    if (normalized.includes('fill in the blank') || normalized.includes('শূন্যস্থান') || normalized.includes('रिक्त स्थान')) {
+        return true;
+    }
+    if (text.includes('_____') || text.includes('....') || text.includes('. . . .')) {
+        return true;
+    }
     return false;
 }
 
@@ -387,6 +426,7 @@ function extractQuestionsFromMathpix(mathpixResponse, debug = false) {
     console.log(`[Layout] Document segmented into ${pages.length} pages.`);
 
     let currentSection = "Default";
+    let lastParserType = "MCQ";
     const seenNumbers = new Set();
 
     for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
@@ -448,55 +488,70 @@ function extractQuestionsFromMathpix(mathpixResponse, debug = false) {
             }
         }
 
-        // STEP 6: MCQ option parsing inside isolated blocks & STEP 8: Queue validation
+        // STEP 6: option parsing & Routing & Safe Math normalization
         for (const block of rawBlocks) {
             const fullBlockText = block.lines.join('\n');
-            const parsed = extractOptionsAndCleanQuestion(fullBlockText);
-            
-            let finalOptions = [...parsed.options];
-            if (finalOptions.length === 0) {
-                const fallbackOpts = extractMCQOptions(fullBlockText);
-                if (fallbackOpts.length > 0) {
-                    finalOptions = [...fallbackOpts];
+
+            // Table or Fill routing
+            const isTable = detectTableOrGrid(fullBlockText);
+            const isFill = detectFillInBlank(fullBlockText);
+
+            let questionType = 'multiple_choice';
+            let parsed;
+            let trimmedOptions;
+
+            if (isTable) {
+                questionType = 'column_matching';
+                parsed = { question: fullBlockText, options: [] };
+                trimmedOptions = ['', '', '', ''];
+            } else if (isFill) {
+                questionType = 'fill_in_blank';
+                parsed = { question: fullBlockText, options: [] };
+                trimmedOptions = ['', '', '', ''];
+            } else {
+                parsed = extractOptionsAndCleanQuestion(fullBlockText);
+                let finalOptions = [...parsed.options];
+                if (finalOptions.length === 0) {
+                    const fallbackOpts = extractMCQOptions(fullBlockText);
+                    if (fallbackOpts.length > 0) {
+                        finalOptions = [...fallbackOpts];
+                    }
                 }
+                while (finalOptions.length < 4) {
+                    finalOptions.push('');
+                }
+                trimmedOptions = finalOptions.slice(0, 4);
+                
+                const hasTabular = block.hasTabular;
+                const hasColumnMatching = parsed.question.includes('স্তম্ভ A') || parsed.question.includes('স্তম্ভ B') || 
+                                          parsed.question.includes('Column A') || parsed.question.includes('Column B');
+                const hasFillInBlank = parsed.question.includes('_____') || 
+                                      (parsed.question.includes('=') && parsed.question.includes('।'));
+                
+                questionType = determineQuestionType(parsed.question, trimmedOptions, hasTabular, hasColumnMatching, hasFillInBlank);
             }
 
-            // Pad options for frontend schema
-            while (finalOptions.length < 4) {
-                finalOptions.push('');
+            // RESET state if parser type changed
+            if (lastParserType !== questionType) {
+                seenNumbers.clear();
+                lastParserType = questionType;
             }
-            const trimmedOptions = finalOptions.slice(0, 4);
 
-            let finalQuestion = parsed.question
-                .replace(/\s+/g, ' ')
-                .replace(/হলে\s*নীচের\s*কোন্টি/g, 'হলে নীচের কোনটি')
-                .replace(/\s*।\s*/g, '।')
-                .replace(/\s*=\s*/g, ' = ')
-                .replace(/\$\s+/g, '$')
-                .replace(/\s+\$/g, '$')
-                .replace(/(\w)(\$)/g, '$1 $2')
-                .replace(/(\$)(\w)/g, '$1 $2')
-                .trim();
-
-            const hasTabular = block.hasTabular;
-            const hasColumnMatching = finalQuestion.includes('স্তম্ভ A') || finalQuestion.includes('স্তম্ভ B') || 
-                                      finalQuestion.includes('Column A') || finalQuestion.includes('Column B');
-            const hasFillInBlank = finalQuestion.includes('_____') || 
-                                  (finalQuestion.includes('=') && finalQuestion.includes('।'));
-
-            const questionType = determineQuestionType(finalQuestion, trimmedOptions, hasTabular, hasColumnMatching, hasFillInBlank);
+            // Safe Math normalization using LatexSanitizer
+            const sanitizedQuestion = LatexSanitizer.sanitize(parsed.question, mathpixResponse.confidence);
+            const sanitizedOptions = trimmedOptions.map(opt => LatexSanitizer.sanitize(opt, mathpixResponse.confidence));
 
             const questionObj = {
                 questionNumber: block.questionNumber,
-                question: finalQuestion,
+                question: sanitizedQuestion,
                 diagram: null,
-                options: trimmedOptions.some(opt => opt.trim()) ? trimmedOptions : null,
+                options: sanitizedOptions.some(opt => opt.trim()) ? sanitizedOptions : null,
                 type: questionType,
                 metadata: {
-                    hasTabular: hasTabular,
-                    hasColumnMatching: hasColumnMatching,
-                    hasFillInBlank: hasFillInBlank,
-                    optionCount: trimmedOptions.filter(opt => opt.trim().length > 0).length,
+                    hasTabular: block.hasTabular || isTable,
+                    hasColumnMatching: questionType === 'column_matching',
+                    hasFillInBlank: questionType === 'fill_in_blank',
+                    optionCount: sanitizedOptions.filter(opt => opt.trim().length > 0).length,
                     rawSectionLength: fullBlockText.length,
                     confidence: mathpixResponse.confidence
                 }
@@ -508,7 +563,7 @@ function extractQuestionsFromMathpix(mathpixResponse, debug = false) {
                 seenNumbers.add(block.questionNumber);
                 questions.push(questionObj);
                 if (debug) {
-                    console.log(`[Queue] Added Q${block.questionNumber}: "${finalQuestion.substring(0, 60)}..."`);
+                    console.log(`[Queue] Added Q${block.questionNumber}: "${sanitizedQuestion.substring(0, 60)}..."`);
                 }
             } else {
                 console.log(`[Validation Failed] Skipped Q${block.questionNumber} - Reason: ${validation.reason}`);

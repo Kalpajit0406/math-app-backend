@@ -9,6 +9,7 @@ const { VerificationQueueManager } = require('./verificationQueueManager');
 const { QuestionValidator } = require('./questionValidator');
 const { PreviewRenderer } = require('./previewRenderer');
 const { OCRRecoveryEngine } = require('./ocrRecoveryEngine');
+const { ContentClassificationEngine } = require('./contentClassificationEngine');
 
 // ─── 1. MCQ DETECTOR ───────────────────────────────────────────────────────────
 class MCQDetector {
@@ -238,6 +239,26 @@ class OCRPipeline {
 
     const { rawText, latex: rawLatex, confidence } = ocrResult;
 
+    // Strict answer key page check at the very beginning of processing
+    const isAnsKey = ContentClassificationEngine.isAnswerKeyPage(rawText) || ContentClassificationEngine.isAnswerKeyPage(rawLatex);
+    if (isAnsKey) {
+      console.log('[OCRPipeline] STRICT Answer Key Page Detected. Skipping parser.');
+      return {
+        rawText: rawText || '',
+        latex: rawLatex || '',
+        parsedQuestions: [],
+        confidence: confidence ?? 1.0,
+        qualityRating: 'high',
+        isValid: false,
+        pageType: 'ANSWER_KEY_PAGE',
+        detectionQuality: {
+          source: 'classifier',
+          multipleDetected: false,
+          questionCount: 0
+        }
+      };
+    }
+
     // Check if recovery is needed due to low confidence or empty OCR response
     if (OCRRecoveryEngine.needsRecovery({ rawText, latex: rawLatex, confidence })) {
       console.warn('[OCRPipeline] Low confidence or empty output, engaging recovery engine.');
@@ -260,8 +281,8 @@ class OCRPipeline {
     // Layer 4: OCR output text normalization
     const normalizedText = OCRNormalizer.normalizeText(rawText);
 
-    // Layer 7: LaTeX sanitization
-    const sanitizedLatex = LatexSanitizer.sanitize(rawLatex);
+    // Layer 7: LaTeX sanitization (Passing OCR confidence to sanitization engine)
+    const sanitizedLatex = LatexSanitizer.sanitize(rawLatex, confidence);
 
     // Layer 5: Question segmentation
     // Try segmenting on LaTeX first, fall back to normalized text if no questions detected
@@ -276,16 +297,195 @@ class OCRPipeline {
       }
     }
 
-    // Layer 6: MCQ option parsing & Layer 9: validation & Layer 10: preview preparation
-    const parsedQuestions = segments.map((seg, idx) => {
-      // Parse options inside the segment text
-      const parsedMCQ = MCQDetector.detect(seg.text) || {
-        question: seg.text,
-        options: [{ label: 'A', text: '' }, { label: 'B', text: '' }, { label: 'C', text: '' }, { label: 'D', text: '' }],
-        format: 'descriptive'
-      };
+    // Helper functions for Table and Fill detection
+    const detectTableOrGrid = (text) => {
+      if (!text) return false;
+      const normalized = text.toLowerCase();
+      if (normalized.includes('\\begin{matrix}') || normalized.includes('\\begin{pmatrix}') || normalized.includes('\\begin{bmatrix}') || normalized.includes('\\begin{array}')) {
+        return true;
+      }
+      if (normalized.includes('\\begin{tabular}') || normalized.includes('\\end{tabular}')) {
+        return true;
+      }
+      if (normalized.includes('column a') || normalized.includes('column b') || 
+          normalized.includes('স্তম্ভ a') || normalized.includes('স্তম্ভ b') || 
+          normalized.includes('স্তম্ভ-i') || normalized.includes('স্তম্ভ-ii') ||
+          normalized.includes('match the column') || normalized.includes('स्तंभ')) {
+        return true;
+      }
+      if (/\[[a-d1-4i-v]\]\s*-\s*\[[a-d1-4i-v]\]/i.test(text) || /\([a-d1-4i-v]\)\s*-\s*\(?[a-d1-4i-v]\)?/i.test(text)) {
+        return true;
+      }
+      const pipeCount = (text.match(/\|/g) || []).length;
+      if (pipeCount >= 4) return true;
+      return false;
+    };
 
-      // Enrich raw OCR trace metrics
+    const detectFillInBlank = (text) => {
+      if (!text) return false;
+      const normalized = text.toLowerCase();
+      if (normalized.includes('fill in the blank') || normalized.includes('শূন্যস্থান') || normalized.includes('रिक्त स्थान')) {
+        return true;
+      }
+      if (text.includes('_____') || text.includes('....') || text.includes('. . . .')) {
+        return true;
+      }
+      return false;
+    };
+
+    // Helper to extract section titles and map transition indices from the base text
+    const extractSections = (text) => {
+      const lines = text.split('\n');
+      const sections = [];
+      let currentSection = 'Default';
+      let charIndex = 0;
+      
+      sections.push({
+        title: 'Default',
+        startIndex: 0,
+        parserType: 'MCQ'
+      });
+      
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          const isTitle = ContentClassificationEngine.classifyLine(line) === 'SECTION_TITLE' ||
+                          /^(?:Conventional Type|Multiple Choice Questions|Fill in the Blanks|Column Matching|Analytical Type|Short Answer Type|Long Answer Type|উত্তরমালা)\s*$/i.test(trimmed);
+          if (isTitle) {
+            currentSection = trimmed;
+            let parserType = 'MCQ';
+            const norm = trimmed.toLowerCase();
+            if (norm.includes('column matching') || norm.includes('स्तंभ') || norm.includes('স্তম্ভ মেলাও') || norm.includes('match the column')) {
+              parserType = 'TABLE';
+            } else if (norm.includes('fill in the blank') || norm.includes('শূন্যস্থান') || norm.includes('रिक्त स्थान')) {
+              parserType = 'FILL';
+            }
+            
+            sections.push({
+              title: currentSection,
+              startIndex: charIndex,
+              parserType: parserType
+            });
+          }
+        }
+        charIndex += line.length + 1;
+      }
+      return sections;
+    };
+
+    const baseText = sourceUsed === 'latex' ? sanitizedLatex : normalizedText;
+    const sections = extractSections(baseText);
+    const seenNumbers = new Set();
+    let currentParserState = {
+      sectionTitle: 'Default',
+      parserType: 'MCQ'
+    };
+
+    const parsedQuestions = [];
+    let origSearchIndex = 0;
+
+    for (let idx = 0; idx < segments.length; idx++) {
+      const seg = segments[idx];
+      if (!seg.text || !seg.text.trim()) continue;
+
+      // Locate segment offset in the original OCR text block
+      let segmentIndex = baseText.indexOf(seg.text, origSearchIndex);
+      if (segmentIndex === -1) {
+        segmentIndex = baseText.indexOf(seg.text.substring(0, Math.min(20, seg.text.length)));
+      }
+      if (segmentIndex !== -1) {
+        origSearchIndex = segmentIndex + seg.text.length;
+      }
+
+      // Map offset to the active section
+      let activeSection = sections[0];
+      for (const section of sections) {
+        if (section.startIndex <= segmentIndex) {
+          activeSection = section;
+        }
+      }
+
+      // PART 7 — PARSER STATE RESET: Reset if section or parser type changed
+      if (currentParserState.sectionTitle !== activeSection.title || currentParserState.parserType !== activeSection.parserType) {
+        console.log(`[Parser State Reset] Transition from "${currentParserState.sectionTitle}" to "${activeSection.title}". Resetting seen numbers.`);
+        seenNumbers.clear();
+        currentParserState = {
+          sectionTitle: activeSection.title,
+          parserType: activeSection.parserType
+        };
+      }
+
+      // Determine parser type for this specific block (Table, Fill, or MCQ)
+      let segmentParserType = currentParserState.parserType;
+      const isTable = detectTableOrGrid(seg.text);
+      const isFill = detectFillInBlank(seg.text);
+
+      if (isTable) {
+        segmentParserType = 'TABLE';
+      } else if (isFill) {
+        segmentParserType = 'FILL';
+      }
+
+      // Route based on segment classification (preventing tables from entering MCQ parser)
+      let parsedBlock;
+      if (segmentParserType === 'TABLE') {
+        parsedBlock = {
+          question: seg.text,
+          options: [{ label: 'A', text: '' }, { label: 'B', text: '' }, { label: 'C', text: '' }, { label: 'D', text: '' }],
+          format: 'column_matching'
+        };
+      } else if (segmentParserType === 'FILL') {
+        parsedBlock = {
+          question: seg.text,
+          options: [{ label: 'A', text: '' }, { label: 'B', text: '' }, { label: 'C', text: '' }, { label: 'D', text: '' }],
+          format: 'fill_in_blank'
+        };
+      } else {
+        parsedBlock = MCQDetector.detect(seg.text) || {
+          question: seg.text,
+          options: [{ label: 'A', text: '' }, { label: 'B', text: '' }, { label: 'C', text: '' }, { label: 'D', text: '' }],
+          format: 'descriptive'
+        };
+      }
+
+      // PART 9 — STRUCTURAL VALIDATION
+      const questionText = parsedBlock.question.trim();
+      const questionNum = seg.number || (idx + 1).toString();
+
+      // Filter out section title residue, answer keys, or fragments that leaked through
+      const isSectionHeader = ContentClassificationEngine.classifyLine(questionText) === 'SECTION_TITLE' ||
+                              /^(?:Conventional Type|Multiple Choice Questions|Fill in the Blanks|Column Matching|Analytical Type|Short Answer Type|Long Answer Type|উত্তরমালা)\s*$/i.test(questionText);
+      const isAnswerString = ContentClassificationEngine.isAnswerKeyPage(questionText) ||
+                             /^\s*\(?[a-dABCDক-ঘi-iv-xI-XV-X]\)?\s*$/i.test(questionText);
+      const isTooShort = questionText.length < 5;
+
+      if (isSectionHeader) {
+        console.log(`[Structural Validation] Skipped section header: "${questionText}"`);
+        continue;
+      }
+      if (isAnswerString) {
+        console.log(`[Structural Validation] Skipped answer grid string: "${questionText}"`);
+        continue;
+      }
+      if (isTooShort) {
+        console.log(`[Structural Validation] Skipped too short fragment: "${questionText}"`);
+        continue;
+      }
+      if (seenNumbers.has(questionNum)) {
+        console.log(`[Structural Validation] Skipped duplicate question number ${questionNum}`);
+        continue;
+      }
+
+      seenNumbers.add(questionNum);
+
+      // Perform safe math normalization on final fields
+      const sanitizedQuestion = LatexSanitizer.sanitize(parsedBlock.question, confidence);
+      const sanitizedOptions = parsedBlock.options.map(o => ({
+        label: o.label,
+        text: LatexSanitizer.sanitize(o.text, confidence)
+      }));
+
+      // PART 10 — DIAGNOSTICS
       const rawOcrData = {
         sourceUsed,
         rawText,
@@ -294,14 +494,23 @@ class OCRPipeline {
         confidence,
         chunkText: seg.text,
         preprocessing: preprocessInfo ? preprocessInfo.diagnostics : null,
-        preprocessingQuality: preprocessInfo ? preprocessInfo.qualityRating : null
+        preprocessingQuality: preprocessInfo ? preprocessInfo.qualityRating : null,
+        diagnostics: {
+          rawOcr: seg.text,
+          normalizedOcr: parsedBlock.question,
+          parserModifications: parsedBlock.format,
+          confidenceScore: confidence,
+          sectionDetected: activeSection.title,
+          answerPageDetected: isAnsKey,
+          tableDetected: isTable
+        }
       };
 
       const enrichedQuestion = {
-        question: LatexSanitizer.sanitize(parsedMCQ.question),
-        options: parsedMCQ.options.map(o => ({ label: o.label, text: LatexSanitizer.sanitize(o.text) })),
-        format: parsedMCQ.format || 'line-based',
-        questionNumber: seg.number || (idx + 1).toString(),
+        question: sanitizedQuestion,
+        options: sanitizedOptions,
+        format: parsedBlock.format || 'line-based',
+        questionNumber: questionNum,
         rawChunk: seg.text,
         ocrConfidence: confidence,
         detectionOrder: idx + 1,
@@ -309,11 +518,9 @@ class OCRPipeline {
         rawOcrData
       };
 
-      // Layer 9: question validator
       const validationResult = QuestionValidator.validate(enrichedQuestion);
       enrichedQuestion.validation = validationResult;
 
-      // Layer 10: KaTeX preview rendering
       const previewData = PreviewRenderer.prepareQuestionPreview({
         questionText: enrichedQuestion.question,
         options: enrichedQuestion.options,
@@ -325,8 +532,8 @@ class OCRPipeline {
         enrichedQuestion.preview = previewData;
       }
 
-      return enrichedQuestion;
-    });
+      parsedQuestions.push(enrichedQuestion);
+    }
 
     // Layer 9: overall quality validation
     const pipelineValidation = OCRResultValidator.validate(rawText, sanitizedLatex, confidence);

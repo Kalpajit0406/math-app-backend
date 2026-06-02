@@ -132,6 +132,46 @@ class ContentClassificationEngine {
 
     return filteredLines.join('\n');
   }
+
+  /**
+   * Strictly detects answer key pages/grids
+   * @param {string} text - The page text
+   * @returns {boolean}
+   */
+  static isAnswerKeyPage(text) {
+    if (!text) return false;
+    const normalized = text.toLowerCase();
+    
+    // Explicit keywords
+    const explicitHeadingRegex = /(?:answer\s*key|answers|answer\s*sheet|উত্তরমালা|উত্তর|সংক্ষিপ্ত\s*উত্তরমালা|conventional\s*type\s*answers?|correct\s*options?|key\s*answers?)/i;
+    if (explicitHeadingRegex.test(normalized)) {
+      return true;
+    }
+
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length === 0) return false;
+
+    let answerPatternCount = 0;
+    // Match line that contains ONLY simple answers like:
+    // "1. (A)" or "5. B" or "6. (C)" or "7. খ"
+    // or multiple inline like "1. (A) 2. (B) 3. (C)"
+    const singleAnswerRegex = /^\d{1,3}\s*[\.\-\):\s]\s*\(?[A-DABCDকখগঘ১২৩৪i-ivI-IV]\)?\s*$/i;
+    const multipleAnswersRegex = /^(?:\d{1,3}\s*[\.\-\):\s]\s*\(?[A-DABCDকখগঘ১২৩৪i-ivI-IV]\)?(?:\s+|$)){2,}$/i;
+
+    for (const line of lines) {
+      if (singleAnswerRegex.test(line) || multipleAnswersRegex.test(line)) {
+        answerPatternCount++;
+      }
+    }
+
+    const ratio = answerPatternCount / lines.length;
+    // If more than 20% of lines are answers, or we have 4 or more answer patterns
+    if (ratio > 0.20 || answerPatternCount >= 4) {
+      return true;
+    }
+
+    return false;
+  }
 }
 
 module.exports = {

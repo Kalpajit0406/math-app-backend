@@ -8,8 +8,89 @@ class LatexSanitizer {
    * @param {string} latex
    * @returns {string}
    */
-  static sanitize(latex) {
+  /**
+   * Validate brace balance in LaTeX
+   * @param {string} s
+   * @returns {boolean}
+   */
+  static isBalancedBraces(s) {
+    if (!s) return true;
+    let count = 0;
+    let escaped = false;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === '\\') {
+        escaped = !escaped;
+      } else {
+        if (!escaped) {
+          if (s[i] === '{') count++;
+          else if (s[i] === '}') {
+            count--;
+            if (count < 0) return false;
+          }
+        }
+        escaped = false;
+      }
+    }
+    return count === 0;
+  }
+
+  /**
+   * Validate brackets and parentheses balance in LaTeX
+   * @param {string} s
+   * @returns {boolean}
+   */
+  static isBalancedBracketsAndParentheses(s) {
+    let openPar = 0, openSq = 0;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === '\\') {
+        i++; // skip escaped char
+      } else {
+        if (s[i] === '(') openPar++;
+        else if (s[i] === ')') {
+          openPar--;
+          if (openPar < 0) return false;
+        } else if (s[i] === '[') openSq++;
+        else if (s[i] === ']') {
+          openSq--;
+          if (openSq < 0) return false;
+        }
+      }
+    }
+    return openPar === 0 && openSq === 0;
+  }
+
+  /**
+   * Check if the math syntax is valid (balanced braces, no obvious corrupt markers)
+   * @param {string} s
+   * @returns {boolean}
+   */
+  static isValidLatexSyntax(s) {
+    if (!s) return true;
+    if (!this.isBalancedBraces(s)) return false;
+    if (!this.isBalancedBracketsAndParentheses(s)) return false;
+    // Check for corrupt patterns that blind brace manipulations produce:
+    if (/\^}/.test(s) || /_}/.test(s)) return false;
+    if (/\\frac\s*\}/.test(s) || /\\sqrt\s*\}/.test(s)) return false;
+    if (/\\frac\s*\{\s*\}/.test(s)) return false;
+    return true;
+  }
+
+  /**
+   * Sanitize entire LaTeX block
+   * @param {string} latex
+   * @param {number|null} confidence
+   * @returns {string}
+   */
+  static sanitize(latex, confidence = null) {
     if (!latex) return '';
+    const raw = latex;
+
+    // Check if confidence is high. If confidence is NOT high, do NOT modify LaTeX!
+    const isHighConfidence = confidence === null || confidence >= 0.85;
+
+    // If raw OCR has perfectly valid LaTeX syntax, we should NOT apply any heuristic corrections.
+    const rawIsValid = this.isValidLatexSyntax(raw);
+
     let s = latex;
 
     // Collapse multiple escaped underscores into a single blank line pattern (\_____)
@@ -44,17 +125,6 @@ class LatexSanitizer {
       s = s.replace(new RegExp(`\\\\${cmd}\\s*{[^}]*}`, 'g'), '');
     }
 
-    // Balance common KaTeX environments
-    for (const env of ['matrix', 'pmatrix', 'bmatrix', 'align', 'cases', 'array', 'equation']) {
-      const opens = (s.match(new RegExp(`\\\\begin{${env}}`, 'g')) || []).length;
-      const closes = (s.match(new RegExp(`\\\\end{${env}}`, 'g')) || []).length;
-      if (opens > closes) s += ` \\end{${env}}`.repeat(opens - closes);
-    }
-
-    // Balance braces and dollar signs
-    s = this._balanceBraces(s);
-    s = this._balanceDollarSigns(s);
-
     // Normalize common OCR symbol mistakes to standard math tokens
     const symbolMap = {
       '−': '-', // unicode minus
@@ -66,18 +136,35 @@ class LatexSanitizer {
     };
     s = s.replace(/[−×÷·—–]/g, ch => symbolMap[ch] || ch);
 
-    // Repair simple frac patterns where OCR may drop braces: e.g. \frac a b -> \frac{a}{b}
-    s = s.replace(/\\?frac\s*\{?\s*([^\s{}]+)\s*\}?\s*\{?\s*([^\s{}]+)\s*\}?/g, '\\frac{$1}{$2}');
+    // Remove multiple spaces/whitespace
+    s = s.replace(/[ \t]+/g, ' ');
 
-    // Remove duplicated operators like ++ or -- introduced by OCR
-    s = s.replace(/([+\-\/\^=])\1+/g, '$1');
+    // Only apply recovery/balancing if confidence is high AND the raw OCR was actually invalid
+    if (isHighConfidence && !rawIsValid) {
+      // Balance common KaTeX environments
+      for (const env of ['matrix', 'pmatrix', 'bmatrix', 'align', 'cases', 'array', 'equation']) {
+        const opens = (s.match(new RegExp(`\\\\begin{${env}}`, 'g')) || []).length;
+        const closes = (s.match(new RegExp(`\\\\end{${env}}`, 'g')) || []).length;
+        if (opens > closes) s += ` \\end{${env}}`.repeat(opens - closes);
+      }
 
-    // Balance parentheses and square brackets
-    s = this._balanceBrackets(s);
+      // Balance braces and dollar signs
+      s = this._balanceBraces(s);
+      s = this._balanceDollarSigns(s);
 
-    // Fix common OCR fraction/power spacing errors
-    s = s.replace(/\^(\d)([a-zA-Z])/g, '^{$1}$2');
-    s = s.replace(/_(\d)([a-zA-Z])/g, '_{$1}$2');
+      // Balance parentheses and square brackets
+      s = this._balanceBrackets(s);
+    }
+
+    // Check if the modified output is syntactically cleaner than the raw input.
+    const outputIsValid = this.isValidLatexSyntax(s);
+
+    // If output is invalid but raw was valid, return raw with only safe normalization
+    if (rawIsValid && !outputIsValid) {
+      let safeRaw = raw.replace(/[ \t]+/g, ' ');
+      safeRaw = safeRaw.replace(/[−×÷·—–]/g, ch => symbolMap[ch] || ch);
+      return safeRaw.trim();
+    }
 
     return s.trim();
   }
