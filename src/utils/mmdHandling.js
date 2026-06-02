@@ -38,7 +38,7 @@ function processMathpixResponse(response) {
     return textToProcess;
 }
 
-// Clean Mathpix content - preserves mathematical symbols
+// Clean Mathpix content while preserving math notations and inequalities
 function cleanMathpixContent(text) {
     return text
         // Remove specific Mathpix HTML artifacts while preserving math content
@@ -58,291 +58,262 @@ function cleanMathpixContent(text) {
         .replace(/width="[^"]*"/g, '')
         .replace(/height="[^"]*"/g, '')
         
-        // CRITICAL FIX: Preserve mathematical inequalities before removing HTML
-        // Protect common mathematical expressions with < and > symbols
-        .replace(/(\$[^$]*)<([^$]*\$)/g, '$1LESS_THAN$2')  // Math expressions with <
-        .replace(/(\$[^$]*)>([^$]*\$)/g, '$1GREATER_THAN$2')  // Math expressions with >
-        .replace(/(\w+|\d+)\s*&lt;\s*(\w+|\d+)/g, '$1 LESS_THAN $2')  // HTML entities
-        .replace(/(\w+|\d+)\s*&gt;\s*(\w+|\d+)/g, '$1 GREATER_THAN $2')  // HTML entities
-        .replace(/(\w+|\d+)\s*<\s*(\w+|\d+)/g, '$1 LESS_THAN $2')  // Direct symbols
-        .replace(/(\w+|\d+)\s*>\s*(\w+|\d+)/g, '$1 GREATER_THAN $2')  // Direct symbols
-        .replace(/([a-zA-Z]+)\s*<\s*([a-zA-Z]+)/g, '$1 LESS_THAN $2')  // Variables
-        .replace(/([a-zA-Z]+)\s*>\s*([a-zA-Z]+)/g, '$1 GREATER_THAN $2')  // Variables
-        .replace(/\\\[(.*?)\\\]/gs, '\$$1\$')  // Convert \[...\] to $...$
+        // Protect mathematical inequalities before HTML stripping
+        .replace(/(\$[^$]*)<([^$]*\$)/g, '$1LESS_THAN$2')
+        .replace(/(\$[^$]*)>([^$]*\$)/g, '$1GREATER_THAN$2')
+        .replace(/(\w+|\d+)\s*&lt;\s*(\w+|\d+)/g, '$1 LESS_THAN $2')
+        .replace(/(\w+|\d+)\s*&gt;\s*(\w+|\d+)/g, '$1 GREATER_THAN $2')
+        .replace(/(\w+|\d+)\s*<\s*(\w+|\d+)/g, '$1 LESS_THAN $2')
+        .replace(/(\w+|\d+)\s*>\s*(\w+|\d+)/g, '$1 GREATER_THAN $2')
+        .replace(/([a-zA-Z]+)\s*<\s*([a-zA-Z]+)/g, '$1 LESS_THAN $2')
+        .replace(/([a-zA-Z]+)\s*>\s*([a-zA-Z]+)/g, '$1 GREATER_THAN $2')
+        .replace(/\\\[(.*?)\\\]/gs, '\$$1\$')
         
-        // Now safely remove HTML tags (selective removal)
+        // Strip non-essential formatting HTML tags
         .replace(/<\/?(?:div|span|p|br|hr|table|tr|td|th)[^>]*>/gi, '')
-        .replace(/<(?!\/?(b|i|u|strong|em|sub|sup)\b)[^>]*>/gi, '') // Keep basic formatting tags
+        .replace(/<(?!\/?(b|i|u|strong|em|sub|sup)\b)[^>]*>/gi, '')
         
-        // Restore mathematical symbols after HTML removal
+        // Restore math symbols
         .replace(/LESS_THAN/g, '<')
         .replace(/GREATER_THAN/g, '>')
-        
-        // Clean HTML entities
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>')
         .replace(/&amp;/g, '&')
         .replace(/&quot;/g, '"')
         .replace(/&#39;/g, "'")
-        .replace(/&[a-zA-Z0-9#]+;/g, '') // Remove remaining entities
+        .replace(/&[a-zA-Z0-9#]+;/g, '')
         
-        // Fix Mathpix-specific spacing and formatting issues
-        .replace(/(\w)(\$\vec\{)/g, '$1 $2')  // Space before vectors
-        .replace(/(\w)(\$[^$]*\$)/g, '$1 $2')  // Space before inline math
-        .replace(/(\$[^$]*\$)(\w)/g, '$1 $2')  // Space after inline math
-        .replace(/(\w)(\\\()/g, '$1 $2')  // Space before LaTeX inline math
-        .replace(/(\\\))(\w)/g, '$1 $2')  // Space after LaTeX inline math
-        .replace(/(\w)(\\\[)/g, '$1 $2')  // Space before LaTeX block math
-        .replace(/(\\\])(\w)/g, '$1 $2')  // Space after LaTeX block math
+        // Fix LaTeX spacing
+        .replace(/(\w)(\$vec\{)/g, '$1 $2')
+        .replace(/(\w)(\$[^$]*\$)/g, '$1 $2')
+        .replace(/(\$[^$]*\$)(\w)/g, '$1 $2')
+        .replace(/(\w)(\\\()/g, '$1 $2')
+        .replace(/(\\\))(\w)/g, '$1 $2')
+        .replace(/(\w)(\\\[)/g, '$1 $2')
+        .replace(/(\\\])(\w)/g, '$1 $2')
         
-        // Specific fixes for common Mathpix output issues
-        .replace(/field\$\vec\{B\}\$/g, 'field $\\vec{B}$')
-        .replace(/element\$\vec\{I\}\$/g, 'element $\\vec{I}$')
-        .replace(/distance\$\vec\{r\}\$/g, 'distance $\\vec{r}$')
-        .replace(/current\$i\$/g, 'current $i$')
-        
-        // Clean up mathematical expressions
-        .replace(/\$\s*\$\s*/g, ' ') // Remove empty math delimiters
-        .replace(/\$([^$]*)\$/g, '$$$1$$') // Ensure proper math delimiters
-        
-        // Fix common OCR/parsing errors
-        .replace(/−/g, '-') // Replace unicode minus with regular hyphen
-        .replace(/\s+/g, ' ') // Normalize whitespace
-        .replace(/\n\s*\n\s*\n+/g, '\n\n') // Remove excessive line breaks
-        
-        // Clean up table formatting if present
-        .replace(/\hline\s*/g, '\\hline\n')
-        .replace(/\\\s*\hline/g, '\\\n\\hline')
-        
-        // Final cleanup
+        // Clean math formulas
+        .replace(/\$\s*\$\s*/g, ' ')
+        .replace(/\$([^$]*)\$/g, '$$$1$$')
+        .replace(/−/g, '-')
+        .replace(/\s+/g, ' ')
+        .replace(/\n\s*\n\s*\n+/g, '\n\n')
+        .replace(/\hline\s*/g, '\hline\n')
+        .replace(/\\\s*\hline/g, '\\\n\hline')
         .trim();
 }
 
-// Enhanced MCQ options extraction optimized for Mathpix output
+// Standard helper pattern: extract MCQ options from raw block
 function extractMCQOptions(text) {
     const options = [];
     
-    console.log("=== Extracting Options ===");
-    console.log("Input text:", text.substring(0, 300) + "...");
-    
-    // Pattern 1: Standard Mathpix MCQ format - (a) option (b) option OR Bengali (ক) option (খ) option
-    const pattern1 = /\(([abcdABCDকখগঘ])\)\s*([^()]*?)(?=\s*\([abcdABCDকখগঘ]\)|$)/gs;
+    // Pattern 1: Standard (a) option (b) option
+    const pattern1 = /\(([abcdABCD])\)\s*([^()]*?)(?=\s*\([abcdABCD]\)|$)/gs;
     let matches = [...text.matchAll(pattern1)];
     
     if (matches.length >= 4) {
-        console.log("✓ Pattern 1 (standard) matched:", matches.length, "options");
-        matches.slice(0, 4).forEach((match, index) => {
-            if (match[2] && match[2].trim()) {
-                const cleanOption = match[2].trim()
-                    .replace(/\s+/g, ' ')
-                    .replace(/^[\u0964\.]/, '') // Remove Bengali/Hindi leading punctuation
-                    .trim();
-                options.push(cleanOption);
-                console.log(`  Option ${match[1]}:`, cleanOption);
+        matches.slice(0, 4).forEach((match) => {
+            if (match[2]?.trim()) {
+                options.push(match[2].trim().replace(/\s+/g, ' ').replace(/^\s*[।\.]\s*/, '').trim());
             }
         });
         return options;
     }
     
-    // Pattern 2: Line-separated options (common in Mathpix text output)
-    // Supports Latin (a-d), Bengali option labels (ক-ঘ), and Bengali numerals (১-৪)
+    // Pattern 2: Line-separated options
     const lines = text.split(/\n+/).map(line => line.trim()).filter(line => line.length > 0);
     const optionLines = lines.filter(line => 
-        /^\s*\([abcdABCDকখগঘ]\)/i.test(line) || 
-        /^\s*[abcdABCDকখগঘ১২৩৪][\.\)]/i.test(line)
+        /^\s*\([abcdABCD]\)/i.test(line) || 
+        /^\s*[abcdABCD][\.\)]/i.test(line)
     );
     
     if (optionLines.length >= 4) {
-        console.log("✓ Pattern 2 (line-separated) matched:", optionLines.length, "options");
-        optionLines.slice(0, 4).forEach((line, index) => {
-            const cleaned = line
-                .replace(/^\s*[\(]?[abcdABCDকখগঘ১২৩৪][\.\)]\s*/i, '')
-                .replace(/\s+/g, ' ')
-                .trim();
-            if (cleaned) {
-                options.push(cleaned);
-                console.log(`  Option ${index + 1}:`, cleaned);
-            }
+        optionLines.slice(0, 4).forEach((line) => {
+            const cleaned = line.replace(/^\s*[\(]?[abcdABCD][\.\)]\s*/i, '').replace(/\s+/g, ' ').trim();
+            if (cleaned) options.push(cleaned);
         });
         return options;
     }
     
-    // Pattern 3: Alternative delimiters (a. option b. option) — includes Bengali labels
-    const pattern3 = /(?:^|[^a-zA-Zকখগঘ])([abcdABCDকখগঘ১২৩৪])[\.\)]\s*([^.\n]+?)(?=\s*[abcdABCDকখগঘ১২৩৪][\.\)]|$)/gm;
+    // Pattern 3: Alternative delimiters a. option b. option
+    const pattern3 = /(?:^|[^a-zA-Z])([abcdABCD])[\.\)]\s*([^.\n]+?)(?=\s*[abcdABCD][\.\)]|$)/gm;
     matches = [...text.matchAll(pattern3)];
     
     if (matches.length >= 4) {
-        console.log("✓ Pattern 3 (alternative delimiters) matched:", matches.length, "options");
-        matches.slice(0, 4).forEach((match, index) => {
-            if (match[2] && match[2].trim()) {
-                const cleanOption = match[2].trim()
-                    .replace(/\s+/g, ' ')
-                    .replace(/[।\.]$/, '') // Remove trailing punctuation
-                    .trim();
-                options.push(cleanOption);
-                console.log(`  Option ${match[1]}:`, cleanOption);
+        matches.slice(0, 4).forEach((match) => {
+            if (match[2]?.trim()) {
+                options.push(match[2].trim().replace(/\s+/g, ' ').replace(/[।\.]$/, '').trim());
             }
         });
         return options;
     }
     
-    // Pattern 4: Spaced options (a ) option b ) option) — includes Bengali labels
-    const pattern4 = /([abcdABCDকখগঘ১২৩৪])\s*\)\s*([^)]+?)(?=\s*[abcdABCDকখগঘ১২৩৪]\s*\)|$)/g;
-    matches = [...text.matchAll(pattern4)];
-    
-    if (matches.length >= 4) {
-        console.log("✓ Pattern 4 (spaced options) matched:", matches.length, "options");
-        matches.slice(0, 4).forEach((match, index) => {
-            if (match[2] && match[2].trim()) {
-                const cleanOption = match[2].trim()
-                    .replace(/\s+/g, ' ')
-                    .trim();
-                options.push(cleanOption);
-                console.log(`  Option ${match[1]}:`, cleanOption);
-            }
-        });
-        return options;
-    }
-    
-    // Pattern 5: Extract from Mathpix structured data if available
-    if (text.includes('"type": "text"') || text.includes('"value":')) {
-        try {
-            const jsonMatch = text.match(/\{.*\}/s);
-            if (jsonMatch) {
-                const data = JSON.parse(jsonMatch[0]);
-                if (data.choices || data.options) {
-                    console.log("✓ Pattern 5 (JSON data) matched");
-                    return (data.choices || data.options).slice(0, 4);
-                }
-            }
-        } catch (e) {
-            console.log("JSON parsing failed, continuing...");
-        }
-    }
-    
-    // Pattern 6: Fallback - any text that looks like options (Latin or Bengali)
-    const allPossibleOptions = [];
-    const fallbackPattern = /\(([abcdABCDকখগঘ])\)|([abcdABCDকখগঘ])\./g;
-    let fallbackMatch;
-    
-    while ((fallbackMatch = fallbackPattern.exec(text)) !== null) {
-        const startIndex = fallbackMatch.index + fallbackMatch[0].length;
-        const nextMatch = text.substring(startIndex).match(/\(([abcdABCDকখগঘ])\)|([abcdABCDকখগঘ])\./);
-        const endIndex = nextMatch && nextMatch.index ? startIndex + nextMatch.index : text.length;
-        
-        const optionText = text.substring(startIndex, endIndex).trim();
-        if (optionText && optionText.length > 1) {
-            allPossibleOptions.push(optionText);
-        }
-    }
-    
-    if (allPossibleOptions.length >= 4) {
-        console.log("✓ Pattern 6 (fallback) matched:", allPossibleOptions.length, "options");
-        return allPossibleOptions.slice(0, 4);
-    }
-    
-    console.log("✗ No clear options found");
     return [];
 }
 
-// Enhanced question-option separation with multiple strategies
-function separateQuestionFromOptions(text) {
-    // Note: 'text' is already cleaned by cleanMathpixContent at the document level.
-    // We just remove the question number at the beginning.
-    const textWithoutNumber = text
-      .replace(/^\s*[\d০-৯]+[\.\)]\s*/, '') // Latin or Bengali digits like "৩." or "3)"
-      .replace(/^\s*(?:প্রশ্ন|প্র\.?)\s*[\d০-৯]+[\.\)]?\s*/, ''); // Bengali prefix
+// PART 1: CONTENT CLASSIFICATION & STRUCTURE EXTRACTION
+function classifyLine(line) {
+    const trimmed = line.trim();
     
-    console.log("=== Separating Question from Options ===");
-    console.log("Text after number removal:", textWithoutNumber.substring(0, 200) + "...");
-    
-    // Multiple strategies to find where options start — Latin and Bengali labels
-    const optionStartPatterns = [
-        { pattern: /\n\s*\([abcdABCDকখগঘ]\)/i, name: "(a) or (ক) on new line" },
-        { pattern: /\([abcdABCDকখগঘ]\)\s+/i, name: "(a) or (ক) with space" },
-        { pattern: /\n\s*[abcdABCDকখগঘ১২৩৪][\.\)]/i, name: "a. or ক. on new line" },
-        { pattern: /[^a-zA-Zকখগঘ][abcdABCDকখগঘ][\.\)]\s/i, name: "a. or ক. mid-text" },
-        { pattern: /\s[abcdABCDকখগঘ]\)\s/i, name: "a) or ক) with spaces" }
-    ];
-    
-    let splitIndex = -1;
-    let bestPattern = null;
-    
-    for (const { pattern, name } of optionStartPatterns) {
-        const match = textWithoutNumber.match(pattern);
+    let isHeader = false;
+    let isFooter = false;
+    let isPageNumber = false;
+    let isAnswerKey = false;
+    let isSectionTitle = false;
+    let isTableOrGrid = false;
+    let isQuestionStart = false;
+    let questionNumber;
+    let questionStartText;
+
+    // Page number detection
+    if (/^(?:page|pg)?\s*[-–—]?\s*\d+\s*[-–—]?\s*$/i.test(trimmed)) {
+        isPageNumber = true;
+    }
+
+    // Section title / header boundary detection
+    const sectionTitleRegex = /\\section\*?\{([^}]+)\}|\\subsection\*?\{([^}]+)\}|^(?:EXERCISE|Conventional Type|HS CORNER|Multiple Choice Questions|Fill in the Blanks|Column Matching|Analytical Type|Short Answer Type|Long Answer Type|উত্তরমালা|উত্তর)\b/i;
+    if (sectionTitleRegex.test(trimmed)) {
+        isSectionTitle = true;
+    }
+
+    // Common header metadata markers
+    const headerNoiseRegex = /^(?:chapter|subject|marks|class|level|publisher|branding|copyright|semester|time|full marks|instruction)/i;
+    if (headerNoiseRegex.test(trimmed)) {
+        isHeader = true;
+    }
+
+    // Table / tabular markup identification
+    if (trimmed.includes('\\begin{tabular}') || trimmed.includes('\\end{tabular}') || (trimmed.includes('|') && trimmed.split('|').length > 3)) {
+        isTableOrGrid = true;
+    }
+
+    // Filter out dense answer key patterns that mimic question lines (e.g., "5. (B)")
+    const denseAnswerKeyRegex = /^\d{1,3}\s*[\.\)]\s*\(?[a-dABCDক-ঘ]\)?\s*$/;
+    if (denseAnswerKeyRegex.test(trimmed)) {
+        isAnswerKey = true;
+    } else {
+        // Question boundary initialization check
+        const questionStartRegex = /^(?:Q|Question\s*)?(\d{1,3})\s*[\.\)]\s+(.+)/i;
+        const match = trimmed.match(questionStartRegex);
         if (match) {
-            const index = textWithoutNumber.indexOf(match[0]);
-            if (splitIndex === -1 || index < splitIndex) {
-                splitIndex = index;
-                bestPattern = name;
+            const rest = match[2].trim();
+            const restIsOptionOnly = /^\(?[a-dABCDক-ঘi-iv-xI-XV-X]\)?\s*$/i.test(rest);
+            if (restIsOptionOnly) {
+                isAnswerKey = true;
+            } else {
+                isQuestionStart = true;
+                questionNumber = parseInt(match[1], 10);
+                questionStartText = rest;
             }
         }
     }
-    
-    if (splitIndex > 0) {
-        const questionPart = textWithoutNumber.substring(0, splitIndex).trim();
-        const optionsPart = textWithoutNumber.substring(splitIndex).trim();
-        
-        console.log("✓ Split found using pattern:", bestPattern);
-        console.log("Question part:", questionPart);
-        console.log("Options part:", optionsPart.substring(0, 100) + "...");
-        
-        const options = extractMCQOptions(optionsPart);
-        
-        // Clean up question text
-        const cleanQuestion = questionPart
-            .replace(/\s+/g, ' ')
-            .replace(/হলে\s*নীচের\s*কোন্টি/g, 'হলে নীচের কোনটি')
-            .replace(/\s*।\s*/g, '।')
-            .replace(/\s*=\s*/g, ' = ')
-            .replace(/(\w)(\$)/g, '$1 $2')
-            .replace(/(\$)(\w)/g, '$1 $2')
-            .trim();
-        
-        return {
-            question: cleanQuestion,
-            options: options
-        };
-    }
-    
-    // Fallback: try to extract options from entire text and reconstruct question
-    const options = extractMCQOptions(textWithoutNumber);
-    if (options.length > 0) {
-        console.log("✓ Using fallback method - reconstructing question");
-        
-        // Try to clean question by removing option text
-        let questionText = textWithoutNumber;
-        options.forEach((option, index) => {
-            const letter = String.fromCharCode(97 + index); // a, b, c, d
-            const patterns = [
-                new RegExp(`\\(${letter}\\)\\s*${escapeRegExp(option)}`, 'gi'),
-                new RegExp(`\\(${letter.toUpperCase()}\\)\\s*${escapeRegExp(option)}`, 'gi'),
-                new RegExp(`${letter}[\\.\\)]\\s*${escapeRegExp(option)}`, 'gi'),
-                new RegExp(`${letter.toUpperCase()}[\\.\\)]\\s*${escapeRegExp(option)}`, 'gi')
-            ];
-            
-            patterns.forEach(pattern => {
-                questionText = questionText.replace(pattern, '').trim();
-            });
-        });
-        
-        // Clean up reconstructed question
-        const cleanQuestion = questionText
-            .replace(/\s+/g, ' ')
-            .replace(/^[।\.\,\s]+/, '') // Remove leading punctuation
-            .replace(/[।\.\,\s]+$/, '') // Remove trailing punctuation  
-            .trim();
-        
-        return {
-            question: cleanQuestion,
-            options: options
-        };
-    }
-    
-    console.log("✗ No options found, returning original text as question");
+
     return {
-        question: textWithoutNumber,
-        options: []
+        text: trimmed,
+        isHeader,
+        isFooter,
+        isPageNumber,
+        isAnswerKey,
+        isSectionTitle,
+        isTableOrGrid,
+        isQuestionStart,
+        questionNumber,
+        questionStartText
+    };
+}
+
+// PART 3: ANSWER PAGE DETECTION
+function isAnswerKeyPage(pageText) {
+    const lines = pageText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length === 0) return false;
+
+    // Check for explicit answer sheet keywords
+    const explicitHeadingRegex = /(?:answer\s*key|answers|answer\s*sheet|উত্তরমালা|উত্তর|সংক্ষিপ্ত\s*উত্তরমালা|conventional\s*type\s*answers?)/i;
+    if (explicitHeadingRegex.test(pageText)) {
+        return true;
+    }
+
+    // Density audit for answer keys on the page
+    let answerPatternCount = 0;
+    const singleAnswerRegex = /^\d{1,3}\s*[\.\)]\s*\(?[a-dABCDক-ঘi-iv-xI-XV-X]\)?\s*$/i;
+    const multipleAnswersRegex = /(?:\d{1,3}\s*[\.\)]\s*\(?[a-dABCDক-ঘi-iv-xI-XV-X]\)?\s*){2,}/i;
+
+    for (const line of lines) {
+        if (singleAnswerRegex.test(line) || multipleAnswersRegex.test(line)) {
+            answerPatternCount++;
+        }
+    }
+
+    const ratio = answerPatternCount / lines.length;
+    if (ratio > 0.25 || answerPatternCount >= 5) {
+        return true;
+    }
+
+    return false;
+}
+
+// PART 5: ISOLATED MCQ OPTION PARSING
+function extractOptionsAndCleanQuestion(blockText) {
+    // Isolate options inside the segmented question block to prevent option leakage
+    const optionRegex = /(?:\s+|^)(?:\(([a-dABCDক-ঘi-iv-xI-XV-X])\)|([a-dABCDক-ঘi-iv-xI-XV-X])[\.\)]|([a-dABCDক-ঘi-iv-xI-XV-X])\s*\))\s+([^]*?)(?=\s+(?:\([a-dABCDক-ঘi-iv-xI-XV-X]\)|[a-dABCDক-ঘi-iv-xI-XV-X][\.\)]|[a-dABCDক-ঘi-iv-xI-XV-X]\s*\))\s+|$)/g;
+
+    const matches = [...blockText.matchAll(optionRegex)];
+    const optionsMap = new Map();
+    let firstOptionIndex = -1;
+
+    for (const match of matches) {
+        const label = (match[1] || match[2] || match[3] || '').toUpperCase().trim();
+        const optionContent = match[4].trim();
+        const matchIndex = match.index || 0;
+
+        if (label && optionContent) {
+            let canonicalLabel = label;
+            if (label === 'ক') canonicalLabel = 'A';
+            if (label === 'খ') canonicalLabel = 'B';
+            if (label === 'গ') canonicalLabel = 'C';
+            if (label === 'ঘ') canonicalLabel = 'D';
+
+            if (!optionsMap.has(canonicalLabel)) {
+                optionsMap.set(canonicalLabel, optionContent);
+                if (firstOptionIndex === -1 || matchIndex < firstOptionIndex) {
+                    firstOptionIndex = matchIndex;
+                }
+            }
+        }
+    }
+
+    let question = blockText;
+    if (optionsMap.size > 0 && firstOptionIndex !== -1) {
+        question = blockText.substring(0, firstOptionIndex).trim();
+    }
+
+    const options = [];
+    const keys = ['A', 'B', 'C', 'D'];
+    
+    let isRoman = false;
+    for (const key of optionsMap.keys()) {
+        if (['I', 'II', 'III', 'IV'].includes(key)) {
+            isRoman = true;
+            break;
+        }
+    }
+
+    if (isRoman) {
+        const romanKeys = ['I', 'II', 'III', 'IV'];
+        romanKeys.forEach(k => {
+            options.push(optionsMap.get(k) || '');
+        });
+    } else {
+        keys.forEach(k => {
+            options.push(optionsMap.get(k) || '');
+        });
+    }
+
+    const hasAnyOption = options.some(opt => opt.length > 0);
+    
+    return {
+        question: question.trim(),
+        options: hasAnyOption ? options : []
     };
 }
 
@@ -363,11 +334,44 @@ function determineQuestionType(questionText, options, hasTabular, hasColumnMatch
     }
 }
 
-// Main extraction function optimized for Mathpix
+// PART 9: VALIDATION ENGINE
+function validateQuestion(q, seenNumbers) {
+    const trimmedText = q.question.trim();
+    
+    if (trimmedText.length < 5) {
+        return { isValid: false, reason: "Question text too short (< 5 chars)" };
+    }
+    
+    const lowercaseText = trimmedText.toLowerCase();
+    if (lowercaseText === "question text" || lowercaseText === "q.no." || lowercaseText === "question" || lowercaseText === "no.") {
+        return { isValid: false, reason: "Question text is placeholder or table label" };
+    }
+
+    // Slipped dense answer key pattern check
+    const answerKeyPattern = /^\s*\(?[a-dABCDক-ঘi-iv-xI-XV-X]\)?\s*$/i;
+    if (answerKeyPattern.test(trimmedText)) {
+        return { isValid: false, reason: "Text represents a leaked answer key option" };
+    }
+
+    // Slipped section header check
+    const sectionHeaderPattern = /^(?:EXERCISE|Conventional Type|HS CORNER|Multiple Choice Questions|Fill in the Blanks|Column Matching|Analytical Type)\s*$/i;
+    if (sectionHeaderPattern.test(trimmedText)) {
+        return { isValid: false, reason: "Text matches header metadata title" };
+    }
+
+    // Section-scoped uniqueness validation
+    if (seenNumbers.has(q.questionNumber)) {
+        return { isValid: false, reason: `Duplicate question number ${q.questionNumber} in current section` };
+    }
+
+    return { isValid: true };
+}
+
+// Main extraction flow implementing the Correct Architecture
 function extractQuestionsFromMathpix(mathpixResponse, debug = false) {
     const questions = [];
     
-    console.log("=== Starting Mathpix Question Extraction ===");
+    console.log("=== Starting Enhanced Mathpix Question Extraction (Correct Architecture) ===");
     
     const processedText = processMathpixResponse(mathpixResponse);
     if (!processedText.trim()) {
@@ -376,113 +380,143 @@ function extractQuestionsFromMathpix(mathpixResponse, debug = false) {
     }
     
     const cleanedText = cleanMathpixContent(processedText);
-    
-    if (debug) {
-        console.log("Cleaned text preview:", cleanedText.substring(0, 500));
-    }
-    
-    // Pre-process text to handle edge cases
-    const preprocessedText = cleanedText
-        .replace(/\\section\*\{[^}]*\}/g, '') // Remove LaTeX sections
-        .replace(/\r\n/g, '\n') // Normalize line endings
-        .replace(/\s+(?=[।])/g, '') // Fix spacing before Bengali punctuation
-        // Fix common OCR errors for Bengali text
-        .replace(/यমি/g, 'যদি')
-        .replace(/यदि/g, 'যদি')
-        .replace(/तारে/g, 'তারে')
-        .replace(/तबে/g, 'তবে');
-    
-    // Split by question numbers — supports Latin digits AND Bengali digits + prefixes
-    // e.g. "1. ", "২. ", "প্রশ্ন ৩ ", "প্র. ৪"
-    const sectionSplitPattern = /(?=\n?\s*(?:(?:প্রশ্ন|প্র\.?)\s*[\d০-৯]+\.?|[\d০-৯]+\.)\s+)/;
-    const sections = preprocessedText.split(sectionSplitPattern);
-    
-    console.log(`Found ${sections.length} potential question sections`);
-    
-    for (let i = 0; i < sections.length; i++) {
-        const section = sections[i];
-        if (!section.trim()) continue;
-        
-        const lines = section.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-        if (lines.length === 0) continue;
-        
-        const firstLine = lines[0];
-        // Match both Latin and Bengali question number formats
-        const qMatch = firstLine.match(/^(?:(?:প্রশ্ন|প্র\.?)\s*)?([\d০-৯]+)\.?\s*(.+)/);
-        
-        if (!qMatch) {
-            if (debug) console.log(`Skipping section ${i}: No question number found`);
+    const normalizedText = bengaliToEnglishDigits(cleanedText);
+
+    // STEP 1 & 2: Layout segmentation (extract pages)
+    const pages = normalizedText.split(/(?:\\pagebreak|\\newpage)/);
+    console.log(`[Layout] Document segmented into ${pages.length} pages.`);
+
+    let currentSection = "Default";
+    const seenNumbers = new Set();
+
+    for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
+        const pageText = pages[pageIdx];
+        if (!pageText.trim()) continue;
+
+        // STEP 3: Answer key page detection & filtering
+        if (isAnswerKeyPage(pageText)) {
+            console.log(`[Diagnostic] Filtered ANSWER_KEY_PAGE at Page ${pageIdx + 1}`);
             continue;
         }
+
+        const lines = pageText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
         
-        // Convert Bengali digits to English for the question number
-        const questionNumber = parseInt(bengaliToEnglishDigits(qMatch[1]));
-        
-        // Build complete section text
-        const fullSectionText = lines.join(' ');
-        
-        if (debug) {
-            console.log(`\n--- Processing Question ${questionNumber} ---`);
-            console.log("Full section:", fullSectionText.substring(0, 300) + "...");
-        }
-        
-        // Detect special content types
-        const hasTabular = section.includes('\\begin{tabular}') || section.includes('<table');
-        const hasColumnMatching = section.includes('স্তম্ভ A') || section.includes('স্তম্ভ B') || 
-                                  section.includes('Column A') || section.includes('Column B');
-        const hasFillInBlank = section.includes('_____') || 
-                              ((qText) => qText.includes('=') && qText.includes('।'))(fullSectionText);
-        
-        // Use enhanced separation function
-        const parsed = separateQuestionFromOptions(fullSectionText);
-        
-        // Ensure we have exactly 4 options for MCQ
-        const finalOptions = [...parsed.options];
-        while (finalOptions.length < 4) {
-            finalOptions.push('');
-        }
-        const trimmedOptions = finalOptions.slice(0, 4);
-        
-        // Final cleaning of question text
-        const finalQuestion = parsed.question
-            .replace(/\s+/g, ' ')
-            .replace(/হলে\s*নীচের\s*কোন্টি/g, 'হলে নীচের কোনটি')
-            .replace(/\s*।\s*/g, '।')
-            .replace(/\s*=\s*/g, ' = ')
-            .replace(/\$\s+/g, '$')
-            .replace(/\s+\$/g, '$')
-            .replace(/(\w)(\$)/g, '$1 $2')
-            .replace(/(\$)(\w)/g, '$1 $2')
-            .trim();
-        
-        const questionType = determineQuestionType(finalQuestion, trimmedOptions, hasTabular, hasColumnMatching, hasFillInBlank);
-        
-        const questionObj = {
-            questionNumber: questionNumber,
-            question: finalQuestion,
-            diagram: null,
-            options: trimmedOptions.some(opt => opt.trim()) ? trimmedOptions : null,
-            type: questionType,
-            metadata: {
-                hasTabular: hasTabular,
-                hasColumnMatching: hasColumnMatching,
-                hasFillInBlank: hasFillInBlank,
-                optionCount: trimmedOptions.filter(opt => opt.trim().length > 0).length,
-                rawSectionLength: section.length,
-                confidence: mathpixResponse.confidence
+        // STEP 4 & 5: Content classification & Question block segmentation
+        const rawBlocks = [];
+        let currentBlock = null;
+
+        for (const line of lines) {
+            const classified = classifyLine(line);
+
+            // Filter page headers, footers and page numbering noise
+            if (classified.isHeader || classified.isFooter || classified.isPageNumber) {
+                if (debug) console.log(`[Diagnostic] Ignored Header/Footer: "${line}"`);
+                continue;
             }
-        };
-        
-        questions.push(questionObj);
-        
-        if (debug) {
-            console.log("Extracted question:", finalQuestion);
-            console.log("Extracted options:", trimmedOptions);
-            console.log("Question type:", questionType);
+
+            // Section boundary title detection (resets uniqueness scope)
+            if (classified.isSectionTitle) {
+                currentSection = line;
+                seenNumbers.clear(); // Reset duplicate checks for this section
+                currentBlock = null; 
+                console.log(`[Section] Entered Section: "${currentSection}" - Reset unique number scope`);
+                continue;
+            }
+
+            // Filter stray answer key lines
+            if (classified.isAnswerKey) {
+                currentBlock = null;
+                if (debug) console.log(`[Diagnostic] Ignored Answer Key Segment: "${line}"`);
+                continue;
+            }
+
+            // Segmentation-first question boundaries
+            if (classified.isQuestionStart) {
+                currentBlock = {
+                    questionNumber: classified.questionNumber,
+                    lines: [classified.questionStartText],
+                    hasTabular: classified.isTableOrGrid
+                };
+                rawBlocks.push(currentBlock);
+                continue;
+            }
+
+            // Append context to active question block
+            if (currentBlock) {
+                currentBlock.lines.push(line);
+                if (classified.isTableOrGrid) currentBlock.hasTabular = true;
+            }
+        }
+
+        // STEP 6: MCQ option parsing inside isolated blocks & STEP 8: Queue validation
+        for (const block of rawBlocks) {
+            const fullBlockText = block.lines.join('\n');
+            const parsed = extractOptionsAndCleanQuestion(fullBlockText);
+            
+            let finalOptions = [...parsed.options];
+            if (finalOptions.length === 0) {
+                const fallbackOpts = extractMCQOptions(fullBlockText);
+                if (fallbackOpts.length > 0) {
+                    finalOptions = [...fallbackOpts];
+                }
+            }
+
+            // Pad options for frontend schema
+            while (finalOptions.length < 4) {
+                finalOptions.push('');
+            }
+            const trimmedOptions = finalOptions.slice(0, 4);
+
+            let finalQuestion = parsed.question
+                .replace(/\s+/g, ' ')
+                .replace(/হলে\s*নীচের\s*কোন্টি/g, 'হলে নীচের কোনটি')
+                .replace(/\s*।\s*/g, '।')
+                .replace(/\s*=\s*/g, ' = ')
+                .replace(/\$\s+/g, '$')
+                .replace(/\s+\$/g, '$')
+                .replace(/(\w)(\$)/g, '$1 $2')
+                .replace(/(\$)(\w)/g, '$1 $2')
+                .trim();
+
+            const hasTabular = block.hasTabular;
+            const hasColumnMatching = finalQuestion.includes('স্তম্ভ A') || finalQuestion.includes('স্তম্ভ B') || 
+                                      finalQuestion.includes('Column A') || finalQuestion.includes('Column B');
+            const hasFillInBlank = finalQuestion.includes('_____') || 
+                                  (finalQuestion.includes('=') && finalQuestion.includes('।'));
+
+            const questionType = determineQuestionType(finalQuestion, trimmedOptions, hasTabular, hasColumnMatching, hasFillInBlank);
+
+            const questionObj = {
+                questionNumber: block.questionNumber,
+                question: finalQuestion,
+                diagram: null,
+                options: trimmedOptions.some(opt => opt.trim()) ? trimmedOptions : null,
+                type: questionType,
+                metadata: {
+                    hasTabular: hasTabular,
+                    hasColumnMatching: hasColumnMatching,
+                    hasFillInBlank: hasFillInBlank,
+                    optionCount: trimmedOptions.filter(opt => opt.trim().length > 0).length,
+                    rawSectionLength: fullBlockText.length,
+                    confidence: mathpixResponse.confidence
+                }
+            };
+
+            // Validation check before queue generation
+            const validation = validateQuestion(questionObj, seenNumbers);
+            if (validation.isValid) {
+                seenNumbers.add(block.questionNumber);
+                questions.push(questionObj);
+                if (debug) {
+                    console.log(`[Queue] Added Q${block.questionNumber}: "${finalQuestion.substring(0, 60)}..."`);
+                }
+            } else {
+                console.log(`[Validation Failed] Skipped Q${block.questionNumber} - Reason: ${validation.reason}`);
+            }
         }
     }
-    
-    console.log(`=== Extraction Complete: ${questions.length} questions extracted ===`);
+
+    console.log(`=== Extraction Complete: ${questions.length} valid questions added to queue ===`);
     return questions;
 }
 
@@ -504,13 +538,6 @@ function debugMathpixExtraction(mathpixResponse) {
         console.log("HTML preview:", mathpixResponse.html.substring(0, 300) + "...");
     }
     
-    if (mathpixResponse.data) {
-        console.log("Data items:", mathpixResponse.data.length);
-        mathpixResponse.data.slice(0, 3).forEach((item, i) => {
-            console.log(`Data[${i}]:`, item.type, item.value.substring(0, 100) + "...");
-        });
-    }
-    
     const extracted = extractQuestionsFromMathpix(mathpixResponse, true);
     console.log("=== Extraction Results ===");
     console.log("Total questions extracted:", extracted.length);
@@ -520,7 +547,7 @@ function debugMathpixExtraction(mathpixResponse) {
         console.log("Number:", q.questionNumber);
         console.log("Type:", q.type);
         console.log("Question:", q.question.substring(0, 100) + "...");
-        console.log("Options:", q.options ? q.options.map(opt => opt.substring(0, 50) + "...") : null);
+        console.log("Options:", q.options?.map(opt => opt.substring(0, 50) + "..."));
         console.log("Option count:", q.metadata.optionCount);
     });
 }

@@ -49,7 +49,9 @@ class MCQDetector {
       const parsed = this.detect(chunk.text);
       if (parsed) {
         results.push({
-          ...parsed,
+          question: LatexSanitizer.sanitize(parsed.question),
+          options: parsed.options.map(o => ({ label: o.label, text: LatexSanitizer.sanitize(o.text) })),
+          format: parsed.format,
           questionNumber: chunk.number,
           rawChunk: chunk.text,
           ocrConfidence: null
@@ -57,7 +59,7 @@ class MCQDetector {
       } else {
         console.log(`[MCQDetector] Segment for Q# ${chunk.number} parsed as descriptive/fallback.`);
         results.push({
-          question: chunk.text,
+          question: LatexSanitizer.sanitize(chunk.text),
           options: [
             {label: 'A', text: ''}, 
             {label: 'B', text: ''}, 
@@ -296,8 +298,8 @@ class OCRPipeline {
       };
 
       const enrichedQuestion = {
-        question: parsedMCQ.question,
-        options: parsedMCQ.options,
+        question: LatexSanitizer.sanitize(parsedMCQ.question),
+        options: parsedMCQ.options.map(o => ({ label: o.label, text: LatexSanitizer.sanitize(o.text) })),
         format: parsedMCQ.format || 'line-based',
         questionNumber: seg.number || (idx + 1).toString(),
         rawChunk: seg.text,

@@ -59,6 +59,11 @@ class ContentClassificationEngine {
       return ClassificationTypes.SECTION_TITLE;
     }
 
+    // LaTeX heading commands (e.g. \section*{EXERCISE}, \subsection{Conventional Type})
+    if (/^\\(?:chapter|section|subsection|subsubsection)\*?\{.*\}\s*$/i.test(trimmed)) {
+      return ClassificationTypes.SECTION_TITLE;
+    }
+
     // 5. Answer sections / Answer keys
     // e.g. "ANSWERS", "ANSWER SECTION", "ANSWER KEY"
     if (/^answers?\s*(?:key|section)?\s*$/i.test(trimmed)) {

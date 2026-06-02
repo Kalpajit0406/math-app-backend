@@ -50,7 +50,13 @@ class OCRNormalizer {
         !/[\.\?\!:\;\)]$/.test(prev.trim()) &&
         /^[a-z0-9\\\(\$\[]/.test(trimmedLine)
       ) {
-        acc[acc.length - 1] = `${prev} ${trimmedLine}`;
+        const prevTrimmed = prev.trim();
+        const endsWithSingleBackslash = /(?<!\\)\\$/.test(prevTrimmed);
+        if (endsWithSingleBackslash) {
+          acc[acc.length - 1] = `${prevTrimmed}${trimmedLine}`;
+        } else {
+          acc[acc.length - 1] = `${prev} ${trimmedLine}`;
+        }
       } else {
         acc.push(line);
       }

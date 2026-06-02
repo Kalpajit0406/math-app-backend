@@ -164,6 +164,14 @@ test('[latex] sanitizes unbalanced braces, dollars and environments', () => {
   const unclosedBrackets = `Evaluate [x + y`;
   const sanitizedBrackets = LatexSanitizer.sanitize(unclosedBrackets);
   assert.ok(sanitizedBrackets.endsWith(']'), 'Should balance unclosed brackets');
+
+  const unclosedParens = `Find \\(x + y where \\(x=2\\)`;
+  const sanitizedParens = LatexSanitizer.sanitize(unclosedParens);
+  assert.strictEqual(sanitizedParens, `Find $x + y$ where $x=2$`);
+
+  const unclosedMathSpace = `Find \\( \\_\\_\\_\\_\\_ \\(\\sec 2 \\theta\\).`;
+  const sanitizedMathSpace = LatexSanitizer.sanitize(unclosedMathSpace);
+  assert.strictEqual(sanitizedMathSpace, `Find $\\_____$ $\\sec 2 \\theta$.`);
 });
 
 const { ContentClassificationEngine } = require('../src/services/contentClassificationEngine');
@@ -197,5 +205,9 @@ ANSWERS`;
   
   assert.ok(filtered.includes('What is 2 + 2?'), 'Should retain actual question text');
   assert.ok(filtered.includes('A. 3'), 'Should retain options');
+
+  // Verify LaTeX heading classification
+  assert.strictEqual(ContentClassificationEngine.classifyLine('\\section*{EXERCISE}'), 'SECTION_TITLE');
+  assert.strictEqual(ContentClassificationEngine.classifyLine('\\section*{Conventional Type}'), 'SECTION_TITLE');
 });
 

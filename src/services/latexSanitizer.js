@@ -12,15 +12,27 @@ class LatexSanitizer {
     if (!latex) return '';
     let s = latex;
 
+    // Collapse multiple escaped underscores into a single blank line pattern (\_____)
+    s = s.replace(/(?:\\_)+/g, (match) => '\\' + '_'.repeat(match.length / 2));
+
+    // Remove OCR spacing artifacts in commands first (collapses `\ (` to `\` and `\ )` to `\)`)
+    s = s.replace(/\\\s+/g, '\\');
+
+    // Balance unclosed LaTeX delimiters first
+    s = this._balanceEscapedParentheses(s);
+    s = this._balanceEscapedBrackets(s);
+
+    // Strip spaces inside LaTeX delimiters BEFORE converting to $
+    s = s.replace(/\\\(\s+/g, '\\(');
+    s = s.replace(/\s+\\\)/g, '\\)');
+    s = s.replace(/\\\[\s+/g, '\\[');
+    s = s.replace(/\s+\\\]/g, '\\]');
+
     // Convert display block math delimiters to unified $$ format
     s = s.replace(/\\\[/g, '$$').replace(/\\\]/g, '$$');
     s = s.replace(/\\\(/g, '$').replace(/\\\)/g, '$');
 
-    // Remove OCR spacing artifacts in commands
-    s = s.replace(/\\\s+/g, '\\');
     s = s.replace(/}\s*\\left/g, '}\\left');
-    s = s.replace(/\$\s+/g, '$');
-    s = s.replace(/\s+\$/g, '$');
 
     // Remove dangerous LaTeX commands to prevent execution / injection vectors
     const dangerous = [
@@ -68,6 +80,121 @@ class LatexSanitizer {
     s = s.replace(/_(\d)([a-zA-Z])/g, '_{$1}$2');
 
     return s.trim();
+  }
+
+  static _balanceEscapedParentheses(s) {
+    let result = '';
+    let inMath = false;
+    let pos = 0;
+    let currentMathStart = -1;
+
+    while (pos < s.length) {
+      if (s.startsWith('\\(', pos)) {
+        if (inMath) {
+          // Unclosed previous math block! We need to close it.
+          const blockText = result.substring(currentMathStart);
+          
+          // 1. Check for transition words
+          const transitionRegex = /(\s+(?:where|and|or|if|be|let|then|for|is|of|to|in|at|by|with|but|as|the|an|a)\s+)([^]*)$/i;
+          const match = blockText.match(transitionRegex);
+          
+          // 2. Check for trailing spaces
+          const trailingSpaceMatch = blockText.match(/\s+$/);
+          
+          if (match) {
+            const transitionIndex = currentMathStart + match.index;
+            result = result.substring(0, transitionIndex) + '\\)' + result.substring(transitionIndex);
+            inMath = false;
+          } else if (trailingSpaceMatch) {
+            const spaceIndex = result.length - trailingSpaceMatch[0].length;
+            result = result.substring(0, spaceIndex) + '\\)' + result.substring(spaceIndex);
+            inMath = false;
+          } else {
+            result += '\\)';
+            inMath = false;
+          }
+        }
+        result += '\\(';
+        inMath = true;
+        currentMathStart = result.length;
+        pos += 2;
+      } else if (s.startsWith('\\)', pos)) {
+        result += '\\)';
+        inMath = false;
+        pos += 2;
+      } else {
+        result += s[pos];
+        pos++;
+      }
+    }
+    if (inMath) {
+      const blockText = result.substring(currentMathStart);
+      const trailingSpaceMatch = blockText.match(/\s+$/);
+      if (trailingSpaceMatch) {
+        const spaceIndex = result.length - trailingSpaceMatch[0].length;
+        result = result.substring(0, spaceIndex) + '\\)' + result.substring(spaceIndex);
+      } else {
+        result += '\\)';
+      }
+    }
+    return result;
+  }
+
+  static _balanceEscapedBrackets(s) {
+    let result = '';
+    let inMath = false;
+    let pos = 0;
+    let currentMathStart = -1;
+
+    while (pos < s.length) {
+      if (s.startsWith('\\[', pos)) {
+        if (inMath) {
+          const blockText = result.substring(currentMathStart);
+          
+          // 1. Check for transition words
+          const transitionRegex = /(\s+(?:where|and|or|if|be|let|then|for|is|of|to|in|at|by|with|but|as|the|an|a)\s+)([^]*)$/i;
+          const match = blockText.match(transitionRegex);
+          
+          // 2. Check for trailing spaces
+          const trailingSpaceMatch = blockText.match(/\s+$/);
+          
+          if (match) {
+            const transitionIndex = currentMathStart + match.index;
+            result = result.substring(0, transitionIndex) + '\\]' + result.substring(transitionIndex);
+            inMath = false;
+          } else if (trailingSpaceMatch) {
+            const spaceIndex = result.length - trailingSpaceMatch[0].length;
+            result = result.substring(0, spaceIndex) + '\\]' + result.substring(spaceIndex);
+            inMath = false;
+          } else {
+            result += '\\]';
+            inMath = false;
+          }
+        }
+        result += '\\[';
+        inMath = true;
+        currentMathStart = result.length;
+        pos += 2;
+      } else if (s.startsWith('\\]', pos)) {
+        result += '\\]';
+        inMath = false;
+        pos += 2;
+      } else {
+        result += s[pos];
+        pos++;
+      }
+    }
+    if (inMath) {
+      const blockText = result.substring(currentMathStart);
+      const trailingSpaceMatch = blockText.match(/\s+$/);
+      if (trailingSpaceMatch) {
+        const spaceIndex = result.length - trailingSpaceMatch[0].length;
+        result = result.substring(0, spaceIndex) + '\\]' + result.substring(spaceIndex);
+      } else {
+        result += '\\]';
+      }
+    }
+    return result;
   }
 
   /**
