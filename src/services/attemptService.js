@@ -1,34 +1,13 @@
 const Attempt = require('../models/attemptModel');
 const Exam = require('../models/examModel');
+const {
+  evaluateQuestionCorrectness,
+  getExamEndTime,
+  evaluateAttemptIfNeeded
+} = require('../utils/examUtils');
 
 // In-memory locks to prevent concurrent double-submissions
 const submissionLocks = new Set();
-
-const evaluateQuestionCorrectness = (question, userAnswer) => {
-  if (!question || userAnswer === undefined || userAnswer === null) return false;
-  
-  const qAns = String(question.correctAnswer).trim().toLowerCase();
-  const uAns = String(userAnswer).trim().toLowerCase();
-  
-  if (qAns === uAns) return true;
-  
-  const options = question.options || [];
-  const correctLetterIdx = ['a', 'b', 'c', 'd'].indexOf(qAns);
-  const correctOptionText = correctLetterIdx !== -1 && correctLetterIdx < options.length 
-    ? String(options[correctLetterIdx]).trim().toLowerCase() 
-    : null;
-  
-  if (correctOptionText && correctOptionText === uAns) return true;
-  
-  const userLetterIdx = ['a', 'b', 'c', 'd'].indexOf(uAns);
-  const userOptionText = userLetterIdx !== -1 && userLetterIdx < options.length 
-    ? String(options[userLetterIdx]).trim().toLowerCase() 
-    : null;
-  
-  if (userOptionText && qAns === userOptionText) return true;
-  
-  return false;
-};
 
 const attemptService = {
   startAttempt: async (userId, examId) => {
@@ -102,6 +81,11 @@ const attemptService = {
       const exam = await Exam.findById(attempt.examId);
       if (!exam) throw new Error('Exam not found');
 
+      // Check if exam has ended
+      const examEndTime = getExamEndTime(exam);
+      const now = new Date();
+      const isExamEnded = examEndTime ? (now >= examEndTime) : true;
+
       let score = 0;
       const evaluatedResponses = [];
       const seenQuestionIds = new Set();
@@ -115,8 +99,12 @@ const attemptService = {
         if (question) {
           seenQuestionIds.add(String(res.questionId));
           const userAnswer = res.userAnswer !== undefined ? res.userAnswer : res.selectedAnswer;
-          const isCorrect = evaluateQuestionCorrectness(question, userAnswer);
-          if (isCorrect) score++;
+          
+          let isCorrect = null;
+          if (isExamEnded) {
+            isCorrect = evaluateQuestionCorrectness(question, userAnswer);
+            if (isCorrect) score++;
+          }
           
           evaluatedResponses.push({
             questionId: res.questionId,
@@ -126,7 +114,7 @@ const attemptService = {
         }
       }
 
-      attempt.score = score;
+      attempt.score = isExamEnded ? score : 0;
       attempt.responses = evaluatedResponses;
       attempt.endTime = new Date();
 
@@ -143,11 +131,25 @@ const attemptService = {
   },
 
   getResult: async (userId, role, attemptId) => {
-    const result = await Attempt.findById(attemptId).populate('examId', 'title');
+    const result = await Attempt.findById(attemptId).populate('examId');
     if (!result) throw new Error('Result not found');
     const isOwner = String(result.userId) === String(userId);
     const isPrivileged = role === 'admin' || role === 'teacher';
     if (!isOwner && !isPrivileged) throw new Error('You are not allowed to view this result');
+    
+    const exam = result.examId;
+    if (exam) {
+      const examEndTime = getExamEndTime(exam);
+      const now = new Date();
+      const isExamEnded = examEndTime ? (now >= examEndTime) : true;
+
+      if (!isExamEnded && !isPrivileged) {
+        throw new Error(`Results for this exam will be available after the exam ends at ${exam.date} @ ${exam.time}`);
+      }
+
+      await evaluateAttemptIfNeeded(result, exam);
+    }
+    
     return result;
   },
 
@@ -190,6 +192,11 @@ const attemptService = {
         return attempt;
       }
 
+      // Check if exam has ended
+      const examEndTime = getExamEndTime(exam);
+      const now = new Date();
+      const isExamEnded = examEndTime ? (now >= examEndTime) : true;
+
       let score = 0;
       const evaluatedResponses = [];
       const seenQuestionIds = new Set();
@@ -203,8 +210,12 @@ const attemptService = {
         if (question) {
           seenQuestionIds.add(String(res.questionId));
           const userAnswer = res.selectedAnswer !== undefined ? res.selectedAnswer : res.userAnswer;
-          const isCorrect = evaluateQuestionCorrectness(question, userAnswer);
-          if (isCorrect) score++;
+          
+          let isCorrect = null;
+          if (isExamEnded) {
+            isCorrect = evaluateQuestionCorrectness(question, userAnswer);
+            if (isCorrect) score++;
+          }
           
           evaluatedResponses.push({
             questionId: res.questionId,
@@ -217,7 +228,7 @@ const attemptService = {
       // Check if there is an uncompleted attempt
       attempt = await Attempt.findOne({ userId, examId, endTime: { $exists: false } });
       if (attempt) {
-        attempt.score = score;
+        attempt.score = isExamEnded ? score : 0;
         attempt.responses = evaluatedResponses;
         attempt.endTime = new Date();
         if (securityMetadata.violations) attempt.violations = securityMetadata.violations;
@@ -232,7 +243,7 @@ const attemptService = {
       attempt = new Attempt({
         userId,
         examId,
-        score,
+        score: isExamEnded ? score : 0,
         responses: evaluatedResponses,
         startTime: new Date(Date.now() - (exam.duration * 60 * 1000)),
         endTime: new Date(),

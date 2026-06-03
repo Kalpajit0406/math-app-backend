@@ -1,11 +1,7 @@
-/**
- * Student Performance Analytics Service
- * Tracks student progress, accuracy, and learning patterns
- */
-
 const Attempt = require('../models/attemptModel');
 const Question = require('../models/questionModel');
 const QuestionRating = require('../models/questionRatingModel');
+const { getExamEndTime, evaluateAttemptIfNeeded } = require('../utils/examUtils');
 
 class PerformanceAnalytics {
   // Get comprehensive student performance data
@@ -36,12 +32,29 @@ class PerformanceAnalytics {
         dateFilter = { createdAt: { $gte: oneWeekAgo } };
       }
 
-      const attempts = await Attempt.find({ 
+      const rawAttempts = await Attempt.find({ 
         userId: studentId,
         ...dateFilter
       })
-        .populate('examId', 'title duration questions chapters classNo totalQuestions marksPerQuestion')
-        .lean();
+        .populate('examId', 'title duration questions chapters classNo totalQuestions marksPerQuestion date time');
+
+      const attempts = [];
+      for (const attempt of rawAttempts) {
+        if (attempt.examId) {
+          const examEndTime = getExamEndTime(attempt.examId);
+          const now = new Date();
+          const isExamEnded = examEndTime ? (now >= examEndTime) : true;
+
+          // Skip completely if the exam hasn't ended yet
+          if (!isExamEnded) {
+            continue;
+          }
+
+          // Evaluate on-the-fly if needed
+          await evaluateAttemptIfNeeded(attempt, attempt.examId);
+        }
+        attempts.push(attempt);
+      }
 
       if (attempts.length === 0) {
         return {
