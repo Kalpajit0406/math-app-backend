@@ -53,7 +53,7 @@ const apiLimiter = rateLimit({
   legacyHeaders: true,
 });
 
-// Tight Rate Limiting for Auth & OCR to prevent brute force and Mathpix key depletion
+// Tight Rate Limiting for Auth & image OCR scan to prevent brute force and Mathpix key depletion
 const authOcrLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 50, // 50 requests per 15 mins
@@ -62,11 +62,26 @@ const authOcrLimiter = rateLimit({
   legacyHeaders: true,
 });
 
+// Relaxed limiter for OCR session polling and PDF processing.
+// PDF extraction is now synchronous (single long-lived request, no rapid polling).
+// OCR session GET is polled by the client — allow up to 300 requests per 15 mins.
+const pdfOcrSessionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  message: { success: false, message: 'Too many session status requests. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: true,
+});
+
 app.use('/api/', apiLimiter);
 app.use('/api/v1/student/login', authOcrLimiter);
-app.use('/api/v1/admin/ocr', authOcrLimiter);
+// Image OCR scan — tightly rate-limited to protect Mathpix API quota
 app.use('/api/v1/scan', authOcrLimiter);
-app.use('/api/v1/pdf', authOcrLimiter); // Rate limit PDF processing
+// PDF and OCR session endpoints — relaxed limit (sync PDF + session polling)
+app.use('/api/v1/pdf', pdfOcrSessionLimiter);
+app.use('/api/v1/admin/ocr/session', pdfOcrSessionLimiter);
+// Keep tight limit on other admin OCR endpoints (queue management, etc.)
+app.use('/api/v1/admin/ocr', authOcrLimiter);
 
 // Configure CORS securely
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
