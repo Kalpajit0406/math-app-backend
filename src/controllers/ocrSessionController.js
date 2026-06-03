@@ -122,7 +122,15 @@ const startSession = async (req, res) => {
       userId,
       result.parsedQuestions,
       86400, // 24 hours TTL
-      scannedImageUrl
+      scannedImageUrl,
+      {
+        pageType:         result.pageType || 'UNKNOWN_PAGE',
+        sectionsFound:    result.sections ? result.sections.length : 0,
+        totalExtracted:   result.parsedQuestions ? result.parsedQuestions.length : 0,
+        totalRejected:    result.totalRejected || 0,
+        sourceUsed:       result.detectionQuality ? result.detectionQuality.source : 'unknown',
+        processingTimeMs: Date.now() - requestStartedAt
+      }
     );
 
     console.log(`[ocrSessionController] startSession: queue created with ${session.items?.length || 0} items`);

@@ -81,98 +81,109 @@ class ImagePreprocessor {
       const maxDim = Math.max(origW, origH);
       const minDim = Math.min(origW, origH);
       const channels = meta.channels || 3;
-      const isAlreadyGray = channels <= 2;
 
-      // Detect photo vs flat scan heuristic:
-      // Photos tend to have JPEG artifacts and non-uniform backgrounds.
-      const isJpeg = meta.format === 'jpeg' || meta.format === 'jpg';
-
-      // ── Step 3: Compute raw stats for quality assessment ──────────────────
+      // ── Step 3: Compute raw stats + histogram equivalents for quality ──────
       const rawStats = await img.clone().grayscale().raw().toBuffer({ resolveWithObject: true });
       const rawPixels = rawStats.data;
       const pixelCount = rawPixels.length;
 
-      let sum = 0, sumSq = 0;
+      let sum = 0, sumSq = 0, minVal = 255, maxVal = 0;
       for (let i = 0; i < pixelCount; i++) {
-        sum   += rawPixels[i];
-        sumSq += rawPixels[i] * rawPixels[i];
+        const val = rawPixels[i];
+        sum   += val;
+        sumSq += val * val;
+        if (val < minVal) minVal = val;
+        if (val > maxVal) maxVal = val;
       }
       const rawMean  = sum / pixelCount;
       const rawStdev = Math.sqrt(sumSq / pixelCount - rawMean * rawMean);
 
       const qualityIssues = [];
-      const isLowLight    = rawMean  < LOW_LIGHT_MEAN;
-      const isLowContrast = rawStdev < LOW_CONTRAST_STDEV;
-      const hasShadows    = rawStdev > VERY_HIGH_CONTRAST && isJpeg;
-      const isTooSmall    = maxDim   < OCR_MIN_DIM;
-      const isTooBig      = maxDim   > OCR_MAX_DIM;
+      const isLowLight    = rawMean < 85;
+      const isLowContrast = rawStdev < 24;
+      const isShadowHeavy = rawStdev > 70 && minVal < 20;
+      const hasShadows    = isShadowHeavy;
+      const isGlare       = maxVal === 255 && rawMean > 195 && rawStdev > 45;
+      const isBlurred     = rawStdev < 18;
+      const isTooSmall    = maxDim < OCR_MIN_DIM;
+      const isTooBig      = maxDim > OCR_MAX_DIM;
       const isRotated     = meta.orientation && meta.orientation > 1;
 
       if (isLowLight)    qualityIssues.push('low_light');
       if (isLowContrast) qualityIssues.push('low_contrast');
-      if (hasShadows)    qualityIssues.push('shadows');
+      if (isShadowHeavy) qualityIssues.push('shadows');
+      if (isGlare)       qualityIssues.push('glare');
+      if (isBlurred)     qualityIssues.push('blur');
       if (isTooSmall)    qualityIssues.push('low_resolution');
       if (isRotated)     qualityIssues.push('rotated');
 
-      const imageType = hasShadows ? 'photo' : (isJpeg ? 'scan_jpeg' : 'scan_flat');
+      // Classification of Image Type for pipeline routing
+      let imageType = 'mobile_photo';
+      if (rawMean > 220 && rawStdev > 25 && qualityIssues.length === 0) {
+        imageType = 'scanned_clean'; // Minimal processing needed
+      } else if (isLowLight || isShadowHeavy) {
+        imageType = 'low_light';
+      } else if (isBlurred) {
+        imageType = 'blurry';
+      }
 
       // ── Step 4: Build processing pipeline ─────────────────────────────────
-      img = sharp(buffer, { limitInputPixels: 12000 * 12000 }).rotate();
+      img = sharp(buffer, { limitInputPixels: 12000 * 12000 }).rotate().grayscale();
 
-      // ── Step 5: Grayscale ──────────────────────────────────────────────────
-      img = img.grayscale();
+      let deNoisingApplied = false;
+      let binarizationApplied = false;
+      let claheApplied = false;
+      let adaptiveGammaApplied = false;
+      let dynamicThreshold = null;
 
-      // ── Step 5.5: De-noising (Median Filter) ──────────────────────────────
-      // Apply median filter to remove high-frequency noise from scans/photos
-      if (isLowLight || isLowContrast || hasShadows) {
+      // ── Step 5: Route Preprocessing Pipeline based on Image Type ──────────
+      if (imageType === 'scanned_clean') {
+        // 1. Clean PDF / Flat Scan
+        img = img.normalize();
+        img = img.sharpen({ sigma: 0.5 });
+      } else if (imageType === 'blurry') {
+        // 2. Blurry Image Pipeline: Aggressive Edge restoration + Median denoise
+        img = img.sharpen({ sigma: 2.2, m1: 1.5, m2: 0.8 });
         img = img.median(3);
-      } else {
-        img = img.median(1);
-      }
-
-      // ── Step 6: Adaptive enhancement based on detected issues ─────────────
-      if (isLowLight || isLowContrast) {
-        // Aggressive normalization for underexposed images
         img = img.normalize();
-        img = img.linear(
-          isLowLight ? 1.5 : 1.3,   // boost brightness/contrast
-          isLowLight ? -25 : -15    // push blacks down
-        );
-      } else if (hasShadows) {
-        // Shadow images: strong normalize + CLAHE binarization simulation
-        img = img.normalize();
-        img = img.clahe({ width: 64, height: 64, maxSlope: 4 });
+        deNoisingApplied = true;
+      } else if (imageType === 'low_light') {
+        // 3. Low-Light / Shadow-Heavy Page Pipeline
+        // Gamma stretch for midtone brightness recovery
+        img = img.gamma(2.0);
+        adaptiveGammaApplied = true;
+
+        // Brightness and contrast multiplier adjustments
+        const mult = rawMean < 50 ? 1.6 : 1.35;
+        const offset = rawMean < 50 ? 25 : 12;
+        img = img.linear(mult, offset);
+
+        // Local CLAHE equalization to handle shadow imbalances
+        img = img.clahe({ width: 32, height: 32, maxSlope: 3 });
+        claheApplied = true;
+
+        // Adaptive thresholding: dynamic threshold offset
+        dynamicThreshold = Math.max(90, Math.min(220, Math.round(rawMean * 1.12)));
+        img = img.threshold(dynamicThreshold);
+        binarizationApplied = true;
+        deNoisingApplied = true;
       } else {
-        // Normal scanned page: standard normalization
+        // 4. Default Mobile Photo Pipeline: Median denoise + CLAHE + Sharpen
+        img = img.median(3);
+        img = img.clahe({ width: 64, height: 64, maxSlope: 2 });
         img = img.normalize();
+        img = img.sharpen({ sigma: 1.2 });
+        deNoisingApplied = true;
+        claheApplied = true;
       }
 
-      // ── Step 6.5: Adaptive Thresholding (Binarization Simulation) ──────────
-      // Binarize low-contrast/camera captures to maximize OCR character edge readability
-      if (isLowLight || isLowContrast) {
-        const dynamicThreshold = Math.round(rawMean * 0.90);
-        img = img.threshold(Math.max(100, Math.min(200, dynamicThreshold)));
-      }
-
-      // ── Step 7: Edge sharpening ───────────────────────────────────────────
-      if (qualityIssues.includes('low_resolution') || qualityIssues.includes('low_contrast')) {
-        img = img.sharpen({ sigma: 1.8, m1: 1.2, m2: 0.6 });
-      } else {
-        img = img.sharpen({ sigma: 1.2, m1: 0.9, m2: 0.4 });
-      }
-
-      // ── Step 7.5: De-skew / Perspective Alignment (Simulation) ─────────────
-      // In production systems, we scan for lines to compute alignment rotation.
-      // Here we auto-correct EXIF orientation, and simulate de-skew adjustments.
+      // ── Step 6: Geometry and Resize Correction ─────────────────────────────
       let skewAngle = 0;
       if (isRotated) {
-        // Already corrected via .rotate()
-        skewAngle = 90; 
+        skewAngle = 90;
       }
 
-      // ── Step 8: Resize ────────────────────────────────────────────────────
       if (isTooSmall && maxDim > 0) {
-        // Upscale to at least OCR_MIN_DIM on the longest edge (Lanczos)
         const scale = OCR_MIN_DIM / maxDim;
         img = img.resize(
           Math.round(origW * scale),
@@ -180,7 +191,6 @@ class ImagePreprocessor {
           { kernel: 'lanczos3' }
         );
       } else if (isTooBig && maxDim > 0) {
-        // Downsample to OCR_MAX_DIM on longest edge
         const scale = OCR_MAX_DIM / maxDim;
         img = img.resize(
           Math.round(origW * scale),
@@ -189,39 +199,36 @@ class ImagePreprocessor {
         );
       }
 
-      // ── Step 9: Trim page borders ─────────────────────────────────────────
+      // ── Step 7: Trim Page borders ─────────────────────────────────────────
       try {
         img = img.trim({ background: '#ffffff', threshold: 12 });
-      } catch (_) {
-        // trim is optional — non-fatal
-      }
+      } catch (_) {}
 
-      // ── Step 10: Output ───────────────────────────────────────────────────
+      // ── Step 8: Encode Output ──────────────────────────────────────────────
       img = img.jpeg({
         quality:           TARGET_JPEG_QUALITY,
         chromaSubsampling: '4:4:4',
         optimiseCoding:    true,
-        mozjpeg:           false, // keep fast
       });
 
       const outBuffer = await img.toBuffer();
 
-      // ── Step 11: Post-process stats ───────────────────────────────────────
+      // ── Step 9: Post-process stats ────────────────────────────────────────
       const postStats = await sharp(outBuffer).stats();
       const postCh    = postStats.channels && postStats.channels[0];
       const postMean  = postCh ? postCh.mean  : rawMean;
       const postStdev = postCh ? postCh.stdev : rawStdev;
 
       let qualityRating = 'high';
-      if (postMean < LOW_LIGHT_MEAN || postStdev < LOW_CONTRAST_STDEV)  qualityRating = 'low';
-      else if (postStdev < 30 || postMean < 70)                          qualityRating = 'medium';
+      if (postMean < 50 || postStdev < 20)  qualityRating = 'low';
+      else if (postStdev < 30 || postMean < 70) qualityRating = 'medium';
 
       const diagnostics = {
-        originalSize:    buffer.length,
-        processedSize:   outBuffer.length,
-        origWidth:       origW,
-        origHeight:      origH,
-        format:          meta.format || 'unknown',
+        originalSize:       buffer.length,
+        processedSize:      outBuffer.length,
+        origWidth:          origW,
+        origHeight:         origH,
+        format:             meta.format || 'unknown',
         imageType,
         rawMeanBrightness:  Math.round(rawMean),
         rawContrastStdDev:  Math.round(rawStdev),

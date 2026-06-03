@@ -69,13 +69,17 @@ class VerificationQueueManager {
 
         // Confidence
         confidenceScores: {
-          ocrConfidence:        confScores.ocrConfidence        ?? q.ocrConfidence ?? null,
-          parserConfidence:     confScores.parserConfidence     ?? null,
-          layoutConfidence:     confScores.layoutConfidence     ?? null,
-          sectionConfidence:    confScores.sectionConfidence    ?? null,
-          structuralConfidence: confScores.structuralConfidence ?? null,
-          composite:            confScores.composite            ?? null,
-          rating:               confScores.rating               ?? 'medium',
+          ocrConfidence:             confScores.ocrConfidence             ?? q.ocrConfidence ?? null,
+          parserConfidence:          confScores.parserConfidence          ?? null,
+          layoutConfidence:          confScores.layoutConfidence          ?? null,
+          sectionConfidence:         confScores.sectionConfidence         ?? null,
+          structuralConfidence:      confScores.structuralConfidence      ?? null,
+          latexConfidence:           confScores.latexConfidence           ?? null,
+          semanticConfidence:        confScores.semanticConfidence        ?? null,
+          optionIntegrityConfidence: confScores.optionIntegrityConfidence ?? null,
+          boundaryConfidence:        confScores.boundaryConfidence        ?? null,
+          composite:                 confScores.composite                 ?? null,
+          rating:                    confScores.rating                    ?? 'medium',
         },
 
         // Raw OCR diagnostics
@@ -85,8 +89,9 @@ class VerificationQueueManager {
         validationErrors:   Array.isArray(validation.errors)   ? validation.errors   : [],
         validationWarnings: Array.isArray(validation.warnings) ? validation.warnings : [],
 
-        verified:  false,
-        isDeleted: false,
+        verified:        false,
+        isDeleted:       false,
+        extractionState: q.extractionState || 'ACCEPTED',
       };
     });
 

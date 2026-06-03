@@ -58,9 +58,9 @@ class QuestionSegmenter {
     // 3. "12. Evaluate ..." or "12) Evaluate ..." (number followed by delimiter and meaningful text)
     // 4. Bengali: "প্রশ্ন 12" or "প্র. 12" (Bengali prefix with English/Bengali digits)
     const headerPatterns = [
-      /^(?:Question|Q\.?|No\.?|প্রশ্ন|প্র\.?)\s*[:\-]?\s*(\d+)\s*(.+)$/i,
-      /^Question\s*(\d+)\s*[:\-]?\s*of\s*\d+\s*(.+)?$/i,
-      /^([0-9]{1,3})[\.)\-:]\s+(\S.+)$/,
+      /^(?:Question|Q\.?|No\.?|প্রশ্ন|প্র\.?)\s*[\.:]?\s*(\d+)\s*(.+)$/i,
+      /^Question\s*(\d+)\s*[\.:]?\s*of\s*\d+\s*(.+)?$/i,
+      /^([0-9]{1,3})[\.)\:]\s+(\S.+)$/,
     ];
 
     for (const pattern of headerPatterns) {
@@ -78,16 +78,14 @@ class QuestionSegmenter {
           }
           // If it is a number or Roman option:
           // Check if it is the successor of the current question number.
-          if (current) {
-            if (current.number) {
-              const currentNum = parseInt(current.number, 10);
-              if (!isNaN(currentNum) && num === currentNum + 1) {
-                // Successor question: treat as question header
-                return {
-                  number: numStr,
-                  text: (match[2] || '').trim(),
-                };
-              }
+          if (current && current.number) {
+            const currentNum = parseInt(current.number, 10);
+            if (!isNaN(currentNum) && num === currentNum + 1) {
+              // Successor question: treat as question header
+              return {
+                number: numStr,
+                text: (match[2] || '').trim(),
+              };
             }
             // If current exists but is not the successor, treat as option (skip)
             continue;
@@ -127,7 +125,7 @@ class QuestionSegmenter {
     // ── PASS 1: LOOKAHEAD PRE-SPLIT ──────────────────────────────────────────
     // Split at any position where a question number header starts, even if
     // it appears mid-line (e.g. after a closing "$" in Mathpix inline output).
-    const lookaheadPattern = /(?:\n|[.?!$]\s+|(?<=\$))(?=(?:(?:\b(?:Question|No\.)\s+|\bQ\.?\s*|(?:প্রশ্ন|প্র\.?)\s*)\d{1,3}[\.\)\-:]?\s+|\d{1,3}[\.\)\-:]\s+)(?!\d))/gi;
+    const lookaheadPattern = /(?:\n|[.?!]\s+|(?<=\$))(?=(?:(?:\b(?:Question|No\.)\s+|\bQ\.?\s*|(?:প্রশ্ন|প্র\.?)\s*)\d{1,3}[\.\)\:]?\s+|\d{1,3}[\.\)\:]\s+)(?!\d))/gi;
     const rawBlocks = filteredText.split(lookaheadPattern);
 
     // ── PASS 2: LINE-BY-LINE HEADER EXTRACTION PER BLOCK ────────────────────

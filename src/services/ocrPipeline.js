@@ -300,7 +300,8 @@ function preFilterSegment(questionText, questionNum, seenNumbers) {
   // Section header leaked through
   if (
     ContentClassificationEngine.classifyLine(text) === 'SECTION_TITLE' ||
-    /^(?:Conventional\s*Type|Multiple\s*Choice\s*Questions|Fill\s*in\s*the\s*Blank|Column\s*Matching|Analytical\s*Type|Short\s*Answer\s*Type|Long\s*Answer\s*Type|উত্তরমালা)\s*$/i.test(text)
+    /^(?:Conventional\s*Type|Multiple\s*Choice\s*Questions|Fill\s*in\s*the\s*Blank|Column\s*Matching|Analytical\s*Type|Short\s*Answer\s*Type|Long\s*Answer\s*Type|উত্তরমালা)\s*$/i.test(text) ||
+    /\b(?:exercise|chapter|ch\.)\s*\d/i.test(text)
   ) {
     return { skip: true, reason: `Section header: "${text}"` };
   }
@@ -321,45 +322,154 @@ function preFilterSegment(questionText, questionNum, seenNumbers) {
   return { skip: false };
 }
 
+/**
+ * Detect if there are overlapping bounding boxes in the OCR output.
+ */
+function detectOverlappingBoxes(lines) {
+  if (!Array.isArray(lines) || lines.length < 2) return false;
+  const boxes = [];
+  for (const line of lines) {
+    let box = line.bbox || line.rect || line.rect_pix;
+    if (!box) continue;
+    let x = 0, y = 0, w = 0, h = 0;
+    if (Array.isArray(box)) {
+      x = box[0]; y = box[1]; w = box[2]; h = box[3];
+    } else if (typeof box === 'object') {
+      x = box.left ?? box.x ?? 0;
+      y = box.top ?? box.y ?? 0;
+      w = box.width ?? box.w ?? 0;
+      h = box.height ?? box.h ?? 0;
+    }
+    if (w <= 0 || h <= 0) continue;
+    boxes.push({ x1: x, y1: y, x2: x + w, y2: y + h, area: w * h });
+  }
+
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const b1 = boxes[i];
+      const b2 = boxes[j];
+      const ix1 = Math.max(b1.x1, b2.x1);
+      const iy1 = Math.max(b1.y1, b2.y1);
+      const ix2 = Math.min(b1.x2, b2.x2);
+      const iy2 = Math.min(b1.y2, b2.y2);
+
+      if (ix1 < ix2 && iy1 < iy2) {
+        const intersection = (ix2 - ix1) * (iy2 - iy1);
+        const minArea = Math.min(b1.area, b2.area);
+        if (intersection > minArea * 0.40) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 // ─── 6. CONFIDENCE SCORER ────────────────────────────────────────────────────
 /**
  * Compute a composite confidence score from OCR and parser signals.
  */
-function computeConfidenceScore(ocrConfidence, parserConfidence, layoutConfidence, sectionConfidence, segmentText, parsedBlock) {
+function computeConfidenceScore(ocrConfidence, parserConfidence, layoutConfidence, sectionConfidence, segmentText, parsedBlock, questionNumber) {
   const ocr    = ocrConfidence    != null ? ocrConfidence    : 0.80;
   const parser = parserConfidence != null ? parserConfidence : 0.70;
   const layout = layoutConfidence != null ? layoutConfidence : 0.80;
   const sect   = sectionConfidence != null ? sectionConfidence : 0.80;
 
-  // Structural confidence based on validation warning deduction
-  const questionText = (segmentText || parsedBlock.question || '').trim();
-  let structuralConfidence = 1.0;
+  const questionText = (segmentText || parsedBlock?.question || '').trim();
 
-  // Deductions
+  // 1. Structural confidence
+  let structuralConfidence = 1.0;
   if (questionText.length < 20) structuralConfidence -= 0.15;
   if (questionText.length < 10) structuralConfidence -= 0.20;
 
-  const format = (parsedBlock.format || '').toLowerCase();
-  const options = parsedBlock.options || [];
-  if (['mcq', 'line-based', 'inline-mcq', 'structured'].includes(format) && options.length > 0) {
-    const filledOptions = options.filter(o => o.text && o.text.trim().length > 0).length;
+  const format = (parsedBlock?.format || '').toLowerCase();
+  const options = parsedBlock?.options || [];
+  const filledOptions = options.filter(o => o.text && o.text.trim().length > 0).length;
+
+  if (['mcq', 'line-based', 'inline-mcq', 'structured'].includes(format)) {
     if (filledOptions < 4) structuralConfidence -= 0.15;
     if (filledOptions < 2) structuralConfidence -= 0.35;
   }
-
   structuralConfidence = Math.max(0, structuralConfidence);
 
+  // 2. LaTeX confidence: deduct 0.15 per unmatched bracket/brace/parenthesis
+  let unclosed = 0;
+  const openers = ['{', '[', '('];
+  const closers = ['}', ']', ')'];
+  const stack = [];
+  for (const char of questionText) {
+    if (openers.includes(char)) {
+      stack.push(char);
+    } else if (closers.includes(char)) {
+      const idx = closers.indexOf(char);
+      if (stack.length > 0 && stack[stack.length - 1] === openers[idx]) {
+        stack.pop();
+      } else {
+        unclosed++;
+      }
+    }
+  }
+  unclosed += stack.length;
+  const latexConfidence = Math.max(0, 1.0 - (0.15 * unclosed));
+
+  // 3. Semantic confidence
+  let semanticConfidence = 1.0;
+  const mathKeywords = /\b(?:find|evaluate|solve|equals?|determine|calculate|prove|show|simplify|integrate|differentiate|matrix|equation|probability|triangle|circle|derivative|angle|sum|product|ratio|fraction|expression|value|what|how|where|prove|verify|construct)\b/i;
+  const cleanText = questionText.replace(/\s+/g, '');
+  if (cleanText.length > 0) {
+    const validChars = cleanText.match(/[a-zA-Z0-9+\-=*/^$\\_{}[\]()|<>.,;?!]/g) || [];
+    const validRatio = validChars.length / cleanText.length;
+    if (validRatio < 0.60) {
+      semanticConfidence = 0.40;
+    } else if (!mathKeywords.test(questionText)) {
+      semanticConfidence = 0.70;
+    } else {
+      semanticConfidence = 1.0;
+    }
+  } else {
+    semanticConfidence = 0.40;
+  }
+
+  // 4. Option integrity confidence
+  let optionIntegrityConfidence = 1.0;
+  if (['mcq', 'line-based', 'inline-mcq', 'structured'].includes(format)) {
+    if (filledOptions >= 4) optionIntegrityConfidence = 1.0;
+    else if (filledOptions === 3) optionIntegrityConfidence = 0.75;
+    else if (filledOptions === 2) optionIntegrityConfidence = 0.50;
+    else optionIntegrityConfidence = 0.0;
+  } else {
+    if (filledOptions > 0) optionIntegrityConfidence = 0.50;
+  }
+
+  // 5. Question-boundary confidence
+  let boundaryConfidence = questionNumber != null ? 1.0 : 0.70;
+  const bleedRegex = /(?:\n\s*\d+[\s.)]|\s+\([b-z]\)\s+|\bQ\d+\b)/;
+  if (bleedRegex.test(questionText)) {
+    boundaryConfidence = Math.max(0, boundaryConfidence - 0.25);
+  }
+
   // Weighted composite score
-  const composite = (ocr * 0.3) + (parser * 0.25) + (layout * 0.15) + (sect * 0.1) + (structuralConfidence * 0.2);
+  const composite = (ocr * 0.25) +
+                    (layout * 0.15) +
+                    (parser * 0.15) +
+                    (structuralConfidence * 0.15) +
+                    (latexConfidence * 0.10) +
+                    (semanticConfidence * 0.10) +
+                    (optionIntegrityConfidence * 0.05) +
+                    (boundaryConfidence * 0.05);
 
   return {
-    ocrConfidence:        ocr,
-    parserConfidence:     parser,
-    layoutConfidence:     layout,
-    sectionConfidence:    sect,
+    ocrConfidence:             ocr,
+    parserConfidence:          parser,
+    layoutConfidence:          layout,
+    sectionConfidence:         sect,
     structuralConfidence,
-    composite:            Math.max(0, Math.min(1, composite)),
-    rating: composite >= 0.80 ? 'high' : composite >= 0.55 ? 'medium' : 'low',
+    latexConfidence,
+    semanticConfidence,
+    optionIntegrityConfidence,
+    boundaryConfidence,
+    composite:                 Math.max(0, Math.min(1, composite)),
+    rating: composite >= 0.90 ? 'high' : composite >= 0.75 ? 'medium' : 'low',
   };
 }
 
@@ -494,12 +604,14 @@ class OCRPipeline {
         title:      sec.title,
         parserType: sec.parserType,
         text:       sliceClean,
+        confidence: sec.confidence,
       };
     });
 
     // ── Layer 10: Per-section segmentation and routing ────────────────────
     const parsedQuestions = [];
     let   globalOrder     = 0;
+    let   totalRejected   = 0;
 
     for (const section of sectionSlices) {
 
@@ -549,14 +661,30 @@ class OCRPipeline {
 
         // ── PRE-FILTER ────────────────────────────────────────────────────
         const questionNum = seg.number || String(idx + 1);
-        const filter = preFilterSegment(parsedBlock.question, questionNum, sectionSeenNumbers);
-        if (filter.skip) {
-          console.log(`[OCRPipeline] Pre-filter rejected segment: ${filter.reason}`);
-          continue;
-        }
+        const duplicateQuestion = sectionSeenNumbers.has(questionNum);
+        const sectionHeaderLeaked =
+          ContentClassificationEngine.classifyLine(parsedBlock.question || '') === 'SECTION_TITLE' ||
+          /^(?:Conventional\s*Type|Multiple\s*Choice\s*Questions|Fill\s*in\s*the\s*Blank|Column\s*Matching|Analytical\s*Type|Short\s*Answer\s*Type|Long\s*Answer\s*Type|উত্তরমালা)\s*$/i.test(parsedBlock.question || '') ||
+          /\b(?:exercise|chapter|ch\.)\s*\d/i.test(parsedBlock.question || '');
 
         // ── SANITIZE ──────────────────────────────────────────────────────
         const sanitizedQuestion = LatexSanitizer.sanitize(parsedBlock.question, confidence);
+
+        const filter = preFilterSegment(sanitizedQuestion, questionNum, sectionSeenNumbers);
+        let isFragmentOrKey = false;
+        if (filter.skip) {
+          if (filter.reason.startsWith('Fragment too short') || filter.reason.startsWith('Answer key fragment') || filter.reason.startsWith('Section header')) {
+            isFragmentOrKey = true;
+          }
+        }
+
+        if (isFragmentOrKey) {
+          console.log(`[OCRPipeline] Pre-filter rejected segment: ${filter.reason}`);
+          totalRejected++;
+          continue;
+        }
+
+        // ── SANITIZE OPTIONS ──────────────────────────────────────────────
         const sanitizedOptions  = (parsedBlock.options || []).map(o => ({
           label: o.label,
           text:  LatexSanitizer.sanitize(o.text, confidence),
@@ -569,7 +697,8 @@ class OCRPipeline {
           pageClassification.confidence,
           section.confidence,
           seg.text,
-          parsedBlock
+          parsedBlock,
+          seg.number
         );
 
         // ── BUILD ENRICHED OBJECT ─────────────────────────────────────────
@@ -619,12 +748,79 @@ class OCRPipeline {
         const validationResult = QuestionValidator.validate(enrichedQuestion);
         enrichedQuestion.validation = validationResult;
 
-        if (!validationResult.isValid) {
-          console.log(`[OCRPipeline] Validation FAILED for Q${questionNum}:`, validationResult.errors);
-          if (confScore.composite < 0.50) {
-            enrichedQuestion.quarantined = true;
-            enrichedQuestion.quarantineReasons = validationResult.errors;
+        // ── EXTRACTION STATE & QUARANTINE ROUTING ──────────────────────────
+        const quarantineReasons = [];
+        if (confScore.ocrConfidence < 0.70) quarantineReasons.push('low_ocr_confidence');
+        if (confScore.layoutConfidence < 0.70) quarantineReasons.push('weak_layout_confidence');
+        if (confScore.latexConfidence < 0.80) quarantineReasons.push('malformed_latex');
+        if (confScore.parserConfidence < 0.70) quarantineReasons.push('parser_ambiguity');
+        if (confScore.sectionConfidence < 0.70) quarantineReasons.push('section_ambiguity');
+        
+        // Overlapping boxes check
+        const hasOverlapping = detectOverlappingBoxes(ocrResult.ocr?.lines || ocrResult.lines);
+        if (hasOverlapping) quarantineReasons.push('overlapping_bounding_boxes');
+
+        // Duplicate question check
+        if (duplicateQuestion) quarantineReasons.push('duplicate_question_number');
+
+        // Malformed option arrays
+        if (['mcq', 'line-based', 'inline-mcq', 'structured'].includes(enrichedQuestion.format)) {
+          if (confScore.optionIntegrityConfidence < 1.0) {
+            quarantineReasons.push('malformed_options_array');
           }
+        }
+
+        // Unsupported layout check
+        if (pageClassification.pageType === 'UNKNOWN_PAGE') {
+          quarantineReasons.push('unsupported_layout');
+        }
+
+        // Low light check
+        if (preprocessInfo && preprocessInfo.diagnostics && (preprocessInfo.diagnostics.isLowLight || preprocessInfo.diagnostics.issues?.includes('low_light'))) {
+          quarantineReasons.push('low_light_image');
+        }
+
+        // Blur score check
+        if (preprocessInfo && preprocessInfo.diagnostics && (preprocessInfo.diagnostics.isBlurred || preprocessInfo.diagnostics.issues?.includes('blur') || preprocessInfo.diagnostics.issues?.includes('low_contrast'))) {
+          quarantineReasons.push('blur_threshold_exceeded');
+        }
+
+        // Parser contamination check
+        const bleedRegex = /(?:\n\s*\d+[\s.)]|\s+\([b-z]\)\s+|\bQ\d+\b)/;
+        if (bleedRegex.test(sanitizedQuestion) || sectionHeaderLeaked) {
+          quarantineReasons.push('parser_contamination_suspected');
+        }
+
+        // Validation errors
+        if (!validationResult.isValid) {
+          quarantineReasons.push(...validationResult.errors);
+        }
+
+        // Determine baseline state
+        let extractionState = 'ACCEPTED';
+        const composite = confScore.composite;
+        if (composite >= 0.90) {
+          extractionState = 'ACCEPTED';
+        } else if (composite >= 0.75) {
+          extractionState = 'MANUAL_REVIEW';
+        } else if (composite >= 0.60) {
+          extractionState = 'QUARANTINED';
+        } else {
+          extractionState = 'REJECTED';
+        }
+
+        // Elevate/override to QUARANTINED if triggers are present and state is not REJECTED
+        if (quarantineReasons.length > 0 && extractionState !== 'REJECTED') {
+          extractionState = 'QUARANTINED';
+        }
+
+        enrichedQuestion.extractionState = extractionState;
+        enrichedQuestion.quarantineReasons = quarantineReasons;
+        enrichedQuestion.quarantined = extractionState === 'QUARANTINED';
+
+        if (extractionState === 'REJECTED') {
+          console.log(`[OCRPipeline] Rejecting segment Q${questionNum} due to low confidence score (${(composite * 100).toFixed(1)}%) or rejection triggers.`);
+          totalRejected++;
           continue;
         }
 
@@ -670,6 +866,7 @@ class OCRPipeline {
       isValid:      pipelineValidation.isValid,
       pageType:     pageClassification.pageType,
       sections:     useSections.map(s => ({ title: s.title, parserType: s.parserType })),
+      totalRejected,
       detectionQuality: {
         source:            sourceUsed,
         multipleDetected:  parsedQuestions.length > 1,

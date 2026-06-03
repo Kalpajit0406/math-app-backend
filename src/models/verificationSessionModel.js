@@ -33,22 +33,31 @@ const verificationItemSchema = new mongoose.Schema({
 
   // ── Confidence scores ─────────────────────────────────────────────────────
   confidenceScores: {
-    ocrConfidence:        { type: Number, default: null },
-    parserConfidence:     { type: Number, default: null },
-    layoutConfidence:     { type: Number, default: null },
-    sectionConfidence:    { type: Number, default: null },
-    structuralConfidence: { type: Number, default: null },
-    composite:            { type: Number, default: null },
-    rating:               { type: String, enum: ['high', 'medium', 'low'], default: 'medium' },
+    ocrConfidence:             { type: Number, default: null },
+    parserConfidence:          { type: Number, default: null },
+    layoutConfidence:          { type: Number, default: null },
+    sectionConfidence:         { type: Number, default: null },
+    structuralConfidence:      { type: Number, default: null },
+    latexConfidence:           { type: Number, default: null },
+    semanticConfidence:        { type: Number, default: null },
+    optionIntegrityConfidence: { type: Number, default: null },
+    boundaryConfidence:        { type: Number, default: null },
+    composite:                 { type: Number, default: null },
+    rating:                    { type: String, enum: ['high', 'medium', 'low'], default: 'medium' },
   },
 
   // ── Diagnostics ───────────────────────────────────────────────────────────
   rawOcrData: { type: Object, default: {} },
 
   // ── Status ────────────────────────────────────────────────────────────────
-  verified:   { type: Boolean, default: false },
-  verifiedAt: { type: Date },
-  isDeleted:  { type: Boolean, default: false },
+  verified:        { type: Boolean, default: false },
+  verifiedAt:      { type: Date },
+  isDeleted:       { type: Boolean, default: false },
+  extractionState: {
+    type: String,
+    enum: ['ACCEPTED', 'MANUAL_REVIEW', 'QUARANTINED', 'REJECTED'],
+    default: 'ACCEPTED'
+  },
 
   // ── Validation result ────────────────────────────────────────────────────
   validationErrors:   { type: [String], default: [] },
