@@ -424,168 +424,179 @@ class OCRPipeline {
     }
 
     // ── Layer 7: Text normalization & LaTeX sanitization ──────────────────
-    const normalizedText  = OCRNormalizer.normalizeText(rawText);
-    const sanitizedLatex  = LatexSanitizer.sanitize(rawLatex, confidence);
+    const normalizedText = OCRNormalizer.normalizeText(rawText);
+    const sanitizedLatex = LatexSanitizer.sanitize(rawLatex, confidence);
 
-    // ── Layer 8: Question Segmentation ───────────────────────────────────
-    let segments   = QuestionSegmenter.segment(sanitizedLatex);
-    let sourceUsed = 'latex';
+    // ── Layer 8: Section Extraction (BEFORE segmentation) ─────────────────
+    // We extract sections from the best text source first, then segment
+    // each section independently to avoid cross-section number deduplication.
+    const latexSections = PageClassificationEngine.extractSections(sanitizedLatex);
+    const textSections  = PageClassificationEngine.extractSections(normalizedText);
 
-    if (segments.length === 0 || (segments.length === 1 && !segments[0].number)) {
-      const textSegments = QuestionSegmenter.segment(normalizedText);
-      if (textSegments.length > 0) {
-        segments   = textSegments;
-        sourceUsed = 'rawText';
-      }
-    }
+    // Choose the source with more (or more diverse) sections
+    const useSections = latexSections.length >= textSections.length ? latexSections : textSections;
+    const useText     = latexSections.length >= textSections.length ? sanitizedLatex  : normalizedText;
+    let   sourceUsed  = latexSections.length >= textSections.length ? 'latex'         : 'rawText';
 
-    // ── Layer 9: Section Extraction ──────────────────────────────────────
-    const baseText = sourceUsed === 'latex' ? sanitizedLatex : normalizedText;
-    const sections = PageClassificationEngine.extractSections(baseText);
+    console.log(`[OCRPipeline] Sections detected: ${useSections.length}`, useSections.map(s => `"${s.title}" → ${s.parserType}`));
 
-    console.log(`[OCRPipeline] Sections detected: ${sections.length}`, sections.map(s => `"${s.title}" → ${s.parserType}`));
+    // ── Layer 9: Build section text slices ────────────────────────────────
+    // For each section, extract the text slice that belongs to it.
+    // This ensures QuestionSegmenter sees ONLY one section at a time.
+    const sectionSlices = useSections.map((sec, i) => {
+      const nextSec  = useSections[i + 1];
+      const start    = sec.startIndex;
+      const end      = nextSec ? nextSec.startIndex : useText.length;
+      const sliceRaw = useText.substring(start, end);
 
-    // ── Layer 10: Per-segment routing & parsing ───────────────────────────
+      // Remove the section heading line itself from the slice (to avoid header contamination) unless it is Default
+      const sliceClean = sec.title === 'Default' ? sliceRaw.trim() : sliceRaw.replace(/^[^\n]*\n/, '').trim();
+
+      return {
+        title:      sec.title,
+        parserType: sec.parserType,
+        text:       sliceClean,
+      };
+    });
+
+    // ── Layer 10: Per-section segmentation and routing ────────────────────
     const parsedQuestions = [];
-    const seenNumbers     = new Set();
-    let currentParserState = {
-      sectionTitle: sections[0].title,
-      parserType:   sections[0].parserType,
-    };
+    let   globalOrder     = 0;
 
-    let origSearchIndex = 0;
+    for (const section of sectionSlices) {
 
-    for (let idx = 0; idx < segments.length; idx++) {
-      const seg = segments[idx];
-      if (!seg.text || !seg.text.trim()) continue;
-
-      // Locate segment offset in base text
-      let segmentOffset = baseText.indexOf(seg.text, origSearchIndex);
-      if (segmentOffset === -1) {
-        segmentOffset = baseText.indexOf(seg.text.substring(0, Math.min(20, seg.text.length)));
-      }
-      if (segmentOffset !== -1) origSearchIndex = segmentOffset + seg.text.length;
-
-      // Determine active section
-      const activeSection = PageClassificationEngine.getActiveSectionAt(sections, segmentOffset);
-
-      // Reset parser state on section transition
-      if (
-        currentParserState.sectionTitle !== activeSection.title ||
-        currentParserState.parserType   !== activeSection.parserType
-      ) {
-        console.log(`[OCRPipeline] Section transition: "${currentParserState.sectionTitle}" → "${activeSection.title}" (${activeSection.parserType}). Resetting seen numbers.`);
-        seenNumbers.clear();
-        currentParserState = {
-          sectionTitle: activeSection.title,
-          parserType:   activeSection.parserType,
-        };
-      }
-
-      // Block-level classification (may override section default)
-      const blockClass = PageClassificationEngine.classifyBlock(seg.text, currentParserState.parserType);
-      const effectiveParserType = blockClass.parserType;
-
-      console.log(`[OCRPipeline] Segment #${idx + 1} (Q${seg.number}): parser=${effectiveParserType}, blockConf=${blockClass.confidence.toFixed(2)}`);
-
-      // ── ROUTE TO PARSER ─────────────────────────────────────────────────
-      const parsedBlock = routeToParser(seg.text, effectiveParserType, confidence);
-
-      // ── PRE-FILTER ──────────────────────────────────────────────────────
-      const questionNum = seg.number || String(idx + 1);
-      const filter = preFilterSegment(parsedBlock.question, questionNum, seenNumbers);
-      if (filter.skip) {
-        console.log(`[OCRPipeline] Pre-filter rejected segment: ${filter.reason}`);
+      // Block answer-key sections entirely
+      if (section.parserType === PARSER_TYPES.ANSWER_KEY) {
+        console.log(`[OCRPipeline] Skipping answer-key section: "${section.title}"`);
         continue;
       }
 
-      // ── SANITIZE ────────────────────────────────────────────────────────
-      const sanitizedQuestion = LatexSanitizer.sanitize(parsedBlock.question, confidence);
-      const sanitizedOptions  = (parsedBlock.options || []).map(o => ({
-        label: o.label,
-        text:  LatexSanitizer.sanitize(o.text, confidence),
-      }));
+      if (!section.text.trim()) continue;
 
-      // ── CONFIDENCE SCORING ──────────────────────────────────────────────
-      const confScore = computeConfidenceScore(confidence, parsedBlock.parserConfidence, parsedBlock);
+      // Segment this section independently (fresh seenNumbers per section)
+      const sectionSeenNumbers = new Set();
+      let sectionSegments = QuestionSegmenter.segment(section.text);
 
-      // ── BUILD ENRICHED OBJECT ───────────────────────────────────────────
-      const enrichedQuestion = {
-        question:     sanitizedQuestion,
-        options:      sanitizedOptions,
-        // Structured data for non-MCQ types
-        columnA:      parsedBlock.columnA || [],
-        columnB:      parsedBlock.columnB || [],
-        matchingChoices: parsedBlock.matchingChoices || [],
-        blanks:       parsedBlock.blanks || [],
-        blankCount:   parsedBlock.blankCount || 0,
-        format:       parsedBlock.format || 'descriptive',
-        questionNumber: questionNum,
-        rawChunk:     seg.text,
-        ocrConfidence: confidence,
-        detectionOrder: idx + 1,
-        verified:     false,
-        // ── CONFIDENCE SCORES ─────────────────────────────────────────
-        confidenceScores: confScore,
-        // ── DIAGNOSTICS ───────────────────────────────────────────────
-        rawOcrData: {
-          sourceUsed,
-          rawText,
-          rawLatex,
-          sanitizedLatex,
-          confidence,
-          chunkText:  seg.text,
-          preprocessing: preprocessInfo ? preprocessInfo.diagnostics : null,
-          preprocessingQuality: preprocessInfo ? preprocessInfo.qualityRating : null,
-          diagnostics: {
-            rawOcr:            seg.text,
-            normalizedOcr:     parsedBlock.question,
-            parserModifications: parsedBlock.format,
-            confidenceScore:   confidence,
-            pageType:          pageClassification.pageType,
-            sectionDetected:   activeSection.title,
-            parserType:        effectiveParserType,
-            blockClassification: blockClass,
-            answerPageDetected:  isAnsKey,
-            // Backward-compat fields
-            tableDetected:     effectiveParserType === PARSER_TYPES.TABLE,
-            fillDetected:      effectiveParserType === PARSER_TYPES.FILL,
-          },
-        },
-      };
+      // Fallback: if no segments found, try whole section as one segment
+      if (sectionSegments.length === 0 && section.text.trim().length > 10) {
+        sectionSegments = [{
+          text:    section.text.trim(),
+          number:  null,
+          startIndex: 0,
+          endIndex:   section.text.length,
+          rawHeader: '',
+        }];
+      }
 
-      // ── STRUCTURAL VALIDATION ──────────────────────────────────────────
-      const validationResult = QuestionValidator.validate(enrichedQuestion);
-      enrichedQuestion.validation = validationResult;
+      for (let idx = 0; idx < sectionSegments.length; idx++) {
+        const seg = sectionSegments[idx];
+        if (!seg.text || !seg.text.trim()) continue;
 
-      if (!validationResult.isValid) {
-        console.log(`[OCRPipeline] Validation FAILED for Q${questionNum}:`, validationResult.errors);
-        // Low-confidence quarantine: attach but mark
-        if (confScore.composite < 0.50) {
-          console.log(`[OCRPipeline] Low composite confidence (${confScore.composite.toFixed(2)}) — quarantining.`);
-          enrichedQuestion.quarantined = true;
-          enrichedQuestion.quarantineReasons = validationResult.errors;
-          // Do not push to queue
+        // Determine effective parser type — block-level may override section
+        const blockClass = PageClassificationEngine.classifyBlock(seg.text, section.parserType);
+
+        // ANSWER_KEY override at block level — skip individual blocks too
+        if (blockClass.parserType === PARSER_TYPES.ANSWER_KEY) {
+          console.log(`[OCRPipeline] Block-level answer key detected — skipping.`);
           continue;
         }
-        continue;
+
+        const effectiveParserType = blockClass.parserType;
+
+        console.log(`[OCRPipeline] [${section.title}] Segment #${idx + 1} (Q${seg.number}): parser=${effectiveParserType}, blockConf=${blockClass.confidence.toFixed(2)}`);
+
+        // ── ROUTE TO PARSER ───────────────────────────────────────────────
+        const parsedBlock = routeToParser(seg.text, effectiveParserType, confidence);
+
+        // ── PRE-FILTER ────────────────────────────────────────────────────
+        const questionNum = seg.number || String(idx + 1);
+        const filter = preFilterSegment(parsedBlock.question, questionNum, sectionSeenNumbers);
+        if (filter.skip) {
+          console.log(`[OCRPipeline] Pre-filter rejected segment: ${filter.reason}`);
+          continue;
+        }
+
+        // ── SANITIZE ──────────────────────────────────────────────────────
+        const sanitizedQuestion = LatexSanitizer.sanitize(parsedBlock.question, confidence);
+        const sanitizedOptions  = (parsedBlock.options || []).map(o => ({
+          label: o.label,
+          text:  LatexSanitizer.sanitize(o.text, confidence),
+        }));
+
+        // ── CONFIDENCE SCORING ────────────────────────────────────────────
+        const confScore = computeConfidenceScore(confidence, parsedBlock.parserConfidence, parsedBlock);
+
+        // ── BUILD ENRICHED OBJECT ─────────────────────────────────────────
+        globalOrder++;
+        const enrichedQuestion = {
+          question:        sanitizedQuestion,
+          options:         sanitizedOptions,
+          columnA:         parsedBlock.columnA || [],
+          columnB:         parsedBlock.columnB || [],
+          matchingChoices: parsedBlock.matchingChoices || [],
+          blanks:          parsedBlock.blanks || [],
+          blankCount:      parsedBlock.blankCount || 0,
+          format:          parsedBlock.format || 'descriptive',
+          questionNumber:  questionNum,
+          rawChunk:        seg.text,
+          ocrConfidence:   confidence,
+          detectionOrder:  globalOrder,
+          verified:        false,
+          confidenceScores: confScore,
+          rawOcrData: {
+            sourceUsed,
+            rawText,
+            rawLatex,
+            sanitizedLatex,
+            confidence,
+            chunkText:    seg.text,
+            preprocessing: preprocessInfo ? preprocessInfo.diagnostics : null,
+            preprocessingQuality: preprocessInfo ? preprocessInfo.qualityRating : null,
+            diagnostics: {
+              rawOcr:              seg.text,
+              normalizedOcr:       parsedBlock.question,
+              parserModifications: parsedBlock.format,
+              confidenceScore:     confidence,
+              pageType:            pageClassification.pageType,
+              sectionDetected:     section.title,
+              parserType:          effectiveParserType,
+              blockClassification: blockClass,
+              answerPageDetected:  isAnsKey,
+              tableDetected:       effectiveParserType === PARSER_TYPES.TABLE,
+              fillDetected:        effectiveParserType === PARSER_TYPES.FILL,
+            },
+          },
+        };
+
+        // ── STRUCTURAL VALIDATION ──────────────────────────────────────────
+        const validationResult = QuestionValidator.validate(enrichedQuestion);
+        enrichedQuestion.validation = validationResult;
+
+        if (!validationResult.isValid) {
+          console.log(`[OCRPipeline] Validation FAILED for Q${questionNum}:`, validationResult.errors);
+          if (confScore.composite < 0.50) {
+            enrichedQuestion.quarantined = true;
+            enrichedQuestion.quarantineReasons = validationResult.errors;
+          }
+          continue;
+        }
+
+        if (validationResult.warnings.length > 0) {
+          console.warn(`[OCRPipeline] Warnings for Q${questionNum}:`, validationResult.warnings);
+        }
+
+        // ── PREVIEW ────────────────────────────────────────────────────────
+        const previewData = PreviewRenderer.prepareQuestionPreview({
+          questionText:   enrichedQuestion.question,
+          options:        enrichedQuestion.options,
+          questionNumber: enrichedQuestion.questionNumber,
+          detectionOrder: enrichedQuestion.detectionOrder,
+        });
+        if (previewData) enrichedQuestion.preview = previewData;
+
+        sectionSeenNumbers.add(questionNum);
+        parsedQuestions.push(enrichedQuestion);
       }
-
-      if (validationResult.warnings.length > 0) {
-        console.warn(`[OCRPipeline] Warnings for Q${questionNum}:`, validationResult.warnings);
-      }
-
-      // ── PREVIEW ────────────────────────────────────────────────────────
-      const previewData = PreviewRenderer.prepareQuestionPreview({
-        questionText:   enrichedQuestion.question,
-        options:        enrichedQuestion.options,
-        questionNumber: enrichedQuestion.questionNumber,
-        detectionOrder: enrichedQuestion.detectionOrder,
-      });
-      if (previewData) enrichedQuestion.preview = previewData;
-
-      seenNumbers.add(questionNum);
-      parsedQuestions.push(enrichedQuestion);
     }
 
     // ── Layer 11: Pipeline-level quality validation ───────────────────────
@@ -595,7 +606,7 @@ class OCRPipeline {
       questionsDetected: parsedQuestions.length,
       sourceUsed,
       pageType: pageClassification.pageType,
-      sections: sections.length,
+      sections: useSections.length,
       confidence: pipelineValidation.confidence,
       qualityRating: pipelineValidation.rating,
     });
@@ -608,7 +619,7 @@ class OCRPipeline {
       qualityRating: pipelineValidation.rating,
       isValid:      pipelineValidation.isValid,
       pageType:     pageClassification.pageType,
-      sections:     sections.map(s => ({ title: s.title, parserType: s.parserType })),
+      sections:     useSections.map(s => ({ title: s.title, parserType: s.parserType })),
       detectionQuality: {
         source:            sourceUsed,
         multipleDetected:  parsedQuestions.length > 1,

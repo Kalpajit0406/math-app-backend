@@ -58,7 +58,7 @@ class QuestionSegmenter {
     // 3. "12. Evaluate ..." or "12) Evaluate ..." (number followed by delimiter and meaningful text)
     // 4. Bengali: "প্রশ্ন 12" or "প্র. 12" (Bengali prefix with English/Bengali digits)
     const headerPatterns = [
-      /^(?:Question|Q|No\.?|প্রশ্ন|প্র\.?)\s*[:\-]?\s*(\d+)\s*(.+)$/i,
+      /^(?:Question|Q\.?|No\.?|প্রশ্ন|প্র\.?)\s*[:\-]?\s*(\d+)\s*(.+)$/i,
       /^Question\s*(\d+)\s*[:\-]?\s*of\s*\d+\s*(.+)?$/i,
       /^([0-9]{1,3})[\.)\-:]\s+(\S.+)$/,
     ];
@@ -127,18 +127,7 @@ class QuestionSegmenter {
     // ── PASS 1: LOOKAHEAD PRE-SPLIT ──────────────────────────────────────────
     // Split at any position where a question number header starts, even if
     // it appears mid-line (e.g. after a closing "$" in Mathpix inline output).
-    //
-    // Pattern breakdown:
-    //   (?<![\d])      lookbehind: NOT preceded by a digit
-    //                  (prevents splitting INSIDE "11." at position 1)
-    //   (?=            lookahead (zero-width – keeps delimiter in next chunk)
-    //     \n?\s*       optional newline + whitespace
-    //     \d{1,3}      1–3 digit question number
-    //     [\.\)\-:]    followed by . ) - or :
-    //     \s+          at least one space (distinguishes "12. Q..." from "12.5")
-    //     (?!\d)       NOT another digit (avoids splitting on decimal numbers)
-    //   )
-    const lookaheadPattern = /(?<![a-zA-Z\d])(?=\n?\s*\d{1,3}[\.\)\-:]\s+(?!\d))/;
+    const lookaheadPattern = /(?:\n|[.?!$]\s+|(?<=\$))(?=(?:(?:\b(?:Question|No\.)\s+|\bQ\.?\s*|(?:প্রশ্ন|প্র\.?)\s*)\d{1,3}[\.\)\-:]?\s+|\d{1,3}[\.\)\-:]\s+)(?!\d))/gi;
     const rawBlocks = filteredText.split(lookaheadPattern);
 
     // ── PASS 2: LINE-BY-LINE HEADER EXTRACTION PER BLOCK ────────────────────

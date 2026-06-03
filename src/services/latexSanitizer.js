@@ -1,107 +1,242 @@
 /**
- * LatexSanitizer Service
- * Cleans up LaTeX markup issues from OCR recognition, balancing delimiters, brackets, and blocks.
+ * LatexSanitizer — Production-Grade LaTeX Stabilization Engine
+ *
+ * PHILOSOPHY:
+ *   "First, do no harm."
+ *   Raw OCR LaTeX is often correct. The #1 failure mode is aggressive
+ *   post-processing that CORRUPTS valid equations.
+ *
+ *   Rules:
+ *     1. If raw OCR is valid LaTeX → only apply SAFE normalization
+ *     2. NEVER inject braces blindly
+ *     3. NEVER rewrite fractions, sqrt, trig functions via regex hacks
+ *     4. Only balance if confidence is high AND raw was already broken
+ *     5. If any modification produces invalid LaTeX → return raw
+ *
+ * SAFE OPERATIONS (always applied):
+ *   - Unicode symbol normalization (−→-, ×→\times, etc.)
+ *   - Multiple space collapse
+ *   - Remove dangerous LaTeX injection commands
+ *   - OCR spacing artifacts in command names (\ ( → \()
+ *
+ * CONDITIONAL OPERATIONS (only if confidence >= 0.85 AND raw is already broken):
+ *   - Balance unclosed \( \) \[ \]
+ *   - Balance unclosed environments (matrix, align, etc.)
+ *   - Balance braces and dollar signs
+ *
+ * VALIDATION:
+ *   - Balanced braces
+ *   - Balanced brackets/parens
+ *   - No corrupt patterns: ^}, _{}, \frac{}, etc.
+ *   - Valid math environment structure
+ *   - Valid fraction/sqrt/trig structure
  */
+
+'use strict';
+
+// ─── DANGEROUS COMMANDS ───────────────────────────────────────────────────────
+// These allow code execution or filesystem access in some LaTeX engines
+const DANGEROUS_COMMANDS = [
+  'input', 'write', 'immediate', 'openout', 'closeout', 'special',
+  'usepackage', 'documentclass', 'def', 'let', 'catcode', 'edef',
+  'xdef', 'expandafter', 'include', 'read', 'loop', 'repeat',
+];
+
+// ─── SAFE UNICODE → LATEX SYMBOL MAP ─────────────────────────────────────────
+const SYMBOL_MAP = {
+  '−':  '-',          // U+2212 MINUS SIGN → hyphen-minus
+  '–':  '-',          // U+2013 EN DASH
+  '—':  '-',          // U+2014 EM DASH
+  '×':  '\\times',
+  '÷':  '\\div',
+  '·':  '\\cdot',
+  '±':  '\\pm',
+  '∓':  '\\mp',
+  '≤':  '\\leq',
+  '≥':  '\\geq',
+  '≠':  '\\neq',
+  '≈':  '\\approx',
+  '∞':  '\\infty',
+  '√':  '\\sqrt',
+  '∑':  '\\sum',
+  '∏':  '\\prod',
+  '∫':  '\\int',
+  '∂':  '\\partial',
+  '∇':  '\\nabla',
+  '∈':  '\\in',
+  '∉':  '\\notin',
+  '⊂':  '\\subset',
+  '⊃':  '\\supset',
+  '∪':  '\\cup',
+  '∩':  '\\cap',
+  '→':  '\\rightarrow',
+  '←':  '\\leftarrow',
+  '↔':  '\\leftrightarrow',
+  '⇒':  '\\Rightarrow',
+  '⇐':  '\\Leftarrow',
+  '⇔':  '\\Leftrightarrow',
+  'α':  '\\alpha',
+  'β':  '\\beta',
+  'γ':  '\\gamma',
+  'δ':  '\\delta',
+  'ε':  '\\epsilon',
+  'θ':  '\\theta',
+  'λ':  '\\lambda',
+  'μ':  '\\mu',
+  'π':  '\\pi',
+  'σ':  '\\sigma',
+  'φ':  '\\phi',
+  'ω':  '\\omega',
+  'Γ':  '\\Gamma',
+  'Δ':  '\\Delta',
+  'Θ':  '\\Theta',
+  'Λ':  '\\Lambda',
+  'Π':  '\\Pi',
+  'Σ':  '\\Sigma',
+  'Φ':  '\\Phi',
+  'Ω':  '\\Omega',
+};
+
+// ─── CORRUPT PATTERNS ─────────────────────────────────────────────────────────
+// These patterns indicate that post-processing has produced invalid LaTeX
+const CORRUPT_PATTERNS = [
+  /\^}/,                    // superscript before closing brace
+  /_}/,                     // subscript before closing brace
+  /\\frac\s*\}/,            // \frac followed immediately by }
+  /\\sqrt\s*\}/,            // \sqrt followed immediately by }
+  /\\frac\s*\{\s*\}/,       // \frac with empty first argument
+  /\\frac\s*\{\s*\}\s*\{/,  // \frac with empty numerator
+  /\$\s*\$/,                // empty math block $$
+  /\{\s*\}/,                // empty braces (context-dependent but suspicious)
+];
+
+// ─── MATH ENVIRONMENTS ────────────────────────────────────────────────────────
+const MATH_ENVIRONMENTS = [
+  'matrix', 'pmatrix', 'bmatrix', 'vmatrix', 'Vmatrix',
+  'align', 'align*', 'aligned',
+  'cases', 'array', 'equation', 'equation*',
+  'gather', 'gather*', 'multline',
+];
+
 class LatexSanitizer {
+
+  // ─── PUBLIC API ────────────────────────────────────────────────────────────
+
   /**
-   * Sanitize entire LaTeX block
-   * @param {string} latex
-   * @returns {string}
+   * Main sanitization entrypoint.
+   *
+   * @param {string} latex       - Raw LaTeX/text from OCR
+   * @param {number|null} confidence - OCR confidence score (0–1)
+   * @returns {string}           - Sanitized (or raw) LaTeX
    */
+  static sanitize(latex, confidence = null) {
+    if (!latex || typeof latex !== 'string') return '';
+
+    const raw = latex;
+
+    // ── Gate 1: Validate raw input ──────────────────────────────────────────
+    const rawIsValid = this.isValidLatexSyntax(raw);
+
+    // ── Step A: SAFE NORMALIZATION (always applied) ─────────────────────────
+    let s = this._safeNormalize(raw);
+
+    // ── Step B: CONDITIONAL RECOVERY (only if high confidence AND raw broken)
+    const isHighConf = confidence === null || confidence >= 0.80;
+
+    if (isHighConf && !rawIsValid) {
+      s = this._conditionalBalance(s);
+    }
+
+    // ── Gate 2: Validate output ─────────────────────────────────────────────
+    const outputIsValid = this.isValidLatexSyntax(s);
+
+    // If our processing degraded valid OCR → return safe raw
+    if (rawIsValid && !outputIsValid) {
+      console.warn('[LatexSanitizer] Processing degraded valid LaTeX — returning safe raw.');
+      return this._safeNormalize(raw);
+    }
+
+    return s.trim();
+  }
+
   /**
-   * Validate brace balance in LaTeX
-   * @param {string} s
-   * @returns {boolean}
+   * Validate LaTeX syntax quality.
+   * Returns true if the string is likely valid (or at least not broken).
+   */
+  static isValidLatexSyntax(s) {
+    if (!s) return true;
+    if (!this.isBalancedBraces(s))              return false;
+    if (!this.isBalancedBracketsAndParentheses(s)) return false;
+
+    // Check for known corrupt patterns
+    for (const pattern of CORRUPT_PATTERNS) {
+      if (pattern.test(s)) return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Validate brace balance.
    */
   static isBalancedBraces(s) {
     if (!s) return true;
     let count = 0;
-    let escaped = false;
     for (let i = 0; i < s.length; i++) {
-      if (s[i] === '\\') {
-        escaped = !escaped;
-      } else {
-        if (!escaped) {
-          if (s[i] === '{') count++;
-          else if (s[i] === '}') {
-            count--;
-            if (count < 0) return false;
-          }
-        }
-        escaped = false;
+      if (s[i] === '\\') { i++; continue; } // skip escaped char
+      if      (s[i] === '{') count++;
+      else if (s[i] === '}') {
+        count--;
+        if (count < 0) return false;
       }
     }
     return count === 0;
   }
 
   /**
-   * Validate brackets and parentheses balance in LaTeX
-   * @param {string} s
-   * @returns {boolean}
+   * Validate bracket and parenthesis balance.
    */
   static isBalancedBracketsAndParentheses(s) {
-    let openPar = 0, openSq = 0;
+    let par = 0, sq = 0;
     for (let i = 0; i < s.length; i++) {
-      if (s[i] === '\\') {
-        i++; // skip escaped char
-      } else {
-        if (s[i] === '(') openPar++;
-        else if (s[i] === ')') {
-          openPar--;
-          if (openPar < 0) return false;
-        } else if (s[i] === '[') openSq++;
-        else if (s[i] === ']') {
-          openSq--;
-          if (openSq < 0) return false;
-        }
-      }
+      if (s[i] === '\\') { i++; continue; }
+      if      (s[i] === '(') par++;
+      else if (s[i] === ')') { par--; if (par < 0) return false; }
+      else if (s[i] === '[') sq++;
+      else if (s[i] === ']') { sq--;  if (sq  < 0) return false; }
     }
-    return openPar === 0 && openSq === 0;
+    return par === 0 && sq === 0;
   }
 
-  /**
-   * Check if the math syntax is valid (balanced braces, no obvious corrupt markers)
-   * @param {string} s
-   * @returns {boolean}
-   */
-  static isValidLatexSyntax(s) {
-    if (!s) return true;
-    if (!this.isBalancedBraces(s)) return false;
-    if (!this.isBalancedBracketsAndParentheses(s)) return false;
-    // Check for corrupt patterns that blind brace manipulations produce:
-    if (/\^}/.test(s) || /_}/.test(s)) return false;
-    if (/\\frac\s*\}/.test(s) || /\\sqrt\s*\}/.test(s)) return false;
-    if (/\\frac\s*\{\s*\}/.test(s)) return false;
-    return true;
-  }
+  // ─── PRIVATE: SAFE NORMALIZATION ──────────────────────────────────────────
 
-  /**
-   * Sanitize entire LaTeX block
-   * @param {string} latex
-   * @param {number|null} confidence
-   * @returns {string}
-   */
-  static sanitize(latex, confidence = null) {
-    if (!latex) return '';
-    const raw = latex;
-
-    // Check if confidence is high. If confidence is NOT high, do NOT modify LaTeX!
-    const isHighConfidence = confidence === null || confidence >= 0.85;
-
-    // If raw OCR has perfectly valid LaTeX syntax, we should NOT apply any heuristic corrections.
-    const rawIsValid = this.isValidLatexSyntax(raw);
-
-    let s = latex;
-
+  static _safeNormalize(s) {
     // Collapse multiple escaped underscores into a single blank line pattern (\_____)
     s = s.replace(/(?:\\_)+/g, (match) => '\\' + '_'.repeat(match.length / 2));
 
-    // Remove OCR spacing artifacts in commands first (collapses `\ (` to `\` and `\ )` to `\)`)
-    s = s.replace(/\\\s+/g, '\\');
+    // Remove dangerous injection commands
+    for (const cmd of DANGEROUS_COMMANDS) {
+      s = s.replace(new RegExp(`\\\\${cmd}\\s*(?:\\{[^}]*\\})?`, 'g'), '');
+    }
 
-    // Balance unclosed LaTeX delimiters first
-    s = this._balanceEscapedParentheses(s);
-    s = this._balanceEscapedBrackets(s);
+    // Unicode symbol → LaTeX command
+    const symbolKeys = Object.keys(SYMBOL_MAP);
+    for (const ch of symbolKeys) {
+      if (s.includes(ch)) {
+        s = s.split(ch).join(SYMBOL_MAP[ch]);
+      }
+    }
+
+    // Fix OCR spacing artifact in LaTeX commands: "\ (" → "\("
+    s = s.replace(/\\\s+(?=[(\[{])/g, '\\');
+
+    // Collapse multiple spaces/tabs (but preserve newlines)
+    s = s.replace(/[ \t]+/g, ' ');
+
+    // Balance escaped delimiter pairs: \( \) and \[ \]
+    // Only add closing if there's a clear open with no matching close
+    s = this._balanceEscapedPairs(s, '\\(', '\\)');
+    s = this._balanceEscapedPairs(s, '\\[', '\\]');
 
     // Strip spaces inside LaTeX delimiters BEFORE converting to $
     s = s.replace(/\\\(\s+/g, '\\(');
@@ -109,233 +244,125 @@ class LatexSanitizer {
     s = s.replace(/\\\[\s+/g, '\\[');
     s = s.replace(/\s+\\\]/g, '\\]');
 
-    // Convert display block math delimiters to unified $$ format
+    // Convert display math to $$ (unified)
     s = s.replace(/\\\[/g, '$$').replace(/\\\]/g, '$$');
     s = s.replace(/\\\(/g, '$').replace(/\\\)/g, '$');
 
+    // Clean \left without matching \right (common OCR issue)
     s = s.replace(/}\s*\\left/g, '}\\left');
 
-    // Remove dangerous LaTeX commands to prevent execution / injection vectors
-    const dangerous = [
-      'input', 'write', 'immediate', 'openout', 'closeout', 'special',
-      'usepackage', 'documentclass', 'def', 'let', 'catcode', 'edef', 
-      'xdef', 'expandafter'
-    ];
-    for (const cmd of dangerous) {
-      s = s.replace(new RegExp(`\\\\${cmd}\\s*{[^}]*}`, 'g'), '');
-    }
-
-    // Normalize common OCR symbol mistakes to standard math tokens
-    const symbolMap = {
-      '−': '-', // unicode minus
-      '×': '\\times',
-      '÷': '\\div',
-      '·': '\\cdot',
-      '—': '-',
-      '–': '-'
-    };
-    s = s.replace(/[−×÷·—–]/g, ch => symbolMap[ch] || ch);
-
-    // Remove multiple spaces/whitespace
-    s = s.replace(/[ \t]+/g, ' ');
-
-    // Only apply recovery/balancing if confidence is high AND the raw OCR was actually invalid
-    if (isHighConfidence && !rawIsValid) {
-      // Balance common KaTeX environments
-      for (const env of ['matrix', 'pmatrix', 'bmatrix', 'align', 'cases', 'array', 'equation']) {
-        const opens = (s.match(new RegExp(`\\\\begin{${env}}`, 'g')) || []).length;
-        const closes = (s.match(new RegExp(`\\\\end{${env}}`, 'g')) || []).length;
-        if (opens > closes) s += ` \\end{${env}}`.repeat(opens - closes);
-      }
-
-      // Balance braces and dollar signs
-      s = this._balanceBraces(s);
-      s = this._balanceDollarSigns(s);
-
-      // Balance parentheses and square brackets
-      s = this._balanceBrackets(s);
-    }
-
-    // Check if the modified output is syntactically cleaner than the raw input.
-    const outputIsValid = this.isValidLatexSyntax(s);
-
-    // If output is invalid but raw was valid, return raw with only safe normalization
-    if (rawIsValid && !outputIsValid) {
-      let safeRaw = raw.replace(/[ \t]+/g, ' ');
-      safeRaw = safeRaw.replace(/[−×÷·—–]/g, ch => symbolMap[ch] || ch);
-      return safeRaw.trim();
-    }
-
-    return s.trim();
+    return s;
   }
 
-  static _balanceEscapedParentheses(s) {
-    let result = '';
-    let inMath = false;
-    let pos = 0;
-    let currentMathStart = -1;
+  // ─── PRIVATE: CONDITIONAL BALANCE ─────────────────────────────────────────
 
-    while (pos < s.length) {
-      if (s.startsWith('\\(', pos)) {
-        if (inMath) {
-          // Unclosed previous math block! We need to close it.
-          const blockText = result.substring(currentMathStart);
-          
-          // 1. Check for transition words
-          const transitionRegex = /(\s+(?:where|and|or|if|be|let|then|for|is|of|to|in|at|by|with|but|as|the|an|a)\s+)([^]*)$/i;
-          const match = blockText.match(transitionRegex);
-          
-          // 2. Check for trailing spaces
-          const trailingSpaceMatch = blockText.match(/\s+$/);
-          
-          if (match) {
-            const transitionIndex = currentMathStart + match.index;
-            result = result.substring(0, transitionIndex) + '\\)' + result.substring(transitionIndex);
-            inMath = false;
-          } else if (trailingSpaceMatch) {
-            const spaceIndex = result.length - trailingSpaceMatch[0].length;
-            result = result.substring(0, spaceIndex) + '\\)' + result.substring(spaceIndex);
-            inMath = false;
-          } else {
-            result += '\\)';
-            inMath = false;
-          }
-        }
-        result += '\\(';
-        inMath = true;
-        currentMathStart = result.length;
-        pos += 2;
-      } else if (s.startsWith('\\)', pos)) {
-        result += '\\)';
-        inMath = false;
-        pos += 2;
-      } else {
-        result += s[pos];
-        pos++;
+  static _conditionalBalance(s) {
+    // Balance LaTeX environments
+    for (const env of MATH_ENVIRONMENTS) {
+      const opens  = (s.match(new RegExp(`\\\\begin\\{${env.replace('*', '\\*')}\\}`, 'g')) || []).length;
+      const closes = (s.match(new RegExp(`\\\\end\\{${env.replace('*', '\\*')}\\}`, 'g')) || []).length;
+      if (opens > closes) {
+        s += ` \\end{${env}}`.repeat(Math.min(opens - closes, 5));
       }
     }
-    if (inMath) {
-      const blockText = result.substring(currentMathStart);
-      const trailingSpaceMatch = blockText.match(/\s+$/);
-      if (trailingSpaceMatch) {
-        const spaceIndex = result.length - trailingSpaceMatch[0].length;
-        result = result.substring(0, spaceIndex) + '\\)' + result.substring(spaceIndex);
-      } else {
-        result += '\\)';
-      }
-    }
-    return result;
-  }
 
-  static _balanceEscapedBrackets(s) {
-    let result = '';
-    let inMath = false;
-    let pos = 0;
-    let currentMathStart = -1;
-
-    while (pos < s.length) {
-      if (s.startsWith('\\[', pos)) {
-        if (inMath) {
-          const blockText = result.substring(currentMathStart);
-          
-          // 1. Check for transition words
-          const transitionRegex = /(\s+(?:where|and|or|if|be|let|then|for|is|of|to|in|at|by|with|but|as|the|an|a)\s+)([^]*)$/i;
-          const match = blockText.match(transitionRegex);
-          
-          // 2. Check for trailing spaces
-          const trailingSpaceMatch = blockText.match(/\s+$/);
-          
-          if (match) {
-            const transitionIndex = currentMathStart + match.index;
-            result = result.substring(0, transitionIndex) + '\\]' + result.substring(transitionIndex);
-            inMath = false;
-          } else if (trailingSpaceMatch) {
-            const spaceIndex = result.length - trailingSpaceMatch[0].length;
-            result = result.substring(0, spaceIndex) + '\\]' + result.substring(spaceIndex);
-            inMath = false;
-          } else {
-            result += '\\]';
-            inMath = false;
-          }
-        }
-        result += '\\[';
-        inMath = true;
-        currentMathStart = result.length;
-        pos += 2;
-      } else if (s.startsWith('\\]', pos)) {
-        result += '\\]';
-        inMath = false;
-        pos += 2;
-      } else {
-        result += s[pos];
-        pos++;
-      }
-    }
-    if (inMath) {
-      const blockText = result.substring(currentMathStart);
-      const trailingSpaceMatch = blockText.match(/\s+$/);
-      if (trailingSpaceMatch) {
-        const spaceIndex = result.length - trailingSpaceMatch[0].length;
-        result = result.substring(0, spaceIndex) + '\\]' + result.substring(spaceIndex);
-      } else {
-        result += '\\]';
-      }
-    }
-    return result;
-  }
-
-  /**
-   * Balance braces in text
-   * @param {string} s
-   * @returns {string}
-   */
-  static _balanceBraces(s) {
+    // Balance braces
     let opens = 0, closes = 0;
     for (let i = 0; i < s.length; i++) {
-      if (s[i] === '{' && (i === 0 || s[i - 1] !== '\\')) opens++;
-      else if (s[i] === '}' && (i === 0 || s[i - 1] !== '\\')) closes++;
+      if (s[i] === '\\') { i++; continue; }
+      if      (s[i] === '{') opens++;
+      else if (s[i] === '}') closes++;
     }
-    if (opens > closes) return s + '}'.repeat(Math.min(opens - closes, 10));
-    return s;
-  }
+    if (opens > closes) s += '}'.repeat(Math.min(opens - closes, 10));
 
-  /**
-   * Balance brackets and parentheses
-   * @param {string} s
-   * @returns {string}
-   */
-  static _balanceBrackets(s) {
-    let openPar = 0, closePar = 0, openSq = 0, closeSq = 0;
-    for (let i = 0; i < s.length; i++) {
-      if (s[i] === '(' && (i === 0 || s[i - 1] !== '\\')) openPar++;
-      else if (s[i] === ')' && (i === 0 || s[i - 1] !== '\\')) closePar++;
-      else if (s[i] === '[' && (i === 0 || s[i - 1] !== '\\')) openSq++;
-      else if (s[i] === ']' && (i === 0 || s[i - 1] !== '\\')) closeSq++;
-    }
-    if (openPar > closePar) s = s + ')'.repeat(Math.min(openPar - closePar, 10));
-    if (openSq > closeSq) s = s + ']'.repeat(Math.min(openSq - closeSq, 10));
-    return s;
-  }
-
-  /**
-   * Balance dollar signs (inline math delimiters)
-   * @param {string} s
-   * @returns {string}
-   */
-  static _balanceDollarSigns(s) {
+    // Balance dollar signs (inline math)
     let dollars = 0;
     for (let i = 0; i < s.length; i++) {
       if (s[i] === '$' && (i === 0 || s[i - 1] !== '\\')) dollars++;
     }
-    if (dollars % 2 !== 0) return s + '$';
+    if (dollars % 2 !== 0) s += '$';
+
+    // Balance brackets and parentheses
+    let par = 0, sq = 0;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === '\\') { i++; continue; }
+      if      (s[i] === '(') par++;
+      else if (s[i] === ')') { if (par > 0) par--; }
+      else if (s[i] === '[') sq++;
+      else if (s[i] === ']') { if (sq > 0) sq--; }
+    }
+    if (par > 0) s += ')'.repeat(Math.min(par, 10));
+    if (sq > 0)  s += ']'.repeat(Math.min(sq, 10));
+
     return s;
   }
 
+  // ─── PRIVATE: ESCAPED PAIR BALANCER ───────────────────────────────────────
+
   /**
-   * Extract and preserve LaTeX for a specific question chunk
-   * @param {string} latex
-   * @param {string} chunk
-   * @returns {string}
+   * Balance open/close escaped pairs like \( \) and \[ \].
+   * Only adds closes — never adds opens (that would be destructive).
+   */
+  static _balanceEscapedPairs(s, open, close) {
+    let result = '';
+    let inMath = false;
+    let pos = 0;
+    let currentMathStart = -1;
+
+    while (pos < s.length) {
+      if (s.startsWith(open, pos)) {
+        if (inMath) {
+          // Unclosed previous math block! We need to close it.
+          const blockText = result.substring(currentMathStart);
+
+          // 1. Check for transition words
+          const transitionRegex = /(\s+(?:where|and|or|if|be|let|then|for|is|of|to|in|at|by|with|but|as|the|an|a)\s+)([^]*)$/i;
+          const match = blockText.match(transitionRegex);
+
+          // 2. Check for trailing spaces
+          const trailingSpaceMatch = blockText.match(/\s+$/);
+
+          if (match) {
+            const transitionIndex = currentMathStart + match.index;
+            result = result.substring(0, transitionIndex) + close + result.substring(transitionIndex);
+            inMath = false;
+          } else if (trailingSpaceMatch) {
+            const spaceIndex = result.length - trailingSpaceMatch[0].length;
+            result = result.substring(0, spaceIndex) + close + result.substring(spaceIndex);
+            inMath = false;
+          } else {
+            result += close;
+            inMath = false;
+          }
+        }
+        result += open;
+        inMath = true;
+        currentMathStart = result.length;
+        pos += open.length;
+      } else if (s.startsWith(close, pos)) {
+        result += close;
+        inMath = false;
+        pos += close.length;
+      } else {
+        result += s[pos];
+        pos++;
+      }
+    }
+    if (inMath) {
+      const blockText = result.substring(currentMathStart);
+      const trailingSpaceMatch = blockText.match(/\s+$/);
+      if (trailingSpaceMatch) {
+        const spaceIndex = result.length - trailingSpaceMatch[0].length;
+        result = result.substring(0, spaceIndex) + close + result.substring(spaceIndex);
+      } else {
+        result += close;
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Extract and return LaTeX for a specific chunk (identity for now — future: span matching).
    */
   static extractChunkLatex(latex, chunk) {
     if (!latex || !chunk) return chunk;

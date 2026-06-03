@@ -1,23 +1,76 @@
 const mongoose = require('mongoose');
 
+/**
+ * VerificationItem Schema — Enhanced with full OCR metadata
+ * Stores every field the pipeline produces so teachers can review
+ * the full context of each extracted question.
+ */
 const verificationItemSchema = new mongoose.Schema({
-  questionText: { type: String, required: true },
-  options: [{ type: String }],
+  // ── Core fields ───────────────────────────────────────────────────────────
+  questionText:   { type: String, required: true },
+  options:        [{ type: String }],
   questionNumber: { type: String },
   detectionOrder: { type: Number },
-  rawOcrData: { type: Object },
-  verified: { type: Boolean, default: false },
+
+  // ── Question type / format ────────────────────────────────────────────────
+  format: {
+    type: String,
+    enum: [
+      'mcq', 'line-based', 'inline-mcq', 'structured',
+      'fill_in_blank', 'fill',
+      'column_matching', 'table',
+      'descriptive', 'other'
+    ],
+    default: 'mcq',
+  },
+
+  // ── Structured data for non-MCQ types ────────────────────────────────────
+  columnA:         { type: [Object], default: [] },
+  columnB:         { type: [Object], default: [] },
+  matchingChoices: { type: [String], default: [] },
+  blanks:          { type: [String], default: [] },
+  blankCount:      { type: Number,   default: 0  },
+
+  // ── Confidence scores ─────────────────────────────────────────────────────
+  confidenceScores: {
+    ocrConfidence:    { type: Number, default: null },
+    parserConfidence: { type: Number, default: null },
+    composite:        { type: Number, default: null },
+    rating:           { type: String, enum: ['high', 'medium', 'low'], default: 'medium' },
+  },
+
+  // ── Diagnostics ───────────────────────────────────────────────────────────
+  rawOcrData: { type: Object, default: {} },
+
+  // ── Status ────────────────────────────────────────────────────────────────
+  verified:   { type: Boolean, default: false },
   verifiedAt: { type: Date },
-  isDeleted: { type: Boolean, default: false }
+  isDeleted:  { type: Boolean, default: false },
+
+  // ── Validation result ────────────────────────────────────────────────────
+  validationErrors:   { type: [String], default: [] },
+  validationWarnings: { type: [String], default: [] },
 });
 
 const verificationSessionSchema = new mongoose.Schema({
   sessionId: { type: String, required: true, unique: true, index: true },
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
-  items: [verificationItemSchema],
+  userId:    { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
+  items:     [verificationItemSchema],
+
   currentIndex: { type: Number, default: 0 },
-  expiresAt: { type: Date, required: true, index: { expires: 0 } }, // TTL Index
-  scannedImageUrl: { type: String, default: null }
+  expiresAt:    { type: Date, required: true, index: { expires: 0 } }, // MongoDB TTL index
+
+  scannedImageUrl: { type: String, default: null },
+
+  // Pipeline metadata for the session
+  pipelineMetadata: {
+    pageType:        { type: String, default: 'UNKNOWN_PAGE' },
+    sectionsFound:   { type: Number, default: 0 },
+    totalExtracted:  { type: Number, default: 0 },
+    totalRejected:   { type: Number, default: 0 },
+    sourceUsed:      { type: String, default: 'unknown' },
+    processingTimeMs:{ type: Number, default: 0 },
+  },
 }, { timestamps: true });
 
 module.exports = mongoose.model('VerificationSession', verificationSessionSchema);

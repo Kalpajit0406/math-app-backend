@@ -1,42 +1,89 @@
+/**
+ * VerificationQueueManager — Enhanced with full pipeline metadata
+ *
+ * CHANGES:
+ *   - Preserves format, confidenceScores, columnA/B, blanks, matchingChoices
+ *   - Stores pipeline metadata (pageType, sections, timing, counts)
+ *   - Each item is independently editable without affecting others
+ *   - Failed items are isolated — they don't break the session
+ */
+
+'use strict';
+
 const VerificationSession = require('../models/verificationSessionModel');
 
-/**
- * VerificationQueueManager
- * Persistent MongoDB-backed verification session driver.
- * Ensures teachers' OCR pipelines survive server restarts and support navigation.
- */
 class VerificationQueueManager {
+
   /**
    * Create and store a new verification session.
-   * @param {string} sessionId - Unique session ID
-   * @param {string} userId - ID of the user initiating the session
-   * @param {Array} parsedQuestions - Parsed questions from OCR
-   * @param {number} ttlSeconds - Session expiration time (default 24 hours = 86400)
+   *
+   * @param {string} sessionId
+   * @param {string} userId
+   * @param {Array}  parsedQuestions   - Enriched question objects from OCRPipeline
+   * @param {number} ttlSeconds        - Session TTL (default 24h)
+   * @param {string} scannedImageUrl
+   * @param {object} pipelineMeta      - Optional pipeline metadata
    */
-  static async createSession(sessionId, userId, parsedQuestions, ttlSeconds = 86400, scannedImageUrl = null) {
+  static async createSession(
+    sessionId,
+    userId,
+    parsedQuestions,
+    ttlSeconds = 86400,
+    scannedImageUrl = null,
+    pipelineMeta = {}
+  ) {
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
     const questions = Array.isArray(parsedQuestions) ? parsedQuestions : [];
 
     const items = questions.map((q, idx) => {
-      // Map options array of object {label, text} to simple string array if needed
+      // ── Map options: accept { label, text } objects or plain strings ──────
       let optionsArray = [];
       if (Array.isArray(q.options)) {
-        optionsArray = q.options.map(opt => (typeof opt === 'object' && opt !== null) ? opt.text : opt);
+        optionsArray = q.options.map(opt =>
+          typeof opt === 'object' && opt !== null ? (opt.text || '') : String(opt || '')
+        );
       }
-      
-      // Ensure exactly 4 options
-      while (optionsArray.length < 4) {
-        optionsArray.push('');
-      }
+      while (optionsArray.length < 4) optionsArray.push('');
+
+      // ── Confidence scores ─────────────────────────────────────────────────
+      const confScores = q.confidenceScores || {};
+
+      // ── Validation result ─────────────────────────────────────────────────
+      const validation = q.validation || {};
 
       return {
-        questionText: q.question || 'Question Text',
-        options: optionsArray.slice(0, 4),
-        questionNumber: q.questionNumber || (idx + 1).toString(),
-        detectionOrder: q.detectionOrder || (idx + 1),
+        questionText:    q.question || q.questionText || 'Question Text',
+        options:         optionsArray.slice(0, 4),
+        questionNumber:  q.questionNumber || String(idx + 1),
+        detectionOrder:  q.detectionOrder || (idx + 1),
+
+        // Format/type
+        format:          q.format || 'mcq',
+
+        // Structured data for non-MCQ
+        columnA:         Array.isArray(q.columnA) ? q.columnA : [],
+        columnB:         Array.isArray(q.columnB) ? q.columnB : [],
+        matchingChoices: Array.isArray(q.matchingChoices) ? q.matchingChoices : [],
+        blanks:          Array.isArray(q.blanks) ? q.blanks : [],
+        blankCount:      q.blankCount || 0,
+
+        // Confidence
+        confidenceScores: {
+          ocrConfidence:    confScores.ocrConfidence    ?? q.ocrConfidence ?? null,
+          parserConfidence: confScores.parserConfidence ?? null,
+          composite:        confScores.composite        ?? null,
+          rating:           confScores.rating           ?? 'medium',
+        },
+
+        // Raw OCR diagnostics
         rawOcrData: q.rawOcrData || {},
-        verified: false,
-        isDeleted: false
+
+        // Validation
+        validationErrors:   Array.isArray(validation.errors)   ? validation.errors   : [],
+        validationWarnings: Array.isArray(validation.warnings) ? validation.warnings : [],
+
+        verified:  false,
+        isDeleted: false,
       };
     });
 
@@ -46,216 +93,177 @@ class VerificationQueueManager {
       items,
       currentIndex: 0,
       expiresAt,
-      scannedImageUrl
+      scannedImageUrl,
+      pipelineMetadata: {
+        pageType:         pipelineMeta.pageType         || 'UNKNOWN_PAGE',
+        sectionsFound:    pipelineMeta.sectionsFound    || 0,
+        totalExtracted:   pipelineMeta.totalExtracted   || items.length,
+        totalRejected:    pipelineMeta.totalRejected    || 0,
+        sourceUsed:       pipelineMeta.sourceUsed       || 'unknown',
+        processingTimeMs: pipelineMeta.processingTimeMs || 0,
+      },
     });
 
     return session;
   }
 
-  /**
-   * Retrieve session by ID.
-   * @param {string} sessionId
-   */
+  /** Retrieve session by ID. */
   static async getSession(sessionId) {
     return await VerificationSession.findOne({ sessionId });
   }
 
-  /**
-   * Get all items of the session (excluding deleted ones if specified).
-   * @param {string} sessionId
-   */
+  /** Get all non-deleted items. */
   static async getQueueItems(sessionId) {
     const session = await this.getSession(sessionId);
     if (!session) return [];
     return session.items.filter(item => !item.isDeleted);
   }
 
-  /**
-   * Get current item from the session.
-   * @param {string} sessionId
-   */
+  /** Get current item from session. */
   static async getCurrentQuestion(sessionId) {
     const session = await this.getSession(sessionId);
     if (!session || session.items.length === 0) return null;
     return session.items[session.currentIndex] || null;
   }
 
-  /**
-   * Navigate to next item.
-   * @param {string} sessionId
-   */
+  /** Navigate to next non-deleted item. */
   static async nextQuestion(sessionId) {
     const session = await this.getSession(sessionId);
     if (!session) return null;
-    
-    let nextRawIndex = -1;
+
+    let nextIdx = -1;
     for (let i = session.currentIndex + 1; i < session.items.length; i++) {
-      if (!session.items[i].isDeleted) {
-        nextRawIndex = i;
-        break;
-      }
+      if (!session.items[i].isDeleted) { nextIdx = i; break; }
     }
-    
-    if (nextRawIndex !== -1) {
-      session.currentIndex = nextRawIndex;
+
+    if (nextIdx !== -1) {
+      session.currentIndex = nextIdx;
       await session.save();
     }
     return session.items[session.currentIndex];
   }
 
-  /**
-   * Navigate to previous item.
-   * @param {string} sessionId
-   */
+  /** Navigate to previous non-deleted item. */
   static async prevQuestion(sessionId) {
     const session = await this.getSession(sessionId);
     if (!session) return null;
-    
-    let prevRawIndex = -1;
+
+    let prevIdx = -1;
     for (let i = session.currentIndex - 1; i >= 0; i--) {
-      if (!session.items[i].isDeleted) {
-        prevRawIndex = i;
-        break;
-      }
+      if (!session.items[i].isDeleted) { prevIdx = i; break; }
     }
-    
-    if (prevRawIndex !== -1) {
-      session.currentIndex = prevRawIndex;
+
+    if (prevIdx !== -1) {
+      session.currentIndex = prevIdx;
       await session.save();
     }
     return session.items[session.currentIndex];
   }
 
-  /**
-   * Get session status metrics.
-   * @param {string} sessionId
-   */
+  /** Get session status metrics. */
   static async getStatus(sessionId) {
     const session = await this.getSession(sessionId);
     if (!session) return null;
-    const activeItems = session.items.filter(item => !item.isDeleted);
+
+    const activeItems   = session.items.filter(item => !item.isDeleted);
     const verifiedItems = activeItems.filter(item => item.verified);
-    const expiresSeconds = Math.max(0, Math.round((session.expiresAt.getTime() - Date.now()) / 1000));
     const filteredIndex = this.getFilteredIndex(session, session.currentIndex);
+    const expiresIn     = Math.max(0, Math.round((session.expiresAt.getTime() - Date.now()) / 1000));
 
     return {
-      total: activeItems.length,
+      total:        activeItems.length,
       verifiedCount: verifiedItems.length,
       currentIndex: filteredIndex,
-      currentNumber: session.items[session.currentIndex]?.questionNumber || (filteredIndex + 1).toString(),
+      currentNumber: session.items[session.currentIndex]?.questionNumber || String(filteredIndex + 1),
       hasNext: filteredIndex < activeItems.length - 1,
       hasPrev: filteredIndex > 0,
-      expiresIn: expiresSeconds
+      expiresIn,
+      pipelineMetadata: session.pipelineMetadata || {},
     };
   }
 
-  /**
-   * Mark a question as deleted in the session.
-   * @param {string} sessionId
-   * @param {number} index
-   */
+  /** Mark a question as deleted. */
   static async removeQuestion(sessionId, index) {
     const session = await this.getSession(sessionId);
     if (!session || !session.items[index]) return false;
-    
+
     session.items[index].isDeleted = true;
-    
-    // Adjust current index if it now points to a deleted item or out of bounds
+
     if (session.currentIndex === index) {
-      let nextActive = -1;
+      let next = -1;
       for (let i = index + 1; i < session.items.length; i++) {
-        if (!session.items[i].isDeleted) {
-          nextActive = i;
-          break;
-        }
+        if (!session.items[i].isDeleted) { next = i; break; }
       }
-      
-      if (nextActive !== -1) {
-        session.currentIndex = nextActive;
-      } else {
-        let prevActive = -1;
+      if (next === -1) {
         for (let i = index - 1; i >= 0; i--) {
-          if (!session.items[i].isDeleted) {
-            prevActive = i;
-            break;
-          }
+          if (!session.items[i].isDeleted) { next = i; break; }
         }
-        session.currentIndex = prevActive !== -1 ? prevActive : 0;
       }
+      session.currentIndex = next !== -1 ? next : 0;
     }
-    
+
     await session.save();
     return true;
   }
 
   /**
-   * Update question text and options for a session item.
-   * @param {string} sessionId
-   * @param {number} index
-   * @param {object} updateData - { questionText, options, questionNumber }
+   * Update a question's text, options, and verification status.
+   * Supports both MCQ fields and non-MCQ structured fields.
    */
   static async updateQuestion(sessionId, index, updateData) {
     const session = await this.getSession(sessionId);
     if (!session || !session.items[index]) return null;
 
     const item = session.items[index];
-    if (updateData.questionText !== undefined) item.questionText = updateData.questionText;
+
+    if (updateData.questionText  !== undefined) item.questionText  = updateData.questionText;
     if (updateData.questionNumber !== undefined) item.questionNumber = updateData.questionNumber;
+    if (updateData.format         !== undefined) item.format         = updateData.format;
+
     if (Array.isArray(updateData.options)) {
-      item.options = updateData.options;
-      while (item.options.length < 4) {
-        item.options.push('');
-      }
+      item.options = updateData.options.map(o => (typeof o === 'object' ? o.text : o) || '');
+      while (item.options.length < 4) item.options.push('');
       item.options = item.options.slice(0, 4);
     }
+
+    // Non-MCQ structured updates
+    if (Array.isArray(updateData.columnA))         item.columnA         = updateData.columnA;
+    if (Array.isArray(updateData.columnB))         item.columnB         = updateData.columnB;
+    if (Array.isArray(updateData.matchingChoices)) item.matchingChoices = updateData.matchingChoices;
+    if (Array.isArray(updateData.blanks))          item.blanks          = updateData.blanks;
+    if (updateData.blankCount !== undefined)       item.blankCount      = updateData.blankCount;
+
     if (updateData.verified !== undefined) {
       item.verified = updateData.verified;
-      if (updateData.verified) {
-        item.verifiedAt = new Date();
-      }
+      if (updateData.verified) item.verifiedAt = new Date();
     }
 
     await session.save();
     return item;
   }
 
-  /**
-   * Clear or delete session entirely.
-   * @param {string} sessionId
-   */
+  /** Clear / delete the entire session. */
   static async clearSession(sessionId) {
     await VerificationSession.deleteOne({ sessionId });
   }
 
-  /**
-   * Resolve filtered index (from client view) to raw array index in MongoDB.
-   * @param {object} session
-   * @param {number} filteredIndex
-   */
+  /** Map filtered client index → raw MongoDB array index. */
   static getRawIndex(session, filteredIndex) {
     let count = 0;
     for (let i = 0; i < session.items.length; i++) {
       if (!session.items[i].isDeleted) {
-        if (count === filteredIndex) {
-          return i;
-        }
+        if (count === filteredIndex) return i;
         count++;
       }
     }
     return -1;
   }
 
-  /**
-   * Resolve raw array index in MongoDB to filtered index (from client view).
-   * @param {object} session
-   * @param {number} rawIndex
-   */
+  /** Map raw MongoDB array index → filtered client index. */
   static getFilteredIndex(session, rawIndex) {
     let filteredIndex = 0;
     for (let i = 0; i < Math.min(rawIndex, session.items.length); i++) {
-      if (!session.items[i].isDeleted) {
-        filteredIndex++;
-      }
+      if (!session.items[i].isDeleted) filteredIndex++;
     }
     return filteredIndex;
   }
