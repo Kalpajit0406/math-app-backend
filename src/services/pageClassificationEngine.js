@@ -26,6 +26,7 @@ const PAGE_TYPES = {
   FILL_BLANK_PAGE:   'FILL_BLANK_PAGE',
   COLUMN_MATCH_PAGE: 'COLUMN_MATCH_PAGE',
   ANSWER_KEY_PAGE:   'ANSWER_KEY_PAGE',
+  THEORY_PAGE:       'THEORY_PAGE',
   MIXED_PAGE:        'MIXED_PAGE',
   UNKNOWN_PAGE:      'UNKNOWN_PAGE',
 };
@@ -36,6 +37,7 @@ const PARSER_TYPES = {
   FILL:        'FILL',
   TABLE:       'TABLE',
   ANSWER_KEY:  'ANSWER_KEY',
+  THEORY:      'THEORY',
   DESCRIPTIVE: 'DESCRIPTIVE',
   UNKNOWN:     'UNKNOWN',
 };
@@ -77,6 +79,18 @@ const SECTION_ROUTING_MAP = [
       /key\s*answer/i,
     ],
     parserType: PARSER_TYPES.ANSWER_KEY,
+  },
+  // THEORY
+  {
+    patterns: [
+      /theory/i,
+      /notes/i,
+      /summary/i,
+      /concepts?/i,
+      /key\s*points/i,
+      /introduction/i,
+    ],
+    parserType: PARSER_TYPES.THEORY,
   },
   // MCQ
   {
@@ -178,6 +192,18 @@ class PageClassificationEngine {
         answerKeyLines,
         answerKeyRatio: answerKeyRatio.toFixed(2),
         hasExplicitAnswerHeading,
+      });
+    }
+
+    // 1.5. Theory Page Detection
+    const hasTheoryHeading = matchesAny(text, [/theory/i, /concepts?/i, /key\s*points/i, /introduction/i]);
+    const avgLineLength = lines.length > 0 ? lines.reduce((acc, l) => acc + l.length, 0) / lines.length : 0;
+    const questionHeaderLines = countLines(lines, l => /^(?:Question|Q|No|প্রশ্ন|প্র)\s*[:\-]?\s*(\d+)/i.test(l) || /^\d+[\.\)]\s+/.test(l));
+    if (hasTheoryHeading || (avgLineLength > 65 && mcqOptionLines === 0 && answerKeyLines === 0 && questionHeaderLines < 2)) {
+      return this._buildResult(PAGE_TYPES.THEORY_PAGE, PARSER_TYPES.THEORY, 0.92, {
+        avgLineLength,
+        questionHeaderLines,
+        hasTheoryHeading,
       });
     }
 

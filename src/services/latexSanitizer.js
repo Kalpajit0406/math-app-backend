@@ -257,7 +257,7 @@ class LatexSanitizer {
   // ─── PRIVATE: CONDITIONAL BALANCE ─────────────────────────────────────────
 
   static _conditionalBalance(s) {
-    // Balance LaTeX environments
+    // 1. Balance LaTeX environments
     for (const env of MATH_ENVIRONMENTS) {
       const opens  = (s.match(new RegExp(`\\\\begin\\{${env.replace('*', '\\*')}\\}`, 'g')) || []).length;
       const closes = (s.match(new RegExp(`\\\\end\\{${env.replace('*', '\\*')}\\}`, 'g')) || []).length;
@@ -266,35 +266,99 @@ class LatexSanitizer {
       }
     }
 
+    // 2. Identify math ranges and balance braces, brackets, and parens inside them
+    let output = '';
+    let pos = 0;
+    const len = s.length;
+    let inInline = false;
+    let inDisplay = false;
+    let currentMath = '';
+
+    while (pos < len) {
+      if (s.startsWith('$$', pos)) {
+        if (inDisplay) {
+          output += this._balanceMathSegment(currentMath) + '$$';
+          inDisplay = false;
+          currentMath = '';
+        } else if (inInline) {
+          output += this._balanceMathSegment(currentMath) + '$';
+          inInline = false;
+          output += '$$';
+          inDisplay = true;
+          currentMath = '';
+        } else {
+          output += '$$';
+          inDisplay = true;
+          currentMath = '';
+        }
+        pos += 2;
+      } else if (s.startsWith('$', pos)) {
+        if (inInline) {
+          output += this._balanceMathSegment(currentMath) + '$';
+          inInline = false;
+          currentMath = '';
+        } else if (inDisplay) {
+          output += this._balanceMathSegment(currentMath) + '$$';
+          inDisplay = false;
+          output += '$';
+          inInline = true;
+          currentMath = '';
+        } else {
+          output += '$';
+          inInline = true;
+          currentMath = '';
+        }
+        pos += 1;
+      } else {
+        if (inInline || inDisplay) {
+          currentMath += s[pos];
+        } else {
+          output += s[pos];
+        }
+        pos++;
+      }
+    }
+
+    if (inInline) {
+      output += this._balanceMathSegment(currentMath) + '$';
+    } else if (inDisplay) {
+      output += this._balanceMathSegment(currentMath) + '$$';
+    }
+
+    // Also balance whole string brace structures in case
+    return this._balanceMathSegment(output);
+  }
+
+  static _balanceMathSegment(str) {
+    if (!str) return str;
+    
     // Balance braces
     let opens = 0, closes = 0;
-    for (let i = 0; i < s.length; i++) {
-      if (s[i] === '\\') { i++; continue; }
-      if      (s[i] === '{') opens++;
-      else if (s[i] === '}') closes++;
+    for (let i = 0; i < str.length; i++) {
+      if (str[i] === '\\') { i++; continue; }
+      if      (str[i] === '{') opens++;
+      else if (str[i] === '}') {
+        if (closes < opens) closes++;
+      }
     }
-    if (opens > closes) s += '}'.repeat(Math.min(opens - closes, 10));
-
-    // Balance dollar signs (inline math)
-    let dollars = 0;
-    for (let i = 0; i < s.length; i++) {
-      if (s[i] === '$' && (i === 0 || s[i - 1] !== '\\')) dollars++;
+    let balanced = str;
+    if (opens > closes) {
+      balanced += '}'.repeat(opens - closes);
     }
-    if (dollars % 2 !== 0) s += '$';
 
-    // Balance brackets and parentheses
+    // Balance brackets and parens
     let par = 0, sq = 0;
-    for (let i = 0; i < s.length; i++) {
-      if (s[i] === '\\') { i++; continue; }
-      if      (s[i] === '(') par++;
-      else if (s[i] === ')') { if (par > 0) par--; }
-      else if (s[i] === '[') sq++;
-      else if (s[i] === ']') { if (sq > 0) sq--; }
+    for (let i = 0; i < balanced.length; i++) {
+      if (balanced[i] === '\\') { i++; continue; }
+      if      (balanced[i] === '(') par++;
+      else if (balanced[i] === ')') { if (par > 0) par--; }
+      else if (balanced[i] === '[') sq++;
+      else if (balanced[i] === ']') { if (sq > 0) sq--; }
     }
-    if (par > 0) s += ')'.repeat(Math.min(par, 10));
-    if (sq > 0)  s += ']'.repeat(Math.min(sq, 10));
+    if (par > 0) balanced += ')'.repeat(Math.min(par, 10));
+    if (sq > 0)  balanced += ']'.repeat(Math.min(sq, 10));
 
-    return s;
+    return balanced;
   }
 
   // ─── PRIVATE: ESCAPED PAIR BALANCER ───────────────────────────────────────

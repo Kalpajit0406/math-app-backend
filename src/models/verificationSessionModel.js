@@ -33,10 +33,13 @@ const verificationItemSchema = new mongoose.Schema({
 
   // ── Confidence scores ─────────────────────────────────────────────────────
   confidenceScores: {
-    ocrConfidence:    { type: Number, default: null },
-    parserConfidence: { type: Number, default: null },
-    composite:        { type: Number, default: null },
-    rating:           { type: String, enum: ['high', 'medium', 'low'], default: 'medium' },
+    ocrConfidence:        { type: Number, default: null },
+    parserConfidence:     { type: Number, default: null },
+    layoutConfidence:     { type: Number, default: null },
+    sectionConfidence:    { type: Number, default: null },
+    structuralConfidence: { type: Number, default: null },
+    composite:            { type: Number, default: null },
+    rating:               { type: String, enum: ['high', 'medium', 'low'], default: 'medium' },
   },
 
   // ── Diagnostics ───────────────────────────────────────────────────────────

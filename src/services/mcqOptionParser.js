@@ -61,7 +61,7 @@ const OPT_START = /^[\(\[]?\s*(A|B|C|D|a|b|c|d|i{1,4}|I{1,4}|IV|iv|[ক-ঘ১-�
 const QUESTION_LINE_RE = /^\d{1,3}[\.):]\s+[A-Z\u0980-\u09FF].{5,}/;
 
 // Inline: (A) ... (B) ... — captured as groups
-const INLINE_PAREN = /(?<![A-Za-z0-9\\])\(([ABCDabcdকখগঘ১২৩৪])\)\s*([\s\S]*?)(?=\s*(?<![A-Za-z0-9\\])\([ABCDabcdকখগঘ১২৩৪]\)|$)/g;
+const INLINE_PAREN = /(?<![A-Za-z0-9\\])[\(\[]\s*([ABCDabcdকখগঘ১২৩৪i-ivI-IV]{1,3})\s*[\)\]]\s*([\s\S]*?)(?=\s*(?<![A-Za-z0-9\\])[\(\[]\s*[ABCDabcdকখগঘ১২৩৪i-ivI-IV]{1,3}\s*[\)\]]|$)/g;
 
 // Internal header: looks like the start of a new question (number + text) INSIDE a segment
 // Used to truncate option bleed
@@ -111,6 +111,34 @@ function countFilledOptions(opts) {
   return opts.filter(o => hasContent(o.text)).length;
 }
 
+function getMathRanges(text) {
+  const ranges = [];
+  if (!text) return ranges;
+  const displayMathRegex = /\$\$.*?\$\$/gs;
+  let match;
+  while ((match = displayMathRegex.exec(text)) !== null) {
+    ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+  const bracketMathRegex = /\\\[.*?\\\]/gs;
+  while ((match = bracketMathRegex.exec(text)) !== null) {
+    ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+  const parenMathRegex = /\\\(.*?\\\)/gs;
+  while ((match = parenMathRegex.exec(text)) !== null) {
+    ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+  const inlineMathRegex = /(?<!\$)\$.*?\$(?!\$)/gs;
+  while ((match = inlineMathRegex.exec(text)) !== null) {
+    const start = match.index;
+    const end = match.index + match[0].length;
+    const isOverlapping = ranges.some(r => (start >= r.start && start < r.end) || (end > r.start && end <= r.end));
+    if (!isOverlapping) {
+      ranges.push({ start, end });
+    }
+  }
+  return ranges;
+}
+
 // ─── MAIN CLASS ───────────────────────────────────────────────────────────────
 
 class MCQOptionParser {
@@ -156,9 +184,7 @@ class MCQOptionParser {
   // Handles: (A) first option (B) second option (C) third (D) fourth
 
   static _detectInlineParen(text) {
-    // Flatten to single-line for inline matching
-    const flat = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ');
-
+    const mathRanges = getMathRanges(text);
     const optMap = {};
     let firstMatchIndex = -1;
 
@@ -167,9 +193,15 @@ class MCQOptionParser {
     const pattern = new RegExp(INLINE_PAREN.source, 'g');
     let m;
 
-    while ((m = pattern.exec(flat)) !== null) {
+    while ((m = pattern.exec(text)) !== null) {
+      const matchIndex = m.index;
+      // Skip if inside math block
+      const insideMath = mathRanges.some(r => matchIndex >= r.start && matchIndex < r.end);
+      if (insideMath) continue;
+
       const canonical = canonicalize(m[1]);
       if (!canonical) continue;
+      
       const optText = m[2].trim().replace(/\s+/g, ' ');
       if (!optMap[canonical] && hasContent(optText)) {
         optMap[canonical] = optText;
@@ -181,7 +213,7 @@ class MCQOptionParser {
 
     // Reconstruct question body from text before first option
     const questionText = firstMatchIndex > 0
-      ? flat.substring(0, firstMatchIndex).replace(/^\d{1,3}[\.\)]\s*/, '').trim()
+      ? text.substring(0, firstMatchIndex).replace(/^\d{1,3}[\.\)]\s*/, '').trim()
       : '';
 
     return {

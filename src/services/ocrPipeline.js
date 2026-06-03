@@ -38,6 +38,7 @@ const { ContentClassificationEngine } = require('./contentClassificationEngine')
 const { PageClassificationEngine, PARSER_TYPES } = require('./pageClassificationEngine');
 const { FillInBlankParser }        = require('./fillInBlankParser');
 const { ColumnMatchingParser }     = require('./columnMatchingParser');
+const { LayoutAnalysisEngine }     = require('./layoutAnalysisEngine');
 
 // ─── 1. MCQ DETECTOR ─────────────────────────────────────────────────────────
 class MCQDetector {
@@ -324,24 +325,40 @@ function preFilterSegment(questionText, questionNum, seenNumbers) {
 /**
  * Compute a composite confidence score from OCR and parser signals.
  */
-function computeConfidenceScore(ocrConfidence, parserConfidence, parsedBlock) {
+function computeConfidenceScore(ocrConfidence, parserConfidence, layoutConfidence, sectionConfidence, segmentText, parsedBlock) {
   const ocr    = ocrConfidence    != null ? ocrConfidence    : 0.80;
   const parser = parserConfidence != null ? parserConfidence : 0.70;
+  const layout = layoutConfidence != null ? layoutConfidence : 0.80;
+  const sect   = sectionConfidence != null ? sectionConfidence : 0.80;
 
-  // Penalise if question text is very short
-  const textLength = (parsedBlock.question || '').trim().length;
-  const lengthPenalty = textLength < 20 ? 0.10 : 0;
+  // Structural confidence based on validation warning deduction
+  const questionText = (segmentText || parsedBlock.question || '').trim();
+  let structuralConfidence = 1.0;
 
-  // Penalise if MCQ with 0 valid options
-  const filledOptions = (parsedBlock.options || []).filter(o => o && o.text && o.text.trim()).length;
-  const optionPenalty = (parsedBlock.format === 'mcq' || parsedBlock.format === 'line-based') && filledOptions === 0 ? 0.15 : 0;
+  // Deductions
+  if (questionText.length < 20) structuralConfidence -= 0.15;
+  if (questionText.length < 10) structuralConfidence -= 0.20;
 
-  const composite = Math.max(0, Math.min(1, (ocr * 0.5 + parser * 0.5) - lengthPenalty - optionPenalty));
+  const format = (parsedBlock.format || '').toLowerCase();
+  const options = parsedBlock.options || [];
+  if (['mcq', 'line-based', 'inline-mcq', 'structured'].includes(format) && options.length > 0) {
+    const filledOptions = options.filter(o => o.text && o.text.trim().length > 0).length;
+    if (filledOptions < 4) structuralConfidence -= 0.15;
+    if (filledOptions < 2) structuralConfidence -= 0.35;
+  }
+
+  structuralConfidence = Math.max(0, structuralConfidence);
+
+  // Weighted composite score
+  const composite = (ocr * 0.3) + (parser * 0.25) + (layout * 0.15) + (sect * 0.1) + (structuralConfidence * 0.2);
 
   return {
-    ocrConfidence:    ocr,
-    parserConfidence: parser,
-    composite,
+    ocrConfidence:        ocr,
+    parserConfidence:     parser,
+    layoutConfidence:     layout,
+    sectionConfidence:    sect,
+    structuralConfidence,
+    composite:            Math.max(0, Math.min(1, composite)),
     rating: composite >= 0.80 ? 'high' : composite >= 0.55 ? 'medium' : 'low',
   };
 }
@@ -386,8 +403,19 @@ class OCRPipeline {
 
     const { rawText, latex: rawLatex, confidence } = ocrResult;
 
+    // ── Layer 3.5: Layout Analysis Engine ────────────────────────────────
+    let layoutText = rawLatex || rawText;
+    let layoutMetadata = { strategy: 'raw-fallback' };
+    try {
+      const layoutAnalysis = LayoutAnalysisEngine.analyze(ocrResult);
+      layoutText = layoutAnalysis.text;
+      layoutMetadata = layoutAnalysis.layoutMetadata;
+    } catch (layoutErr) {
+      console.warn('[OCRPipeline] LayoutAnalysisEngine failed, using raw output:', layoutErr.message);
+    }
+
     // ── Layer 4: Page Classification (DOCUMENT UNDERSTANDING) ─────────────
-    const pageClassification = PageClassificationEngine.classifyPage(rawLatex || rawText);
+    const pageClassification = PageClassificationEngine.classifyPage(layoutText);
     console.log('[OCRPipeline] Page Classification:', {
       pageType:          pageClassification.pageType,
       defaultParser:     pageClassification.defaultParserType,
@@ -395,11 +423,10 @@ class OCRPipeline {
       diagnostics:       pageClassification.diagnostics,
     });
 
-    // ── Layer 5: Answer Key Page Blocking ────────────────────────────────
+    // ── Layer 5: Answer Key & Theory Page Blocking ───────────────────────
     const isAnsKey =
       pageClassification.pageType === 'ANSWER_KEY_PAGE' ||
-      ContentClassificationEngine.isAnswerKeyPage(rawText) ||
-      ContentClassificationEngine.isAnswerKeyPage(rawLatex);
+      ContentClassificationEngine.isAnswerKeyPage(layoutText);
 
     if (isAnsKey) {
       console.log('[OCRPipeline] ANSWER_KEY_PAGE detected. Blocking all content.');
@@ -407,6 +434,17 @@ class OCRPipeline {
         rawText: rawText || '', latex: rawLatex || '', parsedQuestions: [],
         confidence: confidence ?? 1.0, qualityRating: 'high', isValid: false,
         pageType: 'ANSWER_KEY_PAGE',
+        detectionQuality: { source: 'classifier', multipleDetected: false, questionCount: 0 }
+      };
+    }
+
+    const isTheoryPage = pageClassification.pageType === 'THEORY_PAGE';
+    if (isTheoryPage) {
+      console.log('[OCRPipeline] THEORY_PAGE detected. Blocking all content.');
+      return {
+        rawText: rawText || '', latex: rawLatex || '', parsedQuestions: [],
+        confidence: confidence ?? 1.0, qualityRating: 'high', isValid: false,
+        pageType: 'THEORY_PAGE',
         detectionQuality: { source: 'classifier', multipleDetected: false, questionCount: 0 }
       };
     }
@@ -424,8 +462,8 @@ class OCRPipeline {
     }
 
     // ── Layer 7: Text normalization & LaTeX sanitization ──────────────────
-    const normalizedText = OCRNormalizer.normalizeText(rawText);
-    const sanitizedLatex = LatexSanitizer.sanitize(rawLatex, confidence);
+    const normalizedText = OCRNormalizer.normalizeText(layoutText);
+    const sanitizedLatex = LatexSanitizer.sanitize(layoutText, confidence);
 
     // ── Layer 8: Section Extraction (BEFORE segmentation) ─────────────────
     // We extract sections from the best text source first, then segment
@@ -465,9 +503,9 @@ class OCRPipeline {
 
     for (const section of sectionSlices) {
 
-      // Block answer-key sections entirely
-      if (section.parserType === PARSER_TYPES.ANSWER_KEY) {
-        console.log(`[OCRPipeline] Skipping answer-key section: "${section.title}"`);
+      // Block answer-key and theory sections entirely
+      if (section.parserType === PARSER_TYPES.ANSWER_KEY || section.parserType === PARSER_TYPES.THEORY) {
+        console.log(`[OCRPipeline] Skipping ignored section: "${section.title}" (${section.parserType})`);
         continue;
       }
 
@@ -489,8 +527,9 @@ class OCRPipeline {
       }
 
       for (let idx = 0; idx < sectionSegments.length; idx++) {
-        const seg = sectionSegments[idx];
-        if (!seg.text || !seg.text.trim()) continue;
+        try {
+          const seg = sectionSegments[idx];
+          if (!seg.text || !seg.text.trim()) continue;
 
         // Determine effective parser type — block-level may override section
         const blockClass = PageClassificationEngine.classifyBlock(seg.text, section.parserType);
@@ -524,7 +563,14 @@ class OCRPipeline {
         }));
 
         // ── CONFIDENCE SCORING ────────────────────────────────────────────
-        const confScore = computeConfidenceScore(confidence, parsedBlock.parserConfidence, parsedBlock);
+        const confScore = computeConfidenceScore(
+          confidence,
+          parsedBlock.parserConfidence,
+          pageClassification.confidence,
+          section.confidence,
+          seg.text,
+          parsedBlock
+        );
 
         // ── BUILD ENRICHED OBJECT ─────────────────────────────────────────
         globalOrder++;
@@ -552,6 +598,7 @@ class OCRPipeline {
             chunkText:    seg.text,
             preprocessing: preprocessInfo ? preprocessInfo.diagnostics : null,
             preprocessingQuality: preprocessInfo ? preprocessInfo.qualityRating : null,
+            layout: layoutMetadata,
             diagnostics: {
               rawOcr:              seg.text,
               normalizedOcr:       parsedBlock.question,
@@ -596,6 +643,9 @@ class OCRPipeline {
 
         sectionSeenNumbers.add(questionNum);
         parsedQuestions.push(enrichedQuestion);
+        } catch (segmentErr) {
+          console.error(`[OCRPipeline] Error processing question segment #${idx + 1} in section "${section.title}":`, segmentErr);
+        }
       }
     }
 
@@ -661,7 +711,7 @@ module.exports = {
   QuestionSegmenter,
   MCQDetector,
   LatexSanitizer,
-  QuestionQueueManager,
+  // QuestionQueueManager,
   OCRResultValidator,
   OCRPipeline,
 };
