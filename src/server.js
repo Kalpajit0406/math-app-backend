@@ -19,6 +19,7 @@ const pdfRoutes = require('./routes/pdfRoutes');
 const ratingRoutes = require('./routes/ratingRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const healthRoutes = require('./routes/healthRoutes');
+const selfAssessmentRoutes = require('./routes/selfAssessmentRoutes');
 const errorHandler = require('./middleware/errorHandler');
 
 const path = require('path');
@@ -137,6 +138,7 @@ app.use('/api/v1/analytics', analyticsRoutes);
 app.use('/api/v1/admin/ocr/session', ocrSessionRoutes);
 app.use('/api/v1/admin/ocr', ocrRoutes);
 app.use('/api/v1/pdf', pdfRoutes);
+app.use('/api/v1/self-assessment', selfAssessmentRoutes);
 app.use('/api/v1/scan', ocrRoutes); // Backward compatibility for legacy frontend constants
 
 // Health probe for service discovery
@@ -220,6 +222,14 @@ connectDB()
     // Initialize WebSockets for live exam integrity monitoring and timer authority
     const { initExamWebSocket } = require('./services/examWebSocketService');
     initExamWebSocket(server);
+
+    // Start periodic stale self-assessment session cleaner
+    const SelfAssessmentService = require('./services/selfAssessmentService');
+    setInterval(() => {
+      SelfAssessmentService.cleanupStaleSessions().catch(err => {
+        console.error('[SelfAssessment] Stale cleaner error:', err.message);
+      });
+    }, 30000);
   })
   .catch((error) => {
     console.error(`Failed to start server: ${error.message}`);
