@@ -1,5 +1,8 @@
 // Enhanced Mathpix Question Extraction - JavaScript Implementation
-const { LatexSanitizer } = require('../services/latexSanitizer');
+const { LatexSanitizer }            = require('../services/latexSanitizer');
+const { PageClassificationEngine, PARSER_TYPES } = require('../services/pageClassificationEngine');
+const { FillInBlankParser }         = require('../services/fillInBlankParser');
+const { ColumnMatchingParser }      = require('../services/columnMatchingParser');
 
 // Helper function to escape special regex characters
 function escapeRegExp(string) {
@@ -433,10 +436,18 @@ function extractQuestionsFromMathpix(mathpixResponse, debug = false) {
         const pageText = pages[pageIdx];
         if (!pageText.trim()) continue;
 
-        // STEP 3: Answer key page detection & filtering
-        if (isAnswerKeyPage(pageText)) {
+        // STEP 3: Page Classification + Answer key page detection & filtering
+        const pageClass = PageClassificationEngine.classifyPage(pageText);
+        console.log(`[Diagnostic] Page ${pageIdx + 1} classified as: ${pageClass.pageType} (parser: ${pageClass.defaultParserType})`);
+
+        if (pageClass.pageType === 'ANSWER_KEY_PAGE' || isAnswerKeyPage(pageText)) {
             console.log(`[Diagnostic] Filtered ANSWER_KEY_PAGE at Page ${pageIdx + 1}`);
             continue;
+        }
+
+        // Update section parser type from page classification
+        if (pageClass.defaultParserType !== 'UNKNOWN') {
+            lastParserType = pageClass.defaultParserType;
         }
 
         const lines = pageText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
@@ -500,14 +511,27 @@ function extractQuestionsFromMathpix(mathpixResponse, debug = false) {
             let parsed;
             let trimmedOptions;
 
-            if (isTable) {
+            // Block-level classification using PageClassificationEngine
+            const blockClass = PageClassificationEngine.classifyBlock(fullBlockText, lastParserType);
+            const blockParserType = isTable ? PARSER_TYPES.TABLE : (isFill ? PARSER_TYPES.FILL : blockClass.parserType);
+
+            if (blockParserType === PARSER_TYPES.TABLE || isTable) {
+                // Use dedicated ColumnMatchingParser
+                const tableResult = ColumnMatchingParser.parse(fullBlockText);
                 questionType = 'column_matching';
-                parsed = { question: fullBlockText, options: [] };
+                parsed = { question: tableResult.question, options: [] };
                 trimmedOptions = ['', '', '', ''];
-            } else if (isFill) {
+                block.columnA = tableResult.columnA;
+                block.columnB = tableResult.columnB;
+                block.matchingChoices = tableResult.matchingChoices;
+            } else if (blockParserType === PARSER_TYPES.FILL || isFill) {
+                // Use dedicated FillInBlankParser — never fabricate MCQ options
+                const fillResult = FillInBlankParser.parse(fullBlockText);
                 questionType = 'fill_in_blank';
-                parsed = { question: fullBlockText, options: [] };
+                parsed = { question: fillResult.question, options: [] };
                 trimmedOptions = ['', '', '', ''];
+                block.blanks = fillResult.blanks;
+                block.blankCount = fillResult.blankCount;
             } else {
                 parsed = extractOptionsAndCleanQuestion(fullBlockText);
                 let finalOptions = [...parsed.options];
@@ -521,13 +545,13 @@ function extractQuestionsFromMathpix(mathpixResponse, debug = false) {
                     finalOptions.push('');
                 }
                 trimmedOptions = finalOptions.slice(0, 4);
-                
+
                 const hasTabular = block.hasTabular;
-                const hasColumnMatching = parsed.question.includes('স্তম্ভ A') || parsed.question.includes('স্তম্ভ B') || 
+                const hasColumnMatching = parsed.question.includes('স্তম্ভ A') || parsed.question.includes('স্তম্ভ B') ||
                                           parsed.question.includes('Column A') || parsed.question.includes('Column B');
-                const hasFillInBlank = parsed.question.includes('_____') || 
+                const hasFillInBlank = parsed.question.includes('_____') ||
                                       (parsed.question.includes('=') && parsed.question.includes('।'));
-                
+
                 questionType = determineQuestionType(parsed.question, trimmedOptions, hasTabular, hasColumnMatching, hasFillInBlank);
             }
 
@@ -546,6 +570,12 @@ function extractQuestionsFromMathpix(mathpixResponse, debug = false) {
                 question: sanitizedQuestion,
                 diagram: null,
                 options: sanitizedOptions.some(opt => opt.trim()) ? sanitizedOptions : null,
+                // Structured data for non-MCQ types
+                columnA: block.columnA || [],
+                columnB: block.columnB || [],
+                matchingChoices: block.matchingChoices || [],
+                blanks: block.blanks || [],
+                blankCount: block.blankCount || 0,
                 type: questionType,
                 metadata: {
                     hasTabular: block.hasTabular || isTable,
@@ -553,7 +583,8 @@ function extractQuestionsFromMathpix(mathpixResponse, debug = false) {
                     hasFillInBlank: questionType === 'fill_in_blank',
                     optionCount: sanitizedOptions.filter(opt => opt.trim().length > 0).length,
                     rawSectionLength: fullBlockText.length,
-                    confidence: mathpixResponse.confidence
+                    confidence: mathpixResponse.confidence,
+                    blockParserType: blockParserType,
                 }
             };
 
