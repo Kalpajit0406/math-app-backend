@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+
 const os = require('os');
 // Mongo sanitization is handled via custom middleware below
 // XSS sanitization is handled via custom middleware below
@@ -43,45 +43,6 @@ app.use((req, res, next) => {
 
 // Set secure HTTP headers
 app.use(helmet());
-
-// Rate Limiting: General API limiter to prevent abuse (e.g. max 200 requests per 15 mins)
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200,
-  message: { success: false, message: 'Too many requests from this IP, please try again after 15 minutes.' },
-  standardHeaders: true,
-  legacyHeaders: true,
-});
-
-// Tight Rate Limiting for Auth & image OCR scan to prevent brute force and Mathpix key depletion
-const authOcrLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 50, // 50 requests per 15 mins
-  message: { success: false, message: 'High load detected from this IP on secure channels. Locked for 15 minutes.' },
-  standardHeaders: true,
-  legacyHeaders: true,
-});
-
-// Relaxed limiter for OCR session polling and PDF processing.
-// PDF extraction is now synchronous (single long-lived request, no rapid polling).
-// OCR session GET is polled by the client — allow up to 300 requests per 15 mins.
-const pdfOcrSessionLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 300,
-  message: { success: false, message: 'Too many session status requests. Please slow down.' },
-  standardHeaders: true,
-  legacyHeaders: true,
-});
-
-app.use('/api/', apiLimiter);
-app.use('/api/v1/student/login', authOcrLimiter);
-// Image OCR scan — tightly rate-limited to protect Mathpix API quota
-app.use('/api/v1/scan', authOcrLimiter);
-// PDF and OCR session endpoints — relaxed limit (sync PDF + session polling)
-app.use('/api/v1/pdf', pdfOcrSessionLimiter);
-app.use('/api/v1/admin/ocr/session', pdfOcrSessionLimiter);
-// Keep tight limit on other admin OCR endpoints (queue management, etc.)
-app.use('/api/v1/admin/ocr', authOcrLimiter);
 
 // Configure CORS securely
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
