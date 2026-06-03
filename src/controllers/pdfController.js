@@ -2,6 +2,24 @@ const MathpixPdfService = require('../services/mathpixPdfService');
 const { MCQDetector, LatexSanitizer } = require('../services/ocrPipeline');
 const { VerificationQueueManager } = require('../services/verificationQueueManager');
 const multer = require('multer');
+const { exec } = require('child_process');
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+
+function getPdfPageCount(pdfPath) {
+  return new Promise((resolve, reject) => {
+    exec(`pdfinfo "${pdfPath}"`, (error, stdout, stderr) => {
+      if (error) {
+        return reject(new Error(`Failed to read PDF info: ${error.message}`));
+      }
+      const match = stdout.match(/Pages:\s+(\d+)/);
+      if (match) {
+        resolve(parseInt(match[1], 10));
+      } else {
+        reject(new Error('Could not find Page count in pdfinfo output'));
+      }
+    });
+  });
+}
 
 /**
  * PDF Document Processing Controller
@@ -11,33 +29,41 @@ const multer = require('multer');
 class PdfController {
   constructor() {
     this.pdfService = new MathpixPdfService();
-    this.storage = multer.memoryStorage();
-    this.upload = multer({ storage: this.storage }).single('file');
+    // Use disk storage to prevent loading entire large PDFs into Node memory
+    const path = require('path');
+    const tempDir = path.join(__dirname, '../../public/temp');
+    
+    // Ensure directory exists
+    const fs = require('fs');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const diskStorage = multer.diskStorage({
+      destination: (req, file, cb) => {
+        cb(null, tempDir);
+      },
+      filename: (req, file, cb) => {
+        const cleanExt = path.extname(file.originalname).toLowerCase();
+        const safeBase = path.basename(file.originalname, cleanExt)
+          .replace(/[^a-zA-Z0-9]/g, '_')
+          .substring(0, 50);
+        cb(null, `pdf-${Date.now()}-${safeBase}${cleanExt}`);
+      }
+    });
+
+    this.upload = multer({
+      storage: diskStorage,
+      limits: {
+        fileSize: 100 * 1024 * 1024, // Max size 100MB
+        files: 1
+      }
+    }).single('file');
   }
 
   /**
    * Submit PDF for processing
    * POST /api/v1/pdf/scan
-   * Accepts: PDF, DOCX, PPTX, EPUB
-   * 
-   * Request body (multipart):
-   *   - file: PDF file
-   *   - options: {
-   *       conversionFormats: {docx: true, latex: true},
-   *       pageRanges: "1-5" (optional),
-   *       streaming: false (default),
-   *       extractQuestions: true (default)
-   *     }
-   * 
-   * Response: {
-   *   success: true,
-   *   data: {
-   *     pdfId: "2024_01_15_abc123",
-   *     status: "submitted",
-   *     statusUrl: "/api/v1/pdf/status/{pdfId}",
-   *     message: "PDF submitted for processing. Poll status for updates."
-   *   }
-   * }
    */
   async submitPdf(req, res) {
     try {
@@ -48,25 +74,52 @@ class PdfController {
         });
       }
 
-      const options = req.body.options ? JSON.parse(req.body.options) : {};
+      const pdfPath = req.file.path;
+      const filename = req.file.originalname;
 
-      const pdfId = await this.pdfService.submitPdfByBuffer(
-        req.file.buffer,
-        req.file.originalname,
-        {
-          conversionFormats: options.conversionFormats || { docx: true, latex: true },
-          pageRanges: options.pageRanges,
-          streaming: options.streaming || false
-        }
-      );
+      // Extract page count
+      const totalPages = await getPdfPageCount(pdfPath);
+      
+      const OCRJob = require('../models/ocrJobModel');
+      const parentJob = new OCRJob({
+        status: 'pending',
+        sourceType: 'pdf',
+        filename,
+        mimetype: 'application/pdf',
+        error: null,
+      });
+      await parentJob.save();
 
-      return res.json({
+      // Enqueue to Redis for async page processing
+      const DistributedQueue = require('../utils/redisQueue');
+      const preprocessingQueue = new DistributedQueue('preprocessing');
+
+      for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+        const childJob = new OCRJob({
+          status: 'pending',
+          sourceType: 'pdf_page',
+          filename: `${parentJob._id}_page_${pageNum}.jpg`,
+          mimetype: 'image/jpeg',
+          availableAt: new Date()
+        });
+        await childJob.save();
+
+        await preprocessingQueue.addJob(childJob._id.toString(), {
+          jobId: childJob._id.toString(),
+          parentJobId: parentJob._id.toString(),
+          pdfPath,
+          pageNum,
+          totalPages
+        });
+      }
+
+      return res.status(202).json({
         success: true,
         data: {
-          pdfId,
+          pdfId: parentJob._id,
           status: 'submitted',
-          statusUrl: `/api/v1/pdf/status/${pdfId}`,
-          message: 'PDF submitted for processing. Poll status for updates.'
+          statusUrl: `/api/v1/pdf/status/${parentJob._id}`,
+          message: `PDF submitted for processing. Processing ${totalPages} pages asynchronously.`
         }
       });
     } catch (error) {
@@ -81,19 +134,10 @@ class PdfController {
   /**
    * Submit PDF by URL
    * POST /api/v1/pdf/scan-url
-   * 
-   * Request body: {
-   *   url: "https://example.com/document.pdf",
-   *   options: {
-   *     conversionFormats: {docx: true},
-   *     pageRanges: "1-10"
-   *   }
-   * }
    */
   async submitPdfByUrl(req, res) {
     try {
-      const { url, options = {} } = req.body;
-
+      const { url } = req.body;
       if (!url) {
         return res.status(400).json({
           success: false,
@@ -101,18 +145,63 @@ class PdfController {
         });
       }
 
-      const pdfId = await this.pdfService.submitPdfByUrl(url, {
-        conversionFormats: options.conversionFormats || { docx: true, latex: true },
-        pageRanges: options.pageRanges,
-        streaming: options.streaming || false
+      const path = require('path');
+      const fs = require('fs');
+      const tempPath = path.join(__dirname, `../../public/temp/pdf-${Date.now()}-${Math.random().toString(36).substring(7)}.pdf`);
+
+      // Stream download to disk
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Failed to download PDF from URL: ${response.statusText}`);
+      }
+      
+      const fileStream = fs.createWriteStream(tempPath);
+      await new Promise((resolve, reject) => {
+        response.body.pipe(fileStream);
+        response.body.on('error', reject);
+        fileStream.on('finish', resolve);
       });
 
-      return res.json({
+      const totalPages = await getPdfPageCount(tempPath);
+      
+      const OCRJob = require('../models/ocrJobModel');
+      const parentJob = new OCRJob({
+        status: 'pending',
+        sourceType: 'pdf',
+        filename: url.split('/').pop() || 'document.pdf',
+        mimetype: 'application/pdf',
+        error: null,
+      });
+      await parentJob.save();
+
+      const DistributedQueue = require('../utils/redisQueue');
+      const preprocessingQueue = new DistributedQueue('preprocessing');
+
+      for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+        const childJob = new OCRJob({
+          status: 'pending',
+          sourceType: 'pdf_page',
+          filename: `${parentJob._id}_page_${pageNum}.jpg`,
+          mimetype: 'image/jpeg',
+          availableAt: new Date()
+        });
+        await childJob.save();
+
+        await preprocessingQueue.addJob(childJob._id.toString(), {
+          jobId: childJob._id.toString(),
+          parentJobId: parentJob._id.toString(),
+          pdfPath: tempPath,
+          pageNum,
+          totalPages
+        });
+      }
+
+      return res.status(202).json({
         success: true,
         data: {
-          pdfId,
+          pdfId: parentJob._id,
           status: 'submitted',
-          statusUrl: `/api/v1/pdf/status/${pdfId}`
+          statusUrl: `/api/v1/pdf/status/${parentJob._id}`
         }
       });
     } catch (error) {
@@ -127,41 +216,30 @@ class PdfController {
   /**
    * Check PDF processing status
    * GET /api/v1/pdf/status/:pdfId
-   * 
-   * Response: {
-   *   success: true,
-   *   data: {
-   *     status: "processing|completed|failed",
-   *     numPages: 12,
-   *     numPagesCompleted: 8,
-   *     percentDone: 66.67,
-   *     conversionStatus: {
-   *       docx: {status: "processing"},
-   *       tex: {status: "completed"}
-   *     },
-   *     estimatedTimeRemaining: 45000 (ms)
-   *   }
-   * }
    */
   async getPdfStatus(req, res) {
     try {
       const { pdfId } = req.params;
-      const status = await this.pdfService.getPdfStatus(pdfId);
-      const conversionStatus = await this.pdfService.getConversionStatus(pdfId);
+      const OCRJob = require('../models/ocrJobModel');
+      const parentJob = await OCRJob.findById(pdfId);
+      if (!parentJob) {
+        return res.status(404).json({ success: false, error: 'PDF job not found' });
+      }
 
-      const estimatedTimeRemaining = status.percent_done < 100
-        ? Math.floor((100 - status.percent_done) * 1000)
-        : 0;
+      const childJobs = await OCRJob.find({ filename: new RegExp(`^${pdfId}_page_`) });
+      const numPages = childJobs.length;
+      const completedPages = childJobs.filter(j => j.status === 'done').length;
+      const percentDone = numPages > 0 ? (completedPages / numPages) * 100 : 0;
 
       return res.json({
         success: true,
         data: {
-          status: status.status,
-          numPages: status.num_pages,
-          numPagesCompleted: status.num_pages_completed,
-          percentDone: status.percent_done,
-          conversionStatus,
-          estimatedTimeRemaining
+          status: percentDone === 100 ? 'completed' : parentJob.status,
+          numPages,
+          numPagesCompleted: completedPages,
+          percentDone: parseFloat(percentDone.toFixed(2)),
+          conversionStatus: {},
+          estimatedTimeRemaining: percentDone < 100 ? Math.floor((numPages - completedPages) * 4000) : 0
         }
       });
     } catch (error) {
@@ -176,164 +254,118 @@ class PdfController {
   /**
    * Download PDF result in specific format
    * GET /api/v1/pdf/download/:pdfId/:format
-   * 
-   * Formats: mmd, docx, html, latex (returns tex.zip), lines_json
-   * 
-   * Returns: File binary or JSON
    */
   async downloadPdfResult(req, res) {
-    try {
-      const { pdfId, format } = req.params;
-
-      if (!['mmd', 'markdown', 'docx', 'html', 'latex', 'tex', 'lines', 'lines_json'].includes(format)) {
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid format. Supported: mmd, docx, html, latex, lines_json'
-        });
-      }
-
-      const content = await this.pdfService.downloadResult(pdfId, format);
-
-      // Set appropriate content type
-      const contentTypes = {
-        'mmd': 'text/markdown',
-        'markdown': 'text/markdown',
-        'html': 'text/html',
-        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'latex': 'application/zip',
-        'tex': 'application/zip',
-        'lines_json': 'application/json',
-        'json': 'application/json'
-      };
-
-      res.setHeader('Content-Type', contentTypes[format] || 'application/octet-stream');
-      res.setHeader('Content-Disposition', `attachment; filename="document.${format}"`);
-
-      return res.send(content);
-    } catch (error) {
-      console.error('PDF download error:', error);
-      return res.status(500).json({
-        success: false,
-        error: error.message
-      });
-    }
+    return res.status(501).json({ success: false, error: 'Markdown/DOCX downloads are handled inside individual Verification Sessions' });
   }
 
   /**
    * Extract questions from PDF with multi-question detection
    * POST /api/v1/pdf/extract-questions
-   * 
-   * Workflow:
-   * 1. Submit PDF for processing
-   * 2. Wait for Markdown output
-   * 3. Parse Markdown for question boundaries
-   * 4. Detect MCQ options per question
-   * 5. Return queue of questions
-   * 
-   * Request: {
-   *   url: "https://example.com/document.pdf" (if not uploading file)
-   * }
-   * 
-   * Response: {
-   *   success: true,
-   *   data: {
-   *     pdfId: "2024_01_15_abc123",
-   *     totalQuestions: 5,
-   *     questions: [
-   *       {
-   *         questionText: "What is...",
-   *         options: [...],
-   *         format: "mcq",
-   *         questionNumber: "1",
-   *         detectionOrder: 0,
-   *         confidence: 0.92
-   *       },
-   *       ...
-   *     ],
-   *     rawMarkdown: "Full Markdown text",
-   *     queueSessionId: "session_abc123"
-   *   }
-   * }
    */
   async extractQuestionsFromPdf(req, res) {
     try {
-      let pdfId;
-      let pdfContent = {};
+      let pdfPath;
+      let filename;
 
-      // Either use file upload or URL
       if (req.file) {
-        pdfId = await this.pdfService.submitPdfByBuffer(
-          req.file.buffer,
-          req.file.originalname
-        );
+        pdfPath = req.file.path;
+        filename = req.file.originalname;
       } else if (req.body.url) {
-        pdfId = await this.pdfService.submitPdfByUrl(req.body.url);
-      } else if (req.body.pdfId) {
-        // Use existing PDF ID
-        pdfId = req.body.pdfId;
+        const path = require('path');
+        const fs = require('fs');
+        pdfPath = path.join(__dirname, `../../public/temp/pdf-${Date.now()}-${Math.random().toString(36).substring(7)}.pdf`);
+        filename = req.body.url.split('/').pop() || 'document.pdf';
+
+        const response = await fetch(req.body.url);
+        if (!response.ok) {
+          throw new Error(`Failed to download PDF from URL: ${response.statusText}`);
+        }
+        
+        const fileStream = fs.createWriteStream(pdfPath);
+        await new Promise((resolve, reject) => {
+          response.body.pipe(fileStream);
+          response.body.on('error', reject);
+          fileStream.on('finish', resolve);
+        });
       } else {
         return res.status(400).json({
           success: false,
-          error: 'Must provide file, URL, or existing pdfId'
+          error: 'Must upload a PDF file or provide a URL'
         });
       }
 
-      // Wait for completion if newly submitted
-      if (!req.body.pdfId) {
-        const status = await this.pdfService.waitUntilComplete(pdfId, 120000);
-        if (status.status !== 'completed') {
-          return res.status(500).json({
-            success: false,
-            error: 'PDF processing did not complete',
-            status: status.status
-          });
-        }
-      }
-
-      // Download Markdown
-      const markdown = await this.pdfService.downloadAsMarkdown(pdfId);
-      pdfContent.markdown = markdown;
-
-      // Parse questions using same MCQ detection as images
-      const parsedQuestions = MCQDetector.detectMultiple(markdown, markdown);
-
-      if (!parsedQuestions || parsedQuestions.length === 0) {
-        return res.json({
-          success: true,
-          data: {
-            pdfId,
-            totalQuestions: 0,
-            questions: [],
-            rawMarkdown: markdown,
-            warning: 'No questions detected in PDF'
-          }
-        });
-      }
-
-      // Create queue session persistently in MongoDB
-      const sessionId = `pdf_${pdfId}_${Date.now()}`;
-      const userId = req.user?.id || req.user?._id;
+      const totalPages = await getPdfPageCount(pdfPath);
       
+      const OCRJob = require('../models/ocrJobModel');
+      const parentJob = new OCRJob({
+        status: 'pending',
+        sourceType: 'pdf',
+        filename,
+        mimetype: 'application/pdf',
+        error: null,
+      });
+      await parentJob.save();
+
+      const sessionId = `pdf_${parentJob._id}_${Date.now()}`;
+      const userId = req.user?.id || req.user?._id;
+
+      // Pre-create VerificationSession in MongoDB
       const session = await VerificationQueueManager.createSession(
         sessionId,
         userId,
-        parsedQuestions,
-        86400 // 24 hours TTL, consistent with image sessions
+        [], // No items yet
+        86400,
+        null,
+        {
+          pageType: 'UNKNOWN_PAGE',
+          sectionsFound: 0,
+          totalExtracted: 0,
+          totalRejected: 0,
+          sourceUsed: 'pdf',
+          processingTimeMs: 0
+        },
+        'pending',
+        0
       );
 
-      return res.json({
+      const DistributedQueue = require('../utils/redisQueue');
+      const preprocessingQueue = new DistributedQueue('preprocessing');
+
+      for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+        const childJob = new OCRJob({
+          status: 'pending',
+          sourceType: 'pdf_page',
+          filename: `${parentJob._id}_page_${pageNum}.jpg`,
+          mimetype: 'image/jpeg',
+          availableAt: new Date()
+        });
+        await childJob.save();
+
+        await preprocessingQueue.addJob(childJob._id.toString(), {
+          jobId: childJob._id.toString(),
+          parentJobId: parentJob._id.toString(),
+          sessionId: session.sessionId,
+          pdfPath,
+          pageNum,
+          totalPages
+        });
+      }
+
+      console.log(`[PdfController] extractQuestionsFromPdf: Enqueued parentJob=${parentJob._id}, sessionId=${session.sessionId}`);
+
+      return res.status(202).json({
         success: true,
         data: {
-          pdfId,
+          pdfId: parentJob._id,
           sessionId: session.sessionId,
-          queueSessionId: session.sessionId, // keep backward compatibility
-          currentIndex: VerificationQueueManager.getFilteredIndex(session, session.currentIndex),
-          total: session.items.filter(i => !i.isDeleted).length,
-          items: session.items.filter(i => !i.isDeleted),
-          expiresAt: session.expiresAt,
-          questions: parsedQuestions, // keep backward compatibility
-          rawMarkdown: markdown,
-          message: `Extracted ${parsedQuestions.length} questions from PDF`
+          queueSessionId: session.sessionId,
+          currentIndex: 0,
+          total: 0,
+          items: [],
+          status: 'pending',
+          progress: 0,
+          expiresAt: session.expiresAt
         }
       });
     } catch (error) {

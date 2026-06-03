@@ -39,13 +39,13 @@ const resolveSource = (req) => {
 };
 
 /**
- * Start Verification Session
+ * Start Verification Session (Asynchronous Flow)
  * POST /api/v1/admin/ocr/session/start
  */
 const startSession = async (req, res) => {
   const requestStartedAt = Date.now();
   try {
-    console.log('[ocrSessionController] startSession: upload received');
+    console.log('[ocrSessionController] startSession: upload received (async flow)');
 
     const source = resolveSource(req);
     if (!source) {
@@ -63,27 +63,6 @@ const startSession = async (req, res) => {
       });
     }
 
-    console.log(`[ocrSessionController] startSession: source=${source.type}`);
-
-    let result;
-    if (source.type === 'buffer') {
-      console.log('[ocrSessionController] startSession: OCR pipeline begin (buffer)');
-      result = await withTimeout(
-        OCRPipeline.runFromBuffer(source.buffer, source.mimetype, source.filename),
-        OCR_SESSION_TIMEOUT_MS,
-        `OCR pipeline timeout after ${OCR_SESSION_TIMEOUT_MS}ms`
-      );
-    } else {
-      console.log('[ocrSessionController] startSession: OCR pipeline begin (src)');
-      result = await withTimeout(
-        OCRPipeline.run(source.src),
-        OCR_SESSION_TIMEOUT_MS,
-        `OCR pipeline timeout after ${OCR_SESSION_TIMEOUT_MS}ms`
-      );
-    }
-
-    console.log(`[ocrSessionController] startSession: OCR pipeline complete (${Date.now() - requestStartedAt}ms)`);
-
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const userId = req.user?.id || req.user?._id;
 
@@ -94,67 +73,65 @@ const startSession = async (req, res) => {
       });
     }
 
-    // Upload scanned image to Cloudinary to attach it as a photo/diagram of the questions
-    let scannedImageUrl = null;
-    if (req.file) {
-      const fs = require('fs');
-      const path = require('path');
-      const tempFilePath = path.join(__dirname, `../../public/temp/${Date.now()}-scan.jpg`);
-      try {
-        fs.writeFileSync(tempFilePath, req.file.buffer);
-        const uploadResult = await uploadOnCloudinary(tempFilePath);
-        if (uploadResult?.secure_url) {
-          scannedImageUrl = uploadResult.secure_url;
-        } else {
-          const filename = path.basename(tempFilePath);
-          scannedImageUrl = `/public/temp/${filename}`;
-        }
-      } catch (err) {
-        console.error('[ocrSessionController] Error uploading scanned image to Cloudinary:', err);
-      }
-    } else if (req.body?.imageUrl) {
-      scannedImageUrl = req.body.imageUrl;
-    }
-
-    // Persistently store the session in MongoDB
+    // Pre-create VerificationSession in MongoDB with pending status
     const session = await VerificationQueueManager.createSession(
       sessionId,
       userId,
-      result.parsedQuestions,
+      [], // No items yet
       86400, // 24 hours TTL
-      scannedImageUrl,
+      null, // scannedImageUrl will be attached by the worker
       {
-        pageType:         result.pageType || 'UNKNOWN_PAGE',
-        sectionsFound:    result.sections ? result.sections.length : 0,
-        totalExtracted:   result.parsedQuestions ? result.parsedQuestions.length : 0,
-        totalRejected:    result.totalRejected || 0,
-        sourceUsed:       result.detectionQuality ? result.detectionQuality.source : 'unknown',
-        processingTimeMs: Date.now() - requestStartedAt
-      }
+        pageType: 'UNKNOWN_PAGE',
+        sectionsFound: 0,
+        totalExtracted: 0,
+        totalRejected: 0,
+        sourceUsed: source.type,
+        processingTimeMs: 0
+      },
+      'pending', // status
+      0 // progress
     );
 
-    console.log(`[ocrSessionController] startSession: queue created with ${session.items?.length || 0} items`);
+    // Create tracking OCRJob in MongoDB
+    const OCRJob = require('../models/ocrJobModel');
+    const job = new OCRJob({
+      status: 'pending',
+      sourceType: source.type,
+      filename: source.filename || 'image.jpg',
+      mimetype: source.mimetype || 'image/jpeg',
+      buffer: source.type === 'buffer' ? source.buffer : Buffer.from(source.src || '', 'utf8'),
+      availableAt: new Date(),
+    });
+    await job.save();
 
-    res.status(201).json({
+    // Enqueue job to Redis preprocessing queue
+    const DistributedQueue = require('../utils/redisQueue');
+    const preprocessingQueue = new DistributedQueue('preprocessing');
+    await preprocessingQueue.addJob(job._id.toString(), {
+      jobId: job._id.toString(),
+      sessionId: session.sessionId,
+      sourceType: source.type,
+      mimetype: source.mimetype,
+      filename: source.filename
+    });
+
+    console.log(`[ocrSessionController] startSession: job enqueued with jobId=${job._id}, sessionId=${session.sessionId}`);
+
+    return res.status(202).json({
       success: true,
       data: {
         sessionId: session.sessionId,
-        currentIndex: VerificationQueueManager.getFilteredIndex(session, session.currentIndex),
-        total: session.items.filter(i => !i.isDeleted).length,
-        items: session.items.filter(i => !i.isDeleted),
+        currentIndex: 0,
+        total: 0,
+        items: [],
+        status: 'pending',
+        progress: 0,
         expiresAt: session.expiresAt
       }
     });
-    console.log(`[ocrSessionController] startSession: response sent (${Date.now() - requestStartedAt}ms)`);
   } catch (error) {
     console.error('[ocrSessionController] startSession error:', error);
-    const message = String(error?.message || 'OCR session startup failed');
-    let statusCode = 502; // Default: bad gateway (upstream Mathpix failure)
-    if (message.toLowerCase().includes('credentials')) statusCode = 500;
-    else if (message.toLowerCase().includes('empty') || message.toLowerCase().includes('no file') || message.toLowerCase().includes('invalid file type')) statusCode = 400;
-    else if (message.toLowerCase().includes('too large') || message.toLowerCase().includes('exceeds')) statusCode = 413;
-    else if (message.toLowerCase().includes('timeout')) statusCode = 504;
-    res.status(statusCode).json({ success: false, message });
+    res.status(500).json({ success: false, message: error.message || 'OCR session startup failed' });
   }
 };
 
@@ -178,7 +155,9 @@ const getSession = async (req, res) => {
         currentIndex: VerificationQueueManager.getFilteredIndex(session, session.currentIndex),
         total: session.items.filter(i => !i.isDeleted).length,
         items: session.items.filter(i => !i.isDeleted),
-        expiresAt: session.expiresAt
+        expiresAt: session.expiresAt,
+        status: session.status || 'completed',
+        progress: session.progress || 100
       }
     });
   } catch (error) {

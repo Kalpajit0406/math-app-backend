@@ -1,4 +1,5 @@
 const FormData = require('form-data');
+const fs = require('fs');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
 const OCR_TIMEOUT_MS = Number.parseInt(process.env.OCR_TIMEOUT_MS || '20000', 10);
@@ -7,28 +8,39 @@ const OCR_MAX_RETRIES = Number.parseInt(process.env.OCR_MAX_RETRIES || '2', 10);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * MathpixService — multipart FormData upload approach (from reference backend).
- * Sends image buffer directly to Mathpix v3/text endpoint.
- * Uses only basic compatible options to avoid 400 errors.
+ * MathpixService — multipart FormData upload approach.
+ * Sends image buffer or file path directly to Mathpix v3/text endpoint.
  */
 class MathpixService {
   /**
-   * @param {Buffer} imageBuffer - Raw image bytes from multer memoryStorage
-   * @param {string} mimetype    - MIME type (e.g. 'image/jpeg')
-   * @param {string} filename    - Original filename for multipart field
+   * @param {Buffer|string} imageBufferOrPath - Raw image bytes or file path on disk
+   * @param {string} mimetype                 - MIME type (e.g. 'image/jpeg')
+   * @param {string} filename                 - Original filename for multipart field
    */
-  static async processBuffer(imageBuffer, mimetype, filename = 'image.jpg') {
+  static async processBuffer(imageBufferOrPath, mimetype, filename = 'image.jpg') {
     const appId = process.env.MATHPIX_API_ID;
     const appKey = process.env.MATHPIX_API_KEY;
 
     if (!appId || !appKey) {
       throw new Error('Mathpix API credentials are not configured in environment variables.');
     }
-    if (!imageBuffer || imageBuffer.length === 0) {
-      throw new Error('Empty image buffer provided.');
-    }
 
-    console.log(`[MathpixService] Processing: ${filename} (${(imageBuffer.length / 1024).toFixed(1)} KB, ${mimetype})`);
+    const isPath = typeof imageBufferOrPath === 'string';
+    let fileLength = 0;
+
+    if (isPath) {
+      if (!fs.existsSync(imageBufferOrPath)) {
+        throw new Error(`File not found on disk: ${imageBufferOrPath}`);
+      }
+      fileLength = fs.statSync(imageBufferOrPath).size;
+      console.log(`[MathpixService] Processing file path: ${imageBufferOrPath} (${(fileLength / 1024).toFixed(1)} KB, ${mimetype})`);
+    } else {
+      if (!imageBufferOrPath || imageBufferOrPath.length === 0) {
+        throw new Error('Empty image buffer provided.');
+      }
+      fileLength = imageBufferOrPath.length;
+      console.log(`[MathpixService] Processing buffer: ${filename} (${(fileLength / 1024).toFixed(1)} KB, ${mimetype})`);
+    }
 
     // Only BASIC compatible options — avoids 400 from unsupported data_options
     const optionsJson = JSON.stringify({
@@ -48,10 +60,11 @@ class MathpixService {
 
         // Build a fresh FormData for each attempt (streams are consumed)
         const form = new FormData();
-        form.append('file', imageBuffer, {
+        const fileSource = isPath ? fs.createReadStream(imageBufferOrPath) : imageBufferOrPath;
+        form.append('file', fileSource, {
           filename,
           contentType: mimetype,
-          knownLength: imageBuffer.length,
+          knownLength: fileLength,
         });
         form.append('options_json', optionsJson);
 

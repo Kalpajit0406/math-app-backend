@@ -30,7 +30,9 @@ class VerificationQueueManager {
     parsedQuestions,
     ttlSeconds = 86400,
     scannedImageUrl = null,
-    pipelineMeta = {}
+    pipelineMeta = {},
+    status = 'completed',
+    progress = 100
   ) {
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
     const questions = Array.isArray(parsedQuestions) ? parsedQuestions : [];
@@ -102,6 +104,8 @@ class VerificationQueueManager {
       currentIndex: 0,
       expiresAt,
       scannedImageUrl,
+      status,
+      progress,
       pipelineMetadata: {
         pageType:         pipelineMeta.pageType         || 'UNKNOWN_PAGE',
         sectionsFound:    pipelineMeta.sectionsFound    || 0,
@@ -113,6 +117,59 @@ class VerificationQueueManager {
     });
 
     return session;
+  }
+
+  /** Update session items, status, and progress. */
+  static async updateSession(sessionId, updates) {
+    // If updating items, make sure to format them as verificationItems if they are raw parsedQuestions
+    if (updates.items && Array.isArray(updates.items)) {
+      updates.items = updates.items.map((q, idx) => {
+        let optionsArray = [];
+        if (Array.isArray(q.options)) {
+          optionsArray = q.options.map(opt =>
+            typeof opt === 'object' && opt !== null ? (opt.text || '') : String(opt || '')
+          );
+        }
+        while (optionsArray.length < 4) optionsArray.push('');
+
+        const confScores = q.confidenceScores || {};
+        const validation = q.validation || {};
+
+        return {
+          questionText:    q.question || q.questionText || 'Question Text',
+          options:         optionsArray.slice(0, 4),
+          questionNumber:  q.questionNumber || String(idx + 1),
+          detectionOrder:  q.detectionOrder || (idx + 1),
+          format:          q.format || 'mcq',
+          columnA:         Array.isArray(q.columnA) ? q.columnA : [],
+          columnB:         Array.isArray(q.columnB) ? q.columnB : [],
+          matchingChoices: Array.isArray(q.matchingChoices) ? q.matchingChoices : [],
+          blanks:          Array.isArray(q.blanks) ? q.blanks : [],
+          blankCount:      q.blankCount || 0,
+          confidenceScores: {
+            ocrConfidence:             confScores.ocrConfidence             ?? q.ocrConfidence ?? null,
+            parserConfidence:          confScores.parserConfidence          ?? null,
+            layoutConfidence:          confScores.layoutConfidence          ?? null,
+            sectionConfidence:         confScores.sectionConfidence         ?? null,
+            structuralConfidence:      confScores.structuralConfidence      ?? null,
+            latexConfidence:           confScores.latexConfidence           ?? null,
+            semanticConfidence:        confScores.semanticConfidence        ?? null,
+            optionIntegrityConfidence: confScores.optionIntegrityConfidence ?? null,
+            boundaryConfidence:        confScores.boundaryConfidence        ?? null,
+            composite:                 confScores.composite                 ?? null,
+            rating:                    confScores.rating                    ?? 'medium',
+          },
+          rawOcrData: q.rawOcrData || {},
+          validationErrors:   Array.isArray(validation.errors)   ? validation.errors   : [],
+          validationWarnings: Array.isArray(validation.warnings) ? validation.warnings : [],
+          verified:        q.verified || false,
+          isDeleted:       q.isDeleted || false,
+          extractionState: q.extractionState || 'ACCEPTED',
+        };
+      });
+    }
+
+    return VerificationSession.findOneAndUpdate({ sessionId }, { $set: updates }, { new: true });
   }
 
   /** Retrieve session by ID. */

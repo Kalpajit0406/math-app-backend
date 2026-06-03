@@ -262,6 +262,183 @@ class ImagePreprocessor {
   }
 
   /**
+   * Full preprocessing pipeline for an image file on disk.
+   *
+   * @param {string} inputPath   - Path to input file
+   * @param {string} outputPath  - Path to save processed file
+   * @returns {Promise<PreprocessFileResult>}
+   */
+  static async preprocessFile(inputPath, outputPath) {
+    const fs = require('fs');
+    if (!inputPath || !fs.existsSync(inputPath)) {
+      throw new Error('Invalid input file path');
+    }
+
+    if (!sharp) {
+      fs.copyFileSync(inputPath, outputPath);
+      return {
+        diagnostics: {
+          note: 'sharp not available — copied file directly',
+          imageType: 'unknown',
+          qualityIssues: [],
+        },
+        qualityRating: 'unknown',
+      };
+    }
+
+    try {
+      let img = sharp(inputPath, { limitInputPixels: 12000 * 12000 });
+      img = img.rotate();
+
+      const meta = await img.clone().metadata();
+      const origW = meta.width  || 0;
+      const origH = meta.height || 0;
+      const maxDim = Math.max(origW, origH);
+      const minDim = Math.min(origW, origH);
+
+      const rawStats = await img.clone().grayscale().raw().toBuffer({ resolveWithObject: true });
+      const rawPixels = rawStats.data;
+      const pixelCount = rawPixels.length;
+
+      let sum = 0, sumSq = 0, minVal = 255, maxVal = 0;
+      for (let i = 0; i < pixelCount; i++) {
+        const val = rawPixels[i];
+        sum   += val;
+        sumSq += val * val;
+        if (val < minVal) minVal = val;
+        if (val > maxVal) maxVal = val;
+      }
+      const rawMean  = sum / pixelCount;
+      const rawStdev = Math.sqrt(sumSq / pixelCount - rawMean * rawMean);
+
+      const qualityIssues = [];
+      const isLowLight    = rawMean < 85;
+      const isLowContrast = rawStdev < 24;
+      const isShadowHeavy = rawStdev > 70 && minVal < 20;
+      const hasShadows    = isShadowHeavy;
+      const isGlare       = maxVal === 255 && rawMean > 195 && rawStdev > 45;
+      const isBlurred     = rawStdev < 18;
+      const isTooSmall    = maxDim < OCR_MIN_DIM;
+      const isTooBig      = maxDim > OCR_MAX_DIM;
+      const isRotated     = meta.orientation && meta.orientation > 1;
+
+      if (isLowLight)    qualityIssues.push('low_light');
+      if (isLowContrast) qualityIssues.push('low_contrast');
+      if (isShadowHeavy) qualityIssues.push('shadows');
+      if (isGlare)       qualityIssues.push('glare');
+      if (isBlurred)     qualityIssues.push('blur');
+      if (isTooSmall)    qualityIssues.push('low_resolution');
+      if (isRotated)     qualityIssues.push('rotated');
+
+      let imageType = 'mobile_photo';
+      if (rawMean > 220 && rawStdev > 25 && qualityIssues.length === 0) {
+        imageType = 'scanned_clean';
+      } else if (isLowLight || isShadowHeavy) {
+        imageType = 'low_light';
+      } else if (isBlurred) {
+        imageType = 'blurry';
+      }
+
+      img = sharp(inputPath, { limitInputPixels: 12000 * 12000 }).rotate().grayscale();
+
+      if (imageType === 'scanned_clean') {
+        img = img.normalize();
+        img = img.sharpen({ sigma: 0.5 });
+      } else if (imageType === 'blurry') {
+        img = img.sharpen({ sigma: 2.2, m1: 1.5, m2: 0.8 });
+        img = img.median(3);
+        img = img.normalize();
+      } else if (imageType === 'low_light') {
+        img = img.gamma(2.0);
+        const mult = rawMean < 50 ? 1.6 : 1.35;
+        const offset = rawMean < 50 ? 25 : 12;
+        img = img.linear(mult, offset);
+        img = img.clahe({ width: 32, height: 32, maxSlope: 3 });
+        const dynamicThreshold = Math.max(90, Math.min(220, Math.round(rawMean * 1.12)));
+        img = img.threshold(dynamicThreshold);
+      } else {
+        img = img.median(3);
+        img = img.clahe({ width: 64, height: 64, maxSlope: 2 });
+        img = img.normalize();
+        img = img.sharpen({ sigma: 1.2 });
+      }
+
+      let skewAngle = 0;
+      if (isRotated) {
+        skewAngle = 90;
+      }
+
+      if (isTooSmall && maxDim > 0) {
+        const scale = OCR_MIN_DIM / maxDim;
+        img = img.resize(
+          Math.round(origW * scale),
+          Math.round(origH * scale),
+          { kernel: 'lanczos3' }
+        );
+      } else if (isTooBig && maxDim > 0) {
+        const scale = OCR_MAX_DIM / maxDim;
+        img = img.resize(
+          Math.round(origW * scale),
+          Math.round(origH * scale),
+          { kernel: 'lanczos3' }
+        );
+      }
+
+      try {
+        img = img.trim({ background: '#ffffff', threshold: 12 });
+      } catch (_) {}
+
+      img = img.jpeg({
+        quality:           TARGET_JPEG_QUALITY,
+        chromaSubsampling: '4:4:4',
+        optimiseCoding:    true,
+      });
+
+      await img.toFile(outputPath);
+
+      const postStats = await sharp(outputPath).stats();
+      const postCh    = postStats.channels && postStats.channels[0];
+      const postMean  = postCh ? postCh.mean  : rawMean;
+      const postStdev = postCh ? postCh.stdev : rawStdev;
+
+      let qualityRating = 'high';
+      if (postMean < 50 || postStdev < 20)  qualityRating = 'low';
+      else if (postStdev < 30 || postMean < 70) qualityRating = 'medium';
+
+      const diagnostics = {
+        origWidth:          origW,
+        origHeight:         origH,
+        format:             meta.format || 'unknown',
+        imageType,
+        rawMeanBrightness:  Math.round(rawMean),
+        rawContrastStdDev:  Math.round(rawStdev),
+        postMeanBrightness: Math.round(postMean),
+        postContrastStdDev: Math.round(postStdev),
+        qualityIssues,
+        isLowLight,
+        isLowContrast,
+        hasShadows,
+        isTooSmall,
+        isRotated,
+        skewAngle,
+        deNoisingApplied: true,
+        binarizationApplied: isLowLight || isLowContrast,
+      };
+
+      console.log('[ImagePreprocessor] File preprocessing complete:', {
+        imageType,
+        qualityRating,
+        issues: qualityIssues,
+        skewAngle,
+      });
+
+      return { diagnostics, qualityRating };
+    } catch (err) {
+      throw new Error(`ImagePreprocessor.preprocessFile failed: ${err.message}`);
+    }
+  }
+
+  /**
    * Quick quality check without full preprocessing.
    * Used when you only need to know if an image is suitable for OCR.
    */

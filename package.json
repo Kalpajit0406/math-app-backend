@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node src/server.js",
+    "workers": "node src/workers/distributedWorker.js",
     "stop": "pkill -f 'node src/server.js' || true",
     "test": "node --test",
     "seed:teacher": "node src/scripts/seed_teacher.js",
@@ -15,7 +16,6 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
-  "devDependencies": {},
   "dependencies": {
     "bcrypt": "^6.0.0",
     "cloudinary": "^2.10.0",
@@ -27,12 +27,14 @@
     "express-rate-limit": "^8.5.2",
     "form-data": "^4.0.5",
     "helmet": "^8.1.0",
+    "ioredis": "^5.11.0",
     "jsonwebtoken": "^9.0.3",
     "mongodb": "^7.2.0",
     "mongoose": "^9.6.1",
     "multer": "^2.1.1",
     "node-fetch": "^3.3.2",
     "sharp": "^0.34.5",
+    "ws": "^8.21.0",
     "xss-clean": "^0.1.4"
   }
 }

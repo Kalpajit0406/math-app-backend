@@ -73,6 +73,9 @@ const verificationSessionSchema = new mongoose.Schema({
   expiresAt:    { type: Date, required: true, index: { expires: 0 } }, // MongoDB TTL index
 
   scannedImageUrl: { type: String, default: null },
+  
+  status: { type: String, enum: ['pending', 'processing', 'completed', 'failed'], default: 'completed' },
+  progress: { type: Number, default: 100 },
 
   // Pipeline metadata for the session
   pipelineMetadata: {

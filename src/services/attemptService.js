@@ -6,8 +6,21 @@ const {
   evaluateAttemptIfNeeded
 } = require('../utils/examUtils');
 
-// In-memory locks to prevent concurrent double-submissions
-const submissionLocks = new Set();
+const { getRedisClient } = require('../config/redis');
+
+// Distributed lock helpers using Redis
+async function acquireAttemptLock(attemptId, ttlMs = 15000) {
+  const redis = getRedisClient();
+  const lockKey = `lock:attempt:${attemptId}`;
+  const result = await redis.set(lockKey, 'locked', 'PX', ttlMs, 'NX');
+  return result === 'OK';
+}
+
+async function releaseAttemptLock(attemptId) {
+  const redis = getRedisClient();
+  const lockKey = `lock:attempt:${attemptId}`;
+  await redis.del(lockKey);
+}
 
 const attemptService = {
   startAttempt: async (userId, examId) => {
@@ -63,11 +76,10 @@ const attemptService = {
     if (!Array.isArray(responses)) throw new Error('Responses must be an array');
 
     const lockKey = String(attemptId);
-    if (submissionLocks.has(lockKey)) {
+    const locked = await acquireAttemptLock(lockKey);
+    if (!locked) {
       throw new Error('Submission is already in progress for this attempt.');
     }
-    
-    submissionLocks.add(lockKey);
 
     try {
       const attempt = await Attempt.findById(attemptId);
@@ -126,7 +138,7 @@ const attemptService = {
       
       return await attempt.save();
     } finally {
-      submissionLocks.delete(lockKey);
+      await releaseAttemptLock(lockKey);
     }
   },
 

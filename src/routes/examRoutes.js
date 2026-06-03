@@ -22,7 +22,7 @@ const getExamsOrTests = (req, res, next) => {
 
 // Exam routes (Flutter)
 router.post('/create', authMiddleware, authorizeRoles('admin', 'teacher'), validationRules.createExamValidation, examController.createExam);
-router.get('/:id', examController.getExamById);
+router.get('/:id', authMiddleware, examController.getExamById);
 
 // TestConfig routes (Web)
 router.post('/', testConfigController.createTestConfig);

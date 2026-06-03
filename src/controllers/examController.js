@@ -19,6 +19,17 @@ const getExams = async (req, res) => {
         return res.status(404).json({ success: false, message: 'Student not found' });
       }
       exams = await examService.getExamsForStudent(student.classNo, student.language, !!student.isJoint);
+      // Strip correct answers for security
+      exams = exams.map(exam => {
+        const examObj = exam.toObject ? exam.toObject() : exam;
+        if (examObj.questions) {
+          examObj.questions = examObj.questions.map(q => {
+            delete q.correctAnswer;
+            return q;
+          });
+        }
+        return examObj;
+      });
     } else {
       exams = await examService.getExams();
     }
@@ -31,7 +42,15 @@ const getExams = async (req, res) => {
 const getExamById = async (req, res) => {
   try {
     const exam = await examService.getExamById(req.params.id);
-    res.json({ success: true, data: exam });
+    const examObj = exam.toObject ? exam.toObject() : exam;
+    // Strip correct answers if retrieved by a student
+    if (req.user && req.user.role === 'student' && examObj.questions) {
+      examObj.questions = examObj.questions.map(q => {
+        delete q.correctAnswer;
+        return q;
+      });
+    }
+    res.json({ success: true, data: examObj });
   } catch (error) {
     res.status(404).json({ success: false, message: error.message });
   }

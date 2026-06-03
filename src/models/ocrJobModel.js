@@ -10,6 +10,7 @@ const OCRJobSchema = new mongoose.Schema({
   filename: { type: String },
   mimetype: { type: String },
   buffer: { type: Buffer },
+  filePath: { type: String },
   rawText: { type: String },
   latex: { type: String },
   result: { type: Object },

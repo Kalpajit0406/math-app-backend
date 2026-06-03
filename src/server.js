@@ -189,7 +189,7 @@ const PORT = process.env.PORT || 3000;
 connectDB()
   .then(() => {
     const listenHost = '0.0.0.0';
-    app.listen(PORT, listenHost, () => {
+    const server = app.listen(PORT, listenHost, () => {
       const interfaces = os.networkInterfaces();
       const lanIPs = [];
 
@@ -216,6 +216,10 @@ connectDB()
       console.log(`OCR:    http://localhost:${PORT}/api/v1/admin/ocr/health`);
       console.log(`Bind:   ${listenHost}`);
     });
+
+    // Initialize WebSockets for live exam integrity monitoring and timer authority
+    const { initExamWebSocket } = require('./services/examWebSocketService');
+    initExamWebSocket(server);
   })
   .catch((error) => {
     console.error(`Failed to start server: ${error.message}`);

@@ -45,6 +45,10 @@ const authService = {
         await student.save();
       }
 
+      // Enforce credentials check even on bypass account to close the bypass backdoor!
+      const isMatch = await bcrypt.compare(password, student.password);
+      if (!isMatch) throw new Error('Invalid credentials');
+
       const jwtSecret = process.env.JWT_SECRET || process.env.ACCESS_TOKEN_SECRET;
       if (!jwtSecret) throw new Error('JWT secret is not configured');
 

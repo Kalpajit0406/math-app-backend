@@ -482,7 +482,6 @@ class OCRPipeline {
    * @param {string} filename - Original filename
    */
   static async runFromBuffer(buffer, mimetype, filename) {
-
     // ── Layer 1: Upload validation ────────────────────────────────────────
     UploadHandler.validate({ buffer, mimetype, size: buffer.length });
 
@@ -511,6 +510,26 @@ class OCRPipeline {
       };
     }
 
+    const parseResult = await this.runParsing(ocrResult, filename);
+    if (parseResult.blocked) {
+      return parseResult.blockedResponse;
+    }
+
+    return this.runValidation(
+      parseResult.parsedQuestions,
+      ocrResult,
+      parseResult.pageType,
+      parseResult.sections,
+      parseResult.totalRejected,
+      preprocessInfo,
+      filename
+    );
+  }
+
+  /**
+   * Run Layout analysis, page classification, and question parsing on raw OCR output.
+   */
+  static async runParsing(ocrResult, filename) {
     const { rawText, latex: rawLatex, confidence } = ocrResult;
 
     // ── Layer 3.5: Layout Analysis Engine ────────────────────────────────
@@ -541,10 +560,13 @@ class OCRPipeline {
     if (isAnsKey) {
       console.log('[OCRPipeline] ANSWER_KEY_PAGE detected. Blocking all content.');
       return {
-        rawText: rawText || '', latex: rawLatex || '', parsedQuestions: [],
-        confidence: confidence ?? 1.0, qualityRating: 'high', isValid: false,
-        pageType: 'ANSWER_KEY_PAGE',
-        detectionQuality: { source: 'classifier', multipleDetected: false, questionCount: 0 }
+        blocked: true,
+        blockedResponse: {
+          rawText: rawText || '', latex: rawLatex || '', parsedQuestions: [],
+          confidence: confidence ?? 1.0, qualityRating: 'high', isValid: false,
+          pageType: 'ANSWER_KEY_PAGE',
+          detectionQuality: { source: 'classifier', multipleDetected: false, questionCount: 0 }
+        }
       };
     }
 
@@ -552,10 +574,13 @@ class OCRPipeline {
     if (isTheoryPage) {
       console.log('[OCRPipeline] THEORY_PAGE detected. Blocking all content.');
       return {
-        rawText: rawText || '', latex: rawLatex || '', parsedQuestions: [],
-        confidence: confidence ?? 1.0, qualityRating: 'high', isValid: false,
-        pageType: 'THEORY_PAGE',
-        detectionQuality: { source: 'classifier', multipleDetected: false, questionCount: 0 }
+        blocked: true,
+        blockedResponse: {
+          rawText: rawText || '', latex: rawLatex || '', parsedQuestions: [],
+          confidence: confidence ?? 1.0, qualityRating: 'high', isValid: false,
+          pageType: 'THEORY_PAGE',
+          detectionQuality: { source: 'classifier', multipleDetected: false, questionCount: 0 }
+        }
       };
     }
 
@@ -564,10 +589,13 @@ class OCRPipeline {
       console.warn('[OCRPipeline] Low confidence OCR output, engaging recovery engine.');
       const fallbackItem = OCRRecoveryEngine.generateFallbackQuestion(rawText || 'Low confidence OCR output', filename);
       return {
-        rawText: rawText || '', latex: rawLatex || '', parsedQuestions: [fallbackItem],
-        confidence: confidence ?? 0.0, qualityRating: 'low', isValid: false,
-        pageType: pageClassification.pageType,
-        detectionQuality: { source: 'recovery', multipleDetected: false, questionCount: 1 }
+        blocked: true,
+        blockedResponse: {
+          rawText: rawText || '', latex: rawLatex || '', parsedQuestions: [fallbackItem],
+          confidence: confidence ?? 0.0, qualityRating: 'low', isValid: false,
+          pageType: pageClassification.pageType,
+          detectionQuality: { source: 'recovery', multipleDetected: false, questionCount: 1 }
+        }
       };
     }
 
@@ -576,12 +604,10 @@ class OCRPipeline {
     const sanitizedLatex = LatexSanitizer.sanitize(layoutText, confidence);
 
     // ── Layer 8: Section Extraction (BEFORE segmentation) ─────────────────
-    // We extract sections from the best text source first, then segment
-    // each section independently to avoid cross-section number deduplication.
     const latexSections = PageClassificationEngine.extractSections(sanitizedLatex);
     const textSections  = PageClassificationEngine.extractSections(normalizedText);
 
-    // Choose the source with more (or more diverse) sections
+    // Choose the source with more sections
     const useSections = latexSections.length >= textSections.length ? latexSections : textSections;
     const useText     = latexSections.length >= textSections.length ? sanitizedLatex  : normalizedText;
     let   sourceUsed  = latexSections.length >= textSections.length ? 'latex'         : 'rawText';
@@ -589,15 +615,11 @@ class OCRPipeline {
     console.log(`[OCRPipeline] Sections detected: ${useSections.length}`, useSections.map(s => `"${s.title}" → ${s.parserType}`));
 
     // ── Layer 9: Build section text slices ────────────────────────────────
-    // For each section, extract the text slice that belongs to it.
-    // This ensures QuestionSegmenter sees ONLY one section at a time.
     const sectionSlices = useSections.map((sec, i) => {
       const nextSec  = useSections[i + 1];
       const start    = sec.startIndex;
       const end      = nextSec ? nextSec.startIndex : useText.length;
       const sliceRaw = useText.substring(start, end);
-
-      // Remove the section heading line itself from the slice (to avoid header contamination) unless it is Default
       const sliceClean = sec.title === 'Default' ? sliceRaw.trim() : sliceRaw.replace(/^[^\n]*\n/, '').trim();
 
       return {
@@ -614,8 +636,6 @@ class OCRPipeline {
     let   totalRejected   = 0;
 
     for (const section of sectionSlices) {
-
-      // Block answer-key and theory sections entirely
       if (section.parserType === PARSER_TYPES.ANSWER_KEY || section.parserType === PARSER_TYPES.THEORY) {
         console.log(`[OCRPipeline] Skipping ignored section: "${section.title}" (${section.parserType})`);
         continue;
@@ -623,11 +643,9 @@ class OCRPipeline {
 
       if (!section.text.trim()) continue;
 
-      // Segment this section independently (fresh seenNumbers per section)
       const sectionSeenNumbers = new Set();
       let sectionSegments = QuestionSegmenter.segment(section.text);
 
-      // Fallback: if no segments found, try whole section as one segment
       if (sectionSegments.length === 0 && section.text.trim().length > 10) {
         sectionSegments = [{
           text:    section.text.trim(),
@@ -643,160 +661,194 @@ class OCRPipeline {
           const seg = sectionSegments[idx];
           if (!seg.text || !seg.text.trim()) continue;
 
-        // Determine effective parser type — block-level may override section
-        const blockClass = PageClassificationEngine.classifyBlock(seg.text, section.parserType);
+          const blockClass = PageClassificationEngine.classifyBlock(seg.text, section.parserType);
 
-        // ANSWER_KEY override at block level — skip individual blocks too
-        if (blockClass.parserType === PARSER_TYPES.ANSWER_KEY) {
-          console.log(`[OCRPipeline] Block-level answer key detected — skipping.`);
-          continue;
-        }
-
-        const effectiveParserType = blockClass.parserType;
-
-        console.log(`[OCRPipeline] [${section.title}] Segment #${idx + 1} (Q${seg.number}): parser=${effectiveParserType}, blockConf=${blockClass.confidence.toFixed(2)}`);
-
-        // ── ROUTE TO PARSER ───────────────────────────────────────────────
-        const parsedBlock = routeToParser(seg.text, effectiveParserType, confidence);
-
-        // ── PRE-FILTER ────────────────────────────────────────────────────
-        const questionNum = seg.number || String(idx + 1);
-        const duplicateQuestion = sectionSeenNumbers.has(questionNum);
-        const sectionHeaderLeaked =
-          ContentClassificationEngine.classifyLine(parsedBlock.question || '') === 'SECTION_TITLE' ||
-          /^(?:Conventional\s*Type|Multiple\s*Choice\s*Questions|Fill\s*in\s*the\s*Blank|Column\s*Matching|Analytical\s*Type|Short\s*Answer\s*Type|Long\s*Answer\s*Type|উত্তরমালা)\s*$/i.test(parsedBlock.question || '') ||
-          /\b(?:exercise|chapter|ch\.)\s*\d/i.test(parsedBlock.question || '');
-
-        // ── SANITIZE ──────────────────────────────────────────────────────
-        const sanitizedQuestion = LatexSanitizer.sanitize(parsedBlock.question, confidence);
-
-        const filter = preFilterSegment(sanitizedQuestion, questionNum, sectionSeenNumbers);
-        let isFragmentOrKey = false;
-        if (filter.skip) {
-          if (filter.reason.startsWith('Fragment too short') || filter.reason.startsWith('Answer key fragment') || filter.reason.startsWith('Section header')) {
-            isFragmentOrKey = true;
+          if (blockClass.parserType === PARSER_TYPES.ANSWER_KEY) {
+            console.log(`[OCRPipeline] Block-level answer key detected — skipping.`);
+            continue;
           }
+
+          const effectiveParserType = blockClass.parserType;
+          const parsedBlock = routeToParser(seg.text, effectiveParserType, confidence);
+
+          const questionNum = seg.number || String(idx + 1);
+          const sanitizedQuestion = LatexSanitizer.sanitize(parsedBlock.question, confidence);
+
+          const filter = preFilterSegment(sanitizedQuestion, questionNum, sectionSeenNumbers);
+          let isFragmentOrKey = false;
+          if (filter.skip) {
+            if (filter.reason.startsWith('Fragment too short') || filter.reason.startsWith('Answer key fragment') || filter.reason.startsWith('Section header')) {
+              isFragmentOrKey = true;
+            }
+          }
+
+          if (isFragmentOrKey) {
+            console.log(`[OCRPipeline] Pre-filter rejected segment: ${filter.reason}`);
+            totalRejected++;
+            continue;
+          }
+
+          const sanitizedOptions  = (parsedBlock.options || []).map(o => ({
+            label: o.label,
+            text:  LatexSanitizer.sanitize(o.text, confidence),
+          }));
+
+          globalOrder++;
+          parsedQuestions.push({
+            question: sanitizedQuestion,
+            options: sanitizedOptions,
+            columnA: parsedBlock.columnA || [],
+            columnB: parsedBlock.columnB || [],
+            matchingChoices: parsedBlock.matchingChoices || [],
+            blanks: parsedBlock.blanks || [],
+            blankCount: parsedBlock.blankCount || 0,
+            format: parsedBlock.format || 'descriptive',
+            questionNumber: questionNum,
+            rawChunk: seg.text,
+            detectionOrder: globalOrder,
+            effectiveParserType,
+            blockClass,
+            sectionTitle: section.title,
+            sectionConfidence: section.confidence,
+            sourceUsed,
+            layoutMetadata
+          });
+
+          sectionSeenNumbers.add(questionNum);
+        } catch (segmentErr) {
+          console.error(`[OCRPipeline] Error processing segment:`, segmentErr);
         }
+      }
+    }
 
-        if (isFragmentOrKey) {
-          console.log(`[OCRPipeline] Pre-filter rejected segment: ${filter.reason}`);
-          totalRejected++;
-          continue;
-        }
+    return {
+      blocked: false,
+      parsedQuestions,
+      pageType: pageClassification.pageType,
+      sections: useSections.map(s => ({ title: s.title, parserType: s.parserType })),
+      totalRejected
+    };
+  }
 
-        // ── SANITIZE OPTIONS ──────────────────────────────────────────────
-        const sanitizedOptions  = (parsedBlock.options || []).map(o => ({
-          label: o.label,
-          text:  LatexSanitizer.sanitize(o.text, confidence),
-        }));
+  /**
+   * Run structural validation, confidence scoring, and quarantining.
+   */
+  static runValidation(parsedQuestions, ocrResult, pageType, sections, totalRejected, preprocessInfo, filename) {
+    const { rawText, latex: rawLatex, confidence } = ocrResult;
+    const sanitizedLatex = LatexSanitizer.sanitize(rawLatex || rawText, confidence);
+    const finalQuestions = [];
 
-        // ── CONFIDENCE SCORING ────────────────────────────────────────────
+    const sectionSeenNumbers = new Set();
+    let totalRejectedFromValidation = totalRejected;
+    let sourceUsed = 'unknown';
+
+    for (const q of parsedQuestions) {
+      try {
+        const parsedBlock = {
+          question: q.question,
+          options: q.options,
+          columnA: q.columnA,
+          columnB: q.columnB,
+          matchingChoices: q.matchingChoices,
+          blanks: q.blanks,
+          blankCount: q.blankCount,
+          format: q.format
+        };
+
+        sourceUsed = q.sourceUsed || 'unknown';
+
         const confScore = computeConfidenceScore(
           confidence,
-          parsedBlock.parserConfidence,
-          pageClassification.confidence,
-          section.confidence,
-          seg.text,
+          q.blockClass?.confidence ?? 0.8,
+          0.8, // page classification baseline
+          q.sectionConfidence,
+          q.rawChunk,
           parsedBlock,
-          seg.number
+          q.questionNumber
         );
 
-        // ── BUILD ENRICHED OBJECT ─────────────────────────────────────────
-        globalOrder++;
         const enrichedQuestion = {
-          question:        sanitizedQuestion,
-          options:         sanitizedOptions,
-          columnA:         parsedBlock.columnA || [],
-          columnB:         parsedBlock.columnB || [],
-          matchingChoices: parsedBlock.matchingChoices || [],
-          blanks:          parsedBlock.blanks || [],
-          blankCount:      parsedBlock.blankCount || 0,
-          format:          parsedBlock.format || 'descriptive',
-          questionNumber:  questionNum,
-          rawChunk:        seg.text,
-          ocrConfidence:   confidence,
-          detectionOrder:  globalOrder,
-          verified:        false,
+          question: q.question,
+          options: q.options,
+          columnA: q.columnA,
+          columnB: q.columnB,
+          matchingChoices: q.matchingChoices,
+          blanks: q.blanks,
+          blankCount: q.blankCount,
+          format: q.format,
+          questionNumber: q.questionNumber,
+          rawChunk: q.rawChunk,
+          ocrConfidence: confidence,
+          detectionOrder: q.detectionOrder,
+          verified: false,
           confidenceScores: confScore,
           rawOcrData: {
-            sourceUsed,
+            sourceUsed: q.sourceUsed,
             rawText,
             rawLatex,
             sanitizedLatex,
             confidence,
-            chunkText:    seg.text,
+            chunkText: q.rawChunk,
             preprocessing: preprocessInfo ? preprocessInfo.diagnostics : null,
             preprocessingQuality: preprocessInfo ? preprocessInfo.qualityRating : null,
-            layout: layoutMetadata,
+            layout: q.layoutMetadata,
             diagnostics: {
-              rawOcr:              seg.text,
-              normalizedOcr:       parsedBlock.question,
-              parserModifications: parsedBlock.format,
-              confidenceScore:     confidence,
-              pageType:            pageClassification.pageType,
-              sectionDetected:     section.title,
-              parserType:          effectiveParserType,
-              blockClassification: blockClass,
-              answerPageDetected:  isAnsKey,
-              tableDetected:       effectiveParserType === PARSER_TYPES.TABLE,
-              fillDetected:        effectiveParserType === PARSER_TYPES.FILL,
+              rawOcr: q.rawChunk,
+              normalizedOcr: q.question,
+              parserModifications: q.format,
+              confidenceScore: confidence,
+              pageType: pageType,
+              sectionDetected: q.sectionTitle,
+              parserType: q.effectiveParserType,
+              blockClassification: q.blockClass,
+              answerPageDetected: pageType === 'ANSWER_KEY_PAGE',
+              tableDetected: q.effectiveParserType === PARSER_TYPES.TABLE,
+              fillDetected: q.effectiveParserType === PARSER_TYPES.FILL,
             },
           },
         };
 
-        // ── STRUCTURAL VALIDATION ──────────────────────────────────────────
         const validationResult = QuestionValidator.validate(enrichedQuestion);
         enrichedQuestion.validation = validationResult;
 
-        // ── EXTRACTION STATE & QUARANTINE ROUTING ──────────────────────────
         const quarantineReasons = [];
         if (confScore.ocrConfidence < 0.70) quarantineReasons.push('low_ocr_confidence');
-        if (confScore.layoutConfidence < 0.70) quarantineReasons.push('weak_layout_confidence');
         if (confScore.latexConfidence < 0.80) quarantineReasons.push('malformed_latex');
         if (confScore.parserConfidence < 0.70) quarantineReasons.push('parser_ambiguity');
-        if (confScore.sectionConfidence < 0.70) quarantineReasons.push('section_ambiguity');
         
-        // Overlapping boxes check
         const hasOverlapping = detectOverlappingBoxes(ocrResult.ocr?.lines || ocrResult.lines);
         if (hasOverlapping) quarantineReasons.push('overlapping_bounding_boxes');
 
-        // Duplicate question check
+        const duplicateQuestion = sectionSeenNumbers.has(q.questionNumber);
         if (duplicateQuestion) quarantineReasons.push('duplicate_question_number');
 
-        // Malformed option arrays
         if (['mcq', 'line-based', 'inline-mcq', 'structured'].includes(enrichedQuestion.format)) {
           if (confScore.optionIntegrityConfidence < 1.0) {
             quarantineReasons.push('malformed_options_array');
           }
         }
 
-        // Unsupported layout check
-        if (pageClassification.pageType === 'UNKNOWN_PAGE') {
+        if (pageType === 'UNKNOWN_PAGE') {
           quarantineReasons.push('unsupported_layout');
         }
 
-        // Low light check
-        if (preprocessInfo && preprocessInfo.diagnostics && (preprocessInfo.diagnostics.isLowLight || preprocessInfo.diagnostics.issues?.includes('low_light'))) {
+        if (preprocessInfo?.diagnostics?.isLowLight || preprocessInfo?.diagnostics?.issues?.includes('low_light')) {
           quarantineReasons.push('low_light_image');
         }
 
-        // Blur score check
-        if (preprocessInfo && preprocessInfo.diagnostics && (preprocessInfo.diagnostics.isBlurred || preprocessInfo.diagnostics.issues?.includes('blur') || preprocessInfo.diagnostics.issues?.includes('low_contrast'))) {
+        if (preprocessInfo?.diagnostics?.isBlurred || preprocessInfo?.diagnostics?.issues?.includes('blur') || preprocessInfo?.diagnostics?.issues?.includes('low_contrast')) {
           quarantineReasons.push('blur_threshold_exceeded');
         }
 
-        // Parser contamination check
         const bleedRegex = /(?:\n\s*\d+[\s.)]|\s+\([b-z]\)\s+|\bQ\d+\b)/;
-        if (bleedRegex.test(sanitizedQuestion) || sectionHeaderLeaked) {
+        if (bleedRegex.test(q.question)) {
           quarantineReasons.push('parser_contamination_suspected');
         }
 
-        // Validation errors
         if (!validationResult.isValid) {
           quarantineReasons.push(...validationResult.errors);
         }
 
-        // Determine baseline state
         let extractionState = 'ACCEPTED';
         const composite = confScore.composite;
         if (composite >= 0.90) {
@@ -809,7 +861,6 @@ class OCRPipeline {
           extractionState = 'REJECTED';
         }
 
-        // Elevate/override to QUARANTINED if triggers are present and state is not REJECTED
         if (quarantineReasons.length > 0 && extractionState !== 'REJECTED') {
           extractionState = 'QUARANTINED';
         }
@@ -819,59 +870,41 @@ class OCRPipeline {
         enrichedQuestion.quarantined = extractionState === 'QUARANTINED';
 
         if (extractionState === 'REJECTED') {
-          console.log(`[OCRPipeline] Rejecting segment Q${questionNum} due to low confidence score (${(composite * 100).toFixed(1)}%) or rejection triggers.`);
-          totalRejected++;
+          totalRejectedFromValidation++;
           continue;
         }
 
-        if (validationResult.warnings.length > 0) {
-          console.warn(`[OCRPipeline] Warnings for Q${questionNum}:`, validationResult.warnings);
-        }
-
-        // ── PREVIEW ────────────────────────────────────────────────────────
         const previewData = PreviewRenderer.prepareQuestionPreview({
-          questionText:   enrichedQuestion.question,
-          options:        enrichedQuestion.options,
+          questionText: enrichedQuestion.question,
+          options: enrichedQuestion.options,
           questionNumber: enrichedQuestion.questionNumber,
           detectionOrder: enrichedQuestion.detectionOrder,
         });
         if (previewData) enrichedQuestion.preview = previewData;
 
-        sectionSeenNumbers.add(questionNum);
-        parsedQuestions.push(enrichedQuestion);
-        } catch (segmentErr) {
-          console.error(`[OCRPipeline] Error processing question segment #${idx + 1} in section "${section.title}":`, segmentErr);
-        }
+        sectionSeenNumbers.add(q.questionNumber);
+        finalQuestions.push(enrichedQuestion);
+      } catch (err) {
+        console.error('[OCRPipeline] runValidation error: ', err);
       }
     }
 
-    // ── Layer 11: Pipeline-level quality validation ───────────────────────
     const pipelineValidation = OCRResultValidator.validate(rawText, sanitizedLatex, confidence);
 
-    console.log('[OCRPipeline] Complete:', {
-      questionsDetected: parsedQuestions.length,
-      sourceUsed,
-      pageType: pageClassification.pageType,
-      sections: useSections.length,
+    return {
+      rawText: rawText || '',
+      latex: sanitizedLatex,
+      parsedQuestions: finalQuestions,
       confidence: pipelineValidation.confidence,
       qualityRating: pipelineValidation.rating,
-    });
-
-    return {
-      rawText:      rawText || '',
-      latex:        sanitizedLatex,
-      parsedQuestions,
-      confidence:   pipelineValidation.confidence,
-      qualityRating: pipelineValidation.rating,
-      isValid:      pipelineValidation.isValid,
-      pageType:     pageClassification.pageType,
-      sections:     useSections.map(s => ({ title: s.title, parserType: s.parserType })),
-      totalRejected,
+      isValid: pipelineValidation.isValid,
+      pageType: pageType,
+      sections: sections,
+      totalRejected: totalRejectedFromValidation,
       detectionQuality: {
-        source:            sourceUsed,
-        multipleDetected:  parsedQuestions.length > 1,
-        questionCount:     parsedQuestions.length,
-        pageClassification: pageClassification,
+        source: sourceUsed,
+        multipleDetected: finalQuestions.length > 1,
+        questionCount: finalQuestions.length,
       },
     };
   }
