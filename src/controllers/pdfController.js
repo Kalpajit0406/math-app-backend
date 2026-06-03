@@ -1,5 +1,5 @@
 const MathpixPdfService = require('../services/mathpixPdfService');
-const { MCQDetector, LatexSanitizer, QuestionQueueManager } = require('../services/ocrPipeline');
+const { MCQDetector, LatexSanitizer } = require('../services/ocrPipeline');
 const { VerificationQueueManager } = require('../services/verificationQueueManager');
 const multer = require('multer');
 
@@ -11,7 +11,6 @@ const multer = require('multer');
 class PdfController {
   constructor() {
     this.pdfService = new MathpixPdfService();
-    this.queueManager = new QuestionQueueManager();
     this.storage = multer.memoryStorage();
     this.upload = multer({ storage: this.storage }).single('file');
   }
