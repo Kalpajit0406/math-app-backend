@@ -122,6 +122,12 @@ const updateQuestion = async (req, res) => {
       language
     };
 
+    if (question) {
+      const { normalizeQuestion, generateHash } = require('../services/questionDuplicateDetector');
+      const normalized = normalizeQuestion(question);
+      updateData.questionHash = generateHash(normalized);
+    }
+
     // Remove undefined fields
     Object.keys(updateData).forEach(key => updateData[key] === undefined && delete updateData[key]);
 

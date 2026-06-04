@@ -228,7 +228,7 @@ const deleteItem = async (req, res) => {
 const verifyItem = async (req, res) => {
   try {
     const { sessionId, index } = req.params;
-    const { chapter, classNo, correctAnswer, language, questionText, options } = req.body;
+    const { chapter, classNo, correctAnswer, language, questionText, options, action, replaceQuestionId } = req.body;
 
     if (!chapter || !classNo || !correctAnswer || !language) {
       return res.status(400).json({
@@ -282,16 +282,39 @@ const verifyItem = async (req, res) => {
       diagramUrl = session.scannedImageUrl;
     }
 
-    // Build the new verified Question
-    const newQuestion = await Question.create({
-      language,
-      chapter,
-      classNo: parseInt(classNo),
-      correctAnswer,
-      options: finalOptions,
-      question: finalQuestion,
-      diagram: diagramUrl
-    });
+    // Build or update the Question
+    let finalQuestionObj;
+    let isReplacement = false;
+    if (action === 'replace' && replaceQuestionId) {
+      const { normalizeQuestion, generateHash } = require('../services/questionDuplicateDetector');
+      const hash = generateHash(normalizeQuestion(finalQuestion));
+
+      finalQuestionObj = await Question.findByIdAndUpdate(replaceQuestionId, {
+        language,
+        chapter,
+        classNo: parseInt(classNo),
+        correctAnswer,
+        options: finalOptions,
+        question: finalQuestion,
+        diagram: diagramUrl,
+        questionHash: hash
+      }, { new: true });
+
+      if (!finalQuestionObj) {
+        return res.status(404).json({ success: false, message: 'Question to replace not found' });
+      }
+      isReplacement = true;
+    } else {
+      finalQuestionObj = await Question.create({
+        language,
+        chapter,
+        classNo: parseInt(classNo),
+        correctAnswer,
+        options: finalOptions,
+        question: finalQuestion,
+        diagram: diagramUrl
+      });
+    }
 
     // Mark as verified in the session
     await VerificationQueueManager.updateQuestion(sessionId, idx, {
@@ -302,8 +325,8 @@ const verifyItem = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'Question verified and created successfully',
-      data: newQuestion
+      message: isReplacement ? 'Question verified and replaced successfully' : 'Question verified and created successfully',
+      data: finalQuestionObj
     });
   } catch (error) {
     console.error('[ocrSessionController] verifyItem error:', error);

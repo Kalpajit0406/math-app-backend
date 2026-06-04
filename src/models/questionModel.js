@@ -32,28 +32,43 @@ const questionSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-  diagram: {
-    type: String,
-    default: null,
-    validate: {
-      validator: function (url) {
-        if (url === null || url === '') return true;
-        return /^https?:\/\//i.test(url) || /^\/?public\//.test(url);
+    diagram: {
+      type: String,
+      default: null,
+      validate: {
+        validator: function (url) {
+          if (url === null || url === '') return true;
+          return /^https?:\/\//i.test(url) || /^\/?public\//.test(url);
+        },
+        message: "Invalid diagram URL or path format",
       },
-      message: "Invalid diagram URL or path format",
     },
-  },
-}, { 
-  timestamps: true,
-  toJSON: {
-    transform: (doc, ret) => {
-      ret.id = ret._id;
-      delete ret.__v;
-      return ret;
+    questionHash: {
+      type: String,
+      index: true,
+    },
+  }, { 
+    timestamps: true,
+    toJSON: {
+      transform: (doc, ret) => {
+        ret.id = ret._id;
+        delete ret.__v;
+        return ret;
+      }
     }
-  }
-});
+  });
 
-questionSchema.index({ classNo: 1, language: 1, chapter: 1 });
+  questionSchema.pre('save', function (next) {
+    if (this.isModified('question') && this.question) {
+      const { normalizeQuestion, generateHash } = require('../services/questionDuplicateDetector');
+      const normalized = normalizeQuestion(this.question);
+      this.questionHash = generateHash(normalized);
+    }
+    if (next && typeof next === 'function') {
+      next();
+    }
+  });
+
+  questionSchema.index({ classNo: 1, language: 1, chapter: 1 });
 
 module.exports = mongoose.model('Question', questionSchema);

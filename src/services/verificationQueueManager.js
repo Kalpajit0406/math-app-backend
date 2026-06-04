@@ -37,8 +37,11 @@ class VerificationQueueManager {
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
     const questions = Array.isArray(parsedQuestions) ? parsedQuestions : [];
 
-    const items = questions.map((q, idx) => {
-      // ── Map options: accept { label, text } objects or plain strings ──────
+    const items = [];
+    const { QuestionDuplicateDetector } = require('./questionDuplicateDetector');
+
+    for (let idx = 0; idx < questions.length; idx++) {
+      const q = questions[idx];
       let optionsArray = [];
       if (Array.isArray(q.options)) {
         optionsArray = q.options.map(opt =>
@@ -47,29 +50,42 @@ class VerificationQueueManager {
       }
       while (optionsArray.length < 4) optionsArray.push('');
 
-      // ── Confidence scores ─────────────────────────────────────────────────
       const confScores = q.confidenceScores || {};
-
-      // ── Validation result ─────────────────────────────────────────────────
       const validation = q.validation || {};
+      const qText = q.question || q.questionText || 'Question Text';
 
-      return {
-        questionText:    q.question || q.questionText || 'Question Text',
+      const duplicateInfo = {
+        detected: false,
+        similarity: 0,
+        rating: 'Allow normally',
+        existingQuestionId: null,
+        existingQuestionText: ''
+      };
+
+      try {
+        const dupResult = await QuestionDuplicateDetector.checkDuplicate(qText, q.classNo || 11);
+        if (dupResult.duplicateDetected) {
+          duplicateInfo.detected = true;
+          duplicateInfo.similarity = dupResult.similarity;
+          duplicateInfo.rating = dupResult.rating;
+          duplicateInfo.existingQuestionId = dupResult.existingQuestion._id || dupResult.existingQuestion.id;
+          duplicateInfo.existingQuestionText = dupResult.existingQuestion.question;
+        }
+      } catch (err) {
+        console.error('[VerificationQueueManager] Duplicate check failed for item:', err.message);
+      }
+
+      items.push({
+        questionText:    qText,
         options:         optionsArray.slice(0, 4),
         questionNumber:  q.questionNumber || String(idx + 1),
         detectionOrder:  q.detectionOrder || (idx + 1),
-
-        // Format/type
         format:          q.format || 'mcq',
-
-        // Structured data for non-MCQ
         columnA:         Array.isArray(q.columnA) ? q.columnA : [],
         columnB:         Array.isArray(q.columnB) ? q.columnB : [],
         matchingChoices: Array.isArray(q.matchingChoices) ? q.matchingChoices : [],
         blanks:          Array.isArray(q.blanks) ? q.blanks : [],
         blankCount:      q.blankCount || 0,
-
-        // Confidence
         confidenceScores: {
           ocrConfidence:             confScores.ocrConfidence             ?? q.ocrConfidence ?? null,
           parserConfidence:          confScores.parserConfidence          ?? null,
@@ -83,19 +99,15 @@ class VerificationQueueManager {
           composite:                 confScores.composite                 ?? null,
           rating:                    confScores.rating                    ?? 'medium',
         },
-
-        // Raw OCR diagnostics
         rawOcrData: q.rawOcrData || {},
-
-        // Validation
         validationErrors:   Array.isArray(validation.errors)   ? validation.errors   : [],
         validationWarnings: Array.isArray(validation.warnings) ? validation.warnings : [],
-
         verified:        false,
         isDeleted:       false,
         extractionState: q.extractionState || 'ACCEPTED',
-      };
-    });
+        duplicateInfo
+      });
+    }
 
     const session = await VerificationSession.create({
       sessionId,
@@ -123,7 +135,11 @@ class VerificationQueueManager {
   static async updateSession(sessionId, updates) {
     // If updating items, make sure to format them as verificationItems if they are raw parsedQuestions
     if (updates.items && Array.isArray(updates.items)) {
-      updates.items = updates.items.map((q, idx) => {
+      const formattedItems = [];
+      const { QuestionDuplicateDetector } = require('./questionDuplicateDetector');
+
+      for (let idx = 0; idx < updates.items.length; idx++) {
+        const q = updates.items[idx];
         let optionsArray = [];
         if (Array.isArray(q.options)) {
           optionsArray = q.options.map(opt =>
@@ -134,9 +150,33 @@ class VerificationQueueManager {
 
         const confScores = q.confidenceScores || {};
         const validation = q.validation || {};
+        const qText = q.question || q.questionText || 'Question Text';
 
-        return {
-          questionText:    q.question || q.questionText || 'Question Text',
+        let duplicateInfo = q.duplicateInfo;
+        if (!duplicateInfo || !duplicateInfo.detected) {
+          duplicateInfo = {
+            detected: false,
+            similarity: 0,
+            rating: 'Allow normally',
+            existingQuestionId: null,
+            existingQuestionText: ''
+          };
+          try {
+            const dupResult = await QuestionDuplicateDetector.checkDuplicate(qText, q.classNo || 11);
+            if (dupResult.duplicateDetected) {
+              duplicateInfo.detected = true;
+              duplicateInfo.similarity = dupResult.similarity;
+              duplicateInfo.rating = dupResult.rating;
+              duplicateInfo.existingQuestionId = dupResult.existingQuestion._id || dupResult.existingQuestion.id;
+              duplicateInfo.existingQuestionText = dupResult.existingQuestion.question;
+            }
+          } catch (err) {
+            console.error('[VerificationQueueManager] Duplicate check failed on update:', err.message);
+          }
+        }
+
+        formattedItems.push({
+          questionText:    qText,
           options:         optionsArray.slice(0, 4),
           questionNumber:  q.questionNumber || String(idx + 1),
           detectionOrder:  q.detectionOrder || (idx + 1),
@@ -165,8 +205,10 @@ class VerificationQueueManager {
           verified:        q.verified || false,
           isDeleted:       q.isDeleted || false,
           extractionState: q.extractionState || 'ACCEPTED',
-        };
-      });
+          duplicateInfo
+        });
+      }
+      updates.items = formattedItems;
     }
 
     return VerificationSession.findOneAndUpdate({ sessionId }, { $set: updates }, { new: true });
@@ -281,7 +323,32 @@ class VerificationQueueManager {
 
     const item = session.items[index];
 
-    if (updateData.questionText  !== undefined) item.questionText  = updateData.questionText;
+    if (updateData.questionText  !== undefined) {
+      item.questionText  = updateData.questionText;
+
+      const { QuestionDuplicateDetector } = require('./questionDuplicateDetector');
+      const duplicateInfo = {
+        detected: false,
+        similarity: 0,
+        rating: 'Allow normally',
+        existingQuestionId: null,
+        existingQuestionText: ''
+      };
+
+      try {
+        const dupResult = await QuestionDuplicateDetector.checkDuplicate(updateData.questionText, updateData.classNo || 11);
+        if (dupResult.duplicateDetected) {
+          duplicateInfo.detected = true;
+          duplicateInfo.similarity = dupResult.similarity;
+          duplicateInfo.rating = dupResult.rating;
+          duplicateInfo.existingQuestionId = dupResult.existingQuestion._id || dupResult.existingQuestion.id;
+          duplicateInfo.existingQuestionText = dupResult.existingQuestion.question;
+        }
+      } catch (err) {
+        console.error('[VerificationQueueManager] Duplicate check failed on updateQuestion:', err.message);
+      }
+      item.duplicateInfo = duplicateInfo;
+    }
     if (updateData.questionNumber !== undefined) item.questionNumber = updateData.questionNumber;
     if (updateData.format         !== undefined) item.format         = updateData.format;
 

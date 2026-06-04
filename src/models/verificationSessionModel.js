@@ -62,6 +62,15 @@ const verificationItemSchema = new mongoose.Schema({
   // ── Validation result ────────────────────────────────────────────────────
   validationErrors:   { type: [String], default: [] },
   validationWarnings: { type: [String], default: [] },
+
+  // ── Duplicate Detection result ───────────────────────────────────────────
+  duplicateInfo: {
+    detected:             { type: Boolean, default: false },
+    similarity:           { type: Number, default: 0 },
+    rating:               { type: String, default: 'Allow normally' },
+    existingQuestionId:   { type: mongoose.Schema.Types.ObjectId, ref: 'Question', default: null },
+    existingQuestionText: { type: String, default: '' },
+  },
 });
 
 const verificationSessionSchema = new mongoose.Schema({
