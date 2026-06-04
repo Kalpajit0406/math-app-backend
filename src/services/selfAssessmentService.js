@@ -210,6 +210,103 @@ class SelfAssessmentService {
   }
 
   /**
+   * Retrieves a batch of questions for offline buffering
+   */
+  static async getQuestionsBatch(token, offset = 0, limit = 5, deviceFingerprint) {
+    const session = await SelfAssessmentSession.findOne({ token, status: 'active' });
+    if (!session) {
+      throw new Error('SESSION_EXPIRED: Active self-assessment session not found or expired.');
+    }
+
+    if (session.deviceFingerprint && session.deviceFingerprint !== deviceFingerprint) {
+      throw new Error('DEVICE_VIOLATION: Security fingerprint mismatch.');
+    }
+
+    const { questionPool } = session;
+    const end = Math.min(Number(offset) + Number(limit), questionPool.length);
+    const batchIds = questionPool.slice(Number(offset), end);
+
+    const questions = [];
+    for (let i = 0; i < batchIds.length; i++) {
+      const q = await Question.findById(batchIds[i]);
+      if (q) {
+        questions.push({
+          id: q._id,
+          questionText: q.question,
+          options: this.shuffleArray(q.options),
+          diagram: q.diagram || null,
+          chapter: q.chapter,
+          questionIndex: Number(offset) + i
+        });
+      }
+    }
+
+    session.lastActiveAt = new Date();
+    await session.save();
+
+    return {
+      questions,
+      totalQuestions: questionPool.length,
+      offset: Number(offset),
+      isLastBatch: end >= questionPool.length
+    };
+  }
+
+  /**
+   * Submits all answers in bulk at the end of the self-assessment session
+   */
+  static async submitAllAnswers(token, answers, deviceFingerprint) {
+    const session = await SelfAssessmentSession.findOne({ token, status: 'active' });
+    if (!session) {
+      throw new Error('SESSION_EXPIRED: Active self-assessment session not found.');
+    }
+
+    if (session.deviceFingerprint && session.deviceFingerprint !== deviceFingerprint) {
+      throw new Error('DEVICE_VIOLATION: Security fingerprint mismatch.');
+    }
+
+    const { questionPool } = session;
+    let correctCount = 0;
+    const weakTopics = [];
+
+    // Evaluate all questions
+    for (const qId of questionPool) {
+      const question = await Question.findById(qId);
+      if (question) {
+        const studentAnswer = answers[String(qId)];
+        if (studentAnswer !== undefined) {
+          session.answersSubmitted.set(String(qId), studentAnswer);
+          const isCorrect = String(studentAnswer).trim() === String(question.correctAnswer).trim();
+          if (isCorrect) {
+            correctCount++;
+          } else {
+            weakTopics.push(question.chapter);
+          }
+        } else {
+          weakTopics.push(question.chapter); // Unanswered counted as weak topic
+        }
+      }
+    }
+
+    session.correctAnswersCount = correctCount;
+    session.status = 'completed';
+    session.lastActiveAt = new Date();
+    await session.save();
+
+    return {
+      isCompleted: true,
+      results: {
+        score: session.correctAnswersCount,
+        total: questionPool.length,
+        percentage: (session.correctAnswersCount / questionPool.length) * 100,
+        analytics: {
+          weakTopics: [...new Set(weakTopics)] // unique topics
+        }
+      }
+    };
+  }
+
+  /**
    * Updates last active check for heartbeats
    */
   static async heartbeat(token, deviceFingerprint) {

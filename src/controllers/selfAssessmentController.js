@@ -164,3 +164,63 @@ exports.heartbeat = async (req, res) => {
     });
   }
 };
+
+exports.getQuestionsBatch = async (req, res) => {
+  try {
+    const token = req.headers['x-assessment-token'] || req.query.token;
+    const { offset, limit } = req.query;
+    const deviceFingerprint = req.headers['x-device-fingerprint'] || req.headers['user-agent'] || 'unknown';
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Assessment session token is required.'
+      });
+    }
+
+    const result = await SelfAssessmentService.getQuestionsBatch(
+      token,
+      offset || 0,
+      limit || 5,
+      deviceFingerprint
+    );
+
+    return res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('[SelfAssessment] Questions batch fetch failed:', error.message);
+    return res.status(403).json({
+      success: false,
+      message: error.message || 'Access Denied'
+    });
+  }
+};
+
+exports.submitAllAnswers = async (req, res) => {
+  try {
+    const token = req.headers['x-assessment-token'] || req.body.token;
+    const { answers } = req.body;
+    const deviceFingerprint = req.headers['x-device-fingerprint'] || req.headers['user-agent'] || 'unknown';
+
+    if (!token || !answers) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token and answers are required.'
+      });
+    }
+
+    const response = await SelfAssessmentService.submitAllAnswers(token, answers, deviceFingerprint);
+    return res.json({
+      success: true,
+      data: response
+    });
+  } catch (error) {
+    console.error('[SelfAssessment] Bulk submission failed:', error.message);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to submit response'
+    });
+  }
+};
