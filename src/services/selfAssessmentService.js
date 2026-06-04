@@ -293,6 +293,23 @@ class SelfAssessmentService {
     session.lastActiveAt = new Date();
     await session.save();
 
+    try {
+      const Student = require('../models/studentModel');
+      const student = await Student.findById(session.studentId);
+      if (student && student.studentPhone) {
+        const PerformanceAnalytics = require('./performanceAnalyticsService');
+        await PerformanceAnalytics.savePerformance(
+          student.studentPhone,
+          session._id.toString() || session.id.toString(),
+          'self-assessment',
+          correctCount,
+          questionPool.length
+        );
+      }
+    } catch (err) {
+      console.error('[SelfAssessment] Error logging performance:', err.message);
+    }
+
     return {
       isCompleted: true,
       results: {

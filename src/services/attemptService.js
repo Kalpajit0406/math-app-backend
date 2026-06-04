@@ -5,6 +5,7 @@ const {
   getExamEndTime,
   evaluateAttemptIfNeeded
 } = require('../utils/examUtils');
+const PerformanceAnalytics = require('./performanceAnalyticsService');
 
 const { getRedisClient } = require('../config/redis');
 
@@ -136,7 +137,38 @@ const attemptService = {
       if (securityMetadata.emulatorDetected !== undefined) attempt.emulatorDetected = securityMetadata.emulatorDetected;
       if (securityMetadata.rootDetected !== undefined) attempt.rootDetected = securityMetadata.rootDetected;
       
-      return await attempt.save();
+      const savedAttempt = await attempt.save();
+
+      try {
+        const Student = require('../models/studentModel');
+        const student = await Student.findById(userId);
+        if (student && student.studentPhone) {
+          const totalQ = exam ? exam.questions.length : attempt.responses.length;
+          let actualScore = score;
+          if (!isExamEnded && responses && responses.length > 0) {
+            let tempScore = 0;
+            for (const res of responses) {
+              const question = exam.questions.id(res.questionId);
+              if (question) {
+                const userAnswer = res.userAnswer !== undefined ? res.userAnswer : res.selectedAnswer;
+                if (evaluateQuestionCorrectness(question, userAnswer)) tempScore++;
+              }
+            }
+            actualScore = tempScore;
+          }
+          await PerformanceAnalytics.savePerformance(
+            student.studentPhone,
+            attempt._id.toString(),
+            'exam',
+            actualScore,
+            totalQ
+          );
+        }
+      } catch (err) {
+        console.error('Error saving performance for attempt:', err.message);
+      }
+
+      return savedAttempt;
     } finally {
       await releaseAttemptLock(lockKey);
     }
@@ -238,6 +270,7 @@ const attemptService = {
       }
 
       // Check if there is an uncompleted attempt
+      let savedAttempt;
       attempt = await Attempt.findOne({ userId, examId, endTime: { $exists: false } });
       if (attempt) {
         attempt.score = isExamEnded ? score : 0;
@@ -248,25 +281,53 @@ const attemptService = {
         if (securityMetadata.autoSubmitReason) attempt.autoSubmitReason = securityMetadata.autoSubmitReason;
         if (securityMetadata.emulatorDetected !== undefined) attempt.emulatorDetected = securityMetadata.emulatorDetected;
         if (securityMetadata.rootDetected !== undefined) attempt.rootDetected = securityMetadata.rootDetected;
-        return await attempt.save();
+        savedAttempt = await attempt.save();
+      } else {
+        // Create new completed attempt
+        attempt = new Attempt({
+          userId,
+          examId,
+          score: isExamEnded ? score : 0,
+          responses: evaluatedResponses,
+          startTime: new Date(Date.now() - (exam.duration * 60 * 1000)),
+          endTime: new Date(),
+          violations: securityMetadata.violations || [],
+          isAutoSubmitted: securityMetadata.isAutoSubmitted || false,
+          autoSubmitReason: securityMetadata.autoSubmitReason || null,
+          emulatorDetected: securityMetadata.emulatorDetected || false,
+          rootDetected: securityMetadata.rootDetected || false
+        });
+        savedAttempt = await attempt.save();
       }
 
-      // Create new completed attempt
-      attempt = new Attempt({
-        userId,
-        examId,
-        score: isExamEnded ? score : 0,
-        responses: evaluatedResponses,
-        startTime: new Date(Date.now() - (exam.duration * 60 * 1000)),
-        endTime: new Date(),
-        violations: securityMetadata.violations || [],
-        isAutoSubmitted: securityMetadata.isAutoSubmitted || false,
-        autoSubmitReason: securityMetadata.autoSubmitReason || null,
-        emulatorDetected: securityMetadata.emulatorDetected || false,
-        rootDetected: securityMetadata.rootDetected || false
-      });
+      try {
+        if (student && student.studentPhone) {
+          const totalQ = exam ? exam.questions.length : savedAttempt.responses.length;
+          let actualScore = score;
+          if (!isExamEnded && responses && responses.length > 0) {
+            let tempScore = 0;
+            for (const res of responses) {
+              const question = exam.questions.id(res.questionId);
+              if (question) {
+                const userAnswer = res.selectedAnswer !== undefined ? res.selectedAnswer : res.userAnswer;
+                if (evaluateQuestionCorrectness(question, userAnswer)) tempScore++;
+              }
+            }
+            actualScore = tempScore;
+          }
+          await PerformanceAnalytics.savePerformance(
+            student.studentPhone,
+            savedAttempt._id.toString(),
+            'exam',
+            actualScore,
+            totalQ
+          );
+        }
+      } catch (err) {
+        console.error('Error saving performance for offline attempt:', err.message);
+      }
 
-      return await attempt.save();
+      return savedAttempt;
     } finally {
       submissionLocks.delete(lockKey);
     }

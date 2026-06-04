@@ -1,62 +1,16 @@
 const Attempt = require('../models/attemptModel');
 const Question = require('../models/questionModel');
 const QuestionRating = require('../models/questionRatingModel');
+const StudentPerformance = require('../models/studentPerformanceModel');
 const { getExamEndTime, evaluateAttemptIfNeeded } = require('../utils/examUtils');
 
 class PerformanceAnalytics {
   // Get comprehensive student performance data
   static async getStudentPerformance(studentId, timeframe = 'week') {
     try {
-      // 1. Auto-delete student data older than 1 month
-      const oneMonthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      await Attempt.deleteMany({ userId: studentId, createdAt: { $lt: oneMonthAgo } });
-      
       const Student = require('../models/studentModel');
       const student = await Student.findById(studentId);
-      if (student && student.studentMobile) {
-        const TestResponse = require('../models/testResponseModel');
-        await TestResponse.deleteMany({ studentMobile: student.studentMobile, createdAt: { $lt: oneMonthAgo } });
-      }
-
-      // 2. Calculate date filter based on timeframe query parameter
-      let dateFilter = {};
-      const now = new Date();
-      if (timeframe === 'today' || timeframe === 'day') {
-        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        dateFilter = { createdAt: { $gte: startOfDay } };
-      } else if (timeframe === 'month') {
-        dateFilter = { createdAt: { $gte: oneMonthAgo } };
-      } else {
-        // Default to past week (7 days)
-        const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        dateFilter = { createdAt: { $gte: oneWeekAgo } };
-      }
-
-      const rawAttempts = await Attempt.find({ 
-        userId: studentId,
-        ...dateFilter
-      })
-        .populate('examId', 'title duration questions chapters classNo totalQuestions marksPerQuestion date time');
-
-      const attempts = [];
-      for (const attempt of rawAttempts) {
-        if (attempt.examId) {
-          const examEndTime = getExamEndTime(attempt.examId);
-          const now = new Date();
-          const isExamEnded = examEndTime ? (now >= examEndTime) : true;
-
-          // Skip completely if the exam hasn't ended yet
-          if (!isExamEnded) {
-            continue;
-          }
-
-          // Evaluate on-the-fly if needed
-          await evaluateAttemptIfNeeded(attempt, attempt.examId);
-        }
-        attempts.push(attempt);
-      }
-
-      if (attempts.length === 0) {
+      if (!student || !student.studentPhone) {
         return {
           studentId,
           totalAttempts: 0,
@@ -71,36 +25,57 @@ class PerformanceAnalytics {
         };
       }
 
-      const totalAttempts = attempts.length;
-      const completedAttempts = attempts.filter(a => a.endTime).length;
-      const completionRate = totalAttempts > 0 ? parseFloat(((completedAttempts / totalAttempts) * 100).toFixed(1)) : 0.0;
-      const totalScore = attempts.reduce((sum, a) => sum + (a.score || 0), 0);
-      const averageScore = completedAttempts > 0 ? parseFloat((totalScore / completedAttempts).toFixed(2)) : 0.0;
-
-      // Calculate accuracy rate from actual attempts instead of QuestionRating
-      let totalQuestionsAnswered = 0;
-      let totalCorrectAnswers = 0;
-      for (const attempt of attempts) {
-        if (attempt.responses) {
-          totalQuestionsAnswered += attempt.responses.length;
-          totalCorrectAnswers += attempt.responses.filter(r => r.isCorrect).length;
-        }
+      const studentMobile = student.studentPhone;
+      const perf = await StudentPerformance.findOne({ studentMobile });
+      if (!perf || !perf.testHistory || perf.testHistory.length === 0) {
+        return {
+          studentId,
+          totalAttempts: 0,
+          completedAttempts: 0,
+          completionRate: 0.0,
+          averageScore: 0.0,
+          totalQuestionsAnswered: 0,
+          accuracyRate: 0.0,
+          improvementTrend: 0.0,
+          performanceByChapter: {},
+          recentAttempts: [],
+        };
       }
+
+      // Filter by timeframe
+      let dateCutoff = 0;
+      const now = Date.now();
+      if (timeframe === 'today' || timeframe === 'day') {
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+        dateCutoff = startOfDay.getTime();
+      } else if (timeframe === 'month') {
+        dateCutoff = now - 30 * 24 * 60 * 60 * 1000;
+      } else {
+        // week (7 days)
+        dateCutoff = now - 7 * 24 * 60 * 60 * 1000;
+      }
+
+      const filteredHistory = perf.testHistory.filter(h => new Date(h.takenAt).getTime() >= dateCutoff);
+
+      const totalAttempts = filteredHistory.length;
+      const completedAttempts = totalAttempts;
+      const completionRate = totalAttempts > 0 ? 100.0 : 0.0;
+      
+      const totalQuestionsAnswered = filteredHistory.reduce((sum, h) => sum + h.totalQuestions, 0);
+      const totalCorrect = filteredHistory.reduce((sum, h) => sum + h.score, 0);
       const accuracyRate = totalQuestionsAnswered > 0
-        ? parseFloat(((totalCorrectAnswers / totalQuestionsAnswered) * 100).toFixed(1))
+        ? parseFloat(((totalCorrect / totalQuestionsAnswered) * 100).toFixed(1))
         : 0.0;
 
-      // Calculate improvement trend (score difference between first and last 5 attempts)
-      const sortedByDate = attempts.sort((a, b) => 
-        new Date(a.createdAt) - new Date(b.createdAt)
-      );
-      const improvementTrend = PerformanceAnalytics.calculateTrend(sortedByDate) || 0.0;
+      const sumPercentage = filteredHistory.reduce((sum, h) => sum + h.percentage, 0);
+      const averageScore = totalAttempts > 0
+        ? parseFloat((sumPercentage / totalAttempts).toFixed(2))
+        : 0.0;
 
-      // Performance by chapter
-      const performanceByChapter = await PerformanceAnalytics.getPerformanceByChapter(
-        studentId,
-        attempts
-      );
+      const improvementTrend = PerformanceAnalytics.calculateTrendFromHistory(filteredHistory) || 0.0;
+
+      const performanceByChapter = {};
 
       return {
         studentId,
@@ -112,17 +87,14 @@ class PerformanceAnalytics {
         accuracyRate,
         improvementTrend,
         performanceByChapter,
-        recentAttempts: sortedByDate.slice(-5).map(a => {
-          const maxQ = a.examId?.questions?.length || a.examId?.totalQuestions || 0;
-          const marks = a.examId?.marksPerQuestion || 1.0;
-          return {
-            examId: a.examId?._id || a.examId,
-            examTitle: a.examId?.title || 'Test',
-            score: a.score || 0,
-            maxScore: maxQ * marks,
-            date: a.createdAt ? new Date(a.createdAt).toLocaleDateString() : '',
-          };
-        }),
+        recentAttempts: filteredHistory.slice(-5).map(h => ({
+          examId: h.testId,
+          examTitle: h.testType === 'self-assessment' ? 'Self Assessment' : 'Exam',
+          score: h.score,
+          maxScore: h.totalQuestions,
+          date: h.takenAt ? new Date(h.takenAt).toLocaleDateString() : '',
+        })),
+        lastTestPercentage: perf.lastTestPercentage,
       };
     } catch (error) {
       console.error('Error calculating student performance:', error);
@@ -266,6 +238,55 @@ class PerformanceAnalytics {
     } catch (error) {
       console.error('Error calculating class performance:', error);
       throw error;
+    }
+  }
+
+  static calculateTrendFromHistory(history) {
+    if (!history || history.length < 5) return 0.0;
+    const first5 = history.slice(0, Math.min(5, Math.floor(history.length / 2)));
+    const last5 = history.slice(-5);
+
+    const first5Avg = first5.reduce((sum, h) => sum + h.percentage, 0) / first5.length;
+    const last5Avg = last5.reduce((sum, h) => sum + h.percentage, 0) / last5.length;
+
+    if (first5Avg === 0) return last5Avg > 0 ? 100.0 : 0.0;
+    return parseFloat(((last5Avg - first5Avg) / first5Avg * 100).toFixed(1));
+  }
+
+  static async savePerformance(studentMobile, testId, testType, score, totalQuestions) {
+    if (!studentMobile) return null;
+    try {
+      const percentage = totalQuestions > 0 ? parseFloat(((score / totalQuestions) * 100).toFixed(1)) : 0.0;
+      
+      let perf = await StudentPerformance.findOne({ studentMobile });
+      if (!perf) {
+        perf = new StudentPerformance({ studentMobile });
+      }
+
+      const exists = perf.testHistory.some(h => String(h.testId) === String(testId));
+      if (!exists) {
+        perf.lastTestPercentage = percentage;
+        perf.testHistory.push({
+          testId,
+          testType,
+          score,
+          totalQuestions,
+          percentage,
+          takenAt: new Date()
+        });
+
+        // Recalculate totals and average
+        perf.totalTestsTaken = perf.testHistory.length;
+        const sumPercentage = perf.testHistory.reduce((sum, h) => sum + h.percentage, 0);
+        perf.averagePercentage = parseFloat((sumPercentage / perf.totalTestsTaken).toFixed(1));
+
+        await perf.save();
+        console.log(`[PerformanceAnalytics] Saved performance for ${studentMobile}. Last %: ${percentage}%`);
+      }
+      return perf;
+    } catch (err) {
+      console.error('[PerformanceAnalytics] Error saving performance:', err.message);
+      return null;
     }
   }
 }
