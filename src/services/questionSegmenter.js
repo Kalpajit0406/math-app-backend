@@ -11,37 +11,11 @@ function bengaliToEnglishDigits(str) {
 function getMathRanges(text) {
   const ranges = [];
   if (!text) return ranges;
-  
-  // Find $$ ... $$
-  const displayMathRegex = /\$\$.*?\$\$/gs;
+  const mathRegex = /\$\$.*?\$\$|\\\[.*?\\\]|\\\(.*?\\\)|(?<!\$)\$.*?\$(?!\$)/gs;
   let match;
-  while ((match = displayMathRegex.exec(text)) !== null) {
+  while ((match = mathRegex.exec(text)) !== null) {
     ranges.push({ start: match.index, end: match.index + match[0].length });
   }
-  
-  // Find \[ ... \]
-  const bracketMathRegex = /\\\[.*?\\\]/gs;
-  while ((match = bracketMathRegex.exec(text)) !== null) {
-    ranges.push({ start: match.index, end: match.index + match[0].length });
-  }
-  
-  // Find \( ... \)
-  const parenMathRegex = /\\\(.*?\\\)/gs;
-  while ((match = parenMathRegex.exec(text)) !== null) {
-    ranges.push({ start: match.index, end: match.index + match[0].length });
-  }
-  
-  // Find $ ... $ (avoiding double dollar matches)
-  const inlineMathRegex = /(?<!\$)\$.*?\$(?!\$)/gs;
-  while ((match = inlineMathRegex.exec(text)) !== null) {
-    const start = match.index;
-    const end = match.index + match[0].length;
-    const isOverlapping = ranges.some(r => (start >= r.start && start < r.end) || (end > r.start && end <= r.end));
-    if (!isOverlapping) {
-      ranges.push({ start, end });
-    }
-  }
-  
   return ranges;
 }
 

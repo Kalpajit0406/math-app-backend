@@ -83,20 +83,12 @@ class ImagePreprocessor {
       const channels = meta.channels || 3;
 
       // ── Step 3: Compute raw stats + histogram equivalents for quality ──────
-      const rawStats = await img.clone().grayscale().raw().toBuffer({ resolveWithObject: true });
-      const rawPixels = rawStats.data;
-      const pixelCount = rawPixels.length;
-
-      let sum = 0, sumSq = 0, minVal = 255, maxVal = 0;
-      for (let i = 0; i < pixelCount; i++) {
-        const val = rawPixels[i];
-        sum   += val;
-        sumSq += val * val;
-        if (val < minVal) minVal = val;
-        if (val > maxVal) maxVal = val;
-      }
-      const rawMean  = sum / pixelCount;
-      const rawStdev = Math.sqrt(sumSq / pixelCount - rawMean * rawMean);
+      const rawStats = await img.clone().grayscale().stats();
+      const rawCh = rawStats.channels && rawStats.channels[0];
+      const rawMean = rawCh ? rawCh.mean : 128;
+      const rawStdev = rawCh ? rawCh.stdev : 30;
+      const minVal = rawCh ? rawCh.min : 0;
+      const maxVal = rawCh ? rawCh.max : 255;
 
       const qualityIssues = [];
       const isLowLight    = rawMean < 85;
@@ -296,20 +288,12 @@ class ImagePreprocessor {
       const maxDim = Math.max(origW, origH);
       const minDim = Math.min(origW, origH);
 
-      const rawStats = await img.clone().grayscale().raw().toBuffer({ resolveWithObject: true });
-      const rawPixels = rawStats.data;
-      const pixelCount = rawPixels.length;
-
-      let sum = 0, sumSq = 0, minVal = 255, maxVal = 0;
-      for (let i = 0; i < pixelCount; i++) {
-        const val = rawPixels[i];
-        sum   += val;
-        sumSq += val * val;
-        if (val < minVal) minVal = val;
-        if (val > maxVal) maxVal = val;
-      }
-      const rawMean  = sum / pixelCount;
-      const rawStdev = Math.sqrt(sumSq / pixelCount - rawMean * rawMean);
+      const rawStats = await img.clone().grayscale().stats();
+      const rawCh = rawStats.channels && rawStats.channels[0];
+      const rawMean = rawCh ? rawCh.mean : 128;
+      const rawStdev = rawCh ? rawCh.stdev : 30;
+      const minVal = rawCh ? rawCh.min : 0;
+      const maxVal = rawCh ? rawCh.max : 255;
 
       const qualityIssues = [];
       const isLowLight    = rawMean < 85;

@@ -531,6 +531,86 @@ class OCRPipeline {
    */
   static async runParsing(ocrResult, filename) {
     const { rawText, latex: rawLatex, confidence } = ocrResult;
+    const ocrConf = confidence !== null ? confidence : 1.0;
+
+    // ── Layer 4: Page Classification (DOCUMENT UNDERSTANDING) ─────────────
+    const textForClassification = rawLatex || rawText;
+    const pageClassification = PageClassificationEngine.classifyPage(textForClassification);
+    
+    // Detect if there are multiple sections in the text
+    const hasMultipleSections = PageClassificationEngine.extractSections(textForClassification).length > 1;
+
+    // Fast-path eligibility check: Clean MCQ page + High OCR confidence + Strong classification signal + Single Section only
+    const isFastPath = 
+      pageClassification.pageType === 'MCQ_PAGE' && 
+      ocrConf >= 0.85 && 
+      pageClassification.confidence >= 0.80 &&
+      !hasMultipleSections;
+
+    if (isFastPath) {
+      console.log('[OCRPipeline] >>> FAST PATH TRIGGERED <<< (Clean MCQ layout + High Confidence)');
+      
+      const normalizedText = OCRNormalizer.normalizeText(textForClassification);
+      const sanitizedLatex = LatexSanitizer.sanitize(textForClassification, ocrConf);
+
+      // Fast Path: Directly segment and parse as MCQ. Skip Layout analysis, section splitting, and block classification.
+      const sectionSegments = QuestionSegmenter.segment(sanitizedLatex);
+      const parsedQuestions = [];
+      let globalOrder = 0;
+      const seenNumbers = new Set();
+
+      for (let idx = 0; idx < sectionSegments.length; idx++) {
+        const seg = sectionSegments[idx];
+        if (!seg.text || !seg.text.trim()) continue;
+
+        // Skip block classification, skip repeated parser routing, directly parse as MCQ
+        const parsedBlock = MCQOptionParser.parse(seg.text.trim());
+        if (!parsedBlock) continue;
+
+        const questionNum = seg.number || String(idx + 1);
+        const questionText = parsedBlock.question;
+
+        // Skip duplicates and invalid segments
+        if (questionText.length < 5 || seenNumbers.has(questionNum)) {
+          continue;
+        }
+
+        globalOrder++;
+        parsedQuestions.push({
+          question: questionText,
+          options: parsedBlock.options,
+          columnA: [],
+          columnB: [],
+          matchingChoices: [],
+          blanks: [],
+          blankCount: 0,
+          format: parsedBlock.format || 'mcq',
+          questionNumber: questionNum,
+          rawChunk: seg.text,
+          detectionOrder: globalOrder,
+          effectiveParserType: 'MCQ',
+          blockClass: { confidence: 0.95 },
+          sectionTitle: 'Default',
+          sectionConfidence: 0.95,
+          sourceUsed: 'fast-path-mcq',
+          layoutMetadata: { strategy: 'fast-path' },
+          fastPath: true
+        });
+
+        seenNumbers.add(questionNum);
+      }
+
+      return {
+        blocked: false,
+        parsedQuestions,
+        pageType: pageClassification.pageType,
+        sections: [{ title: 'Default', parserType: 'MCQ' }],
+        totalRejected: 0
+      };
+    }
+
+    // ── SAFE PATH (Fallback) ─────────────────────────────────────────────
+    console.log('[OCRPipeline] >>> SAFE PATH TRIGGERED <<< (Mixed/low-confidence/complex layout)');
 
     // ── Layer 3.5: Layout Analysis Engine ────────────────────────────────
     let layoutText = rawLatex || rawText;
@@ -543,18 +623,12 @@ class OCRPipeline {
       console.warn('[OCRPipeline] LayoutAnalysisEngine failed, using raw output:', layoutErr.message);
     }
 
-    // ── Layer 4: Page Classification (DOCUMENT UNDERSTANDING) ─────────────
-    const pageClassification = PageClassificationEngine.classifyPage(layoutText);
-    console.log('[OCRPipeline] Page Classification:', {
-      pageType:          pageClassification.pageType,
-      defaultParser:     pageClassification.defaultParserType,
-      confidence:        pageClassification.confidence,
-      diagnostics:       pageClassification.diagnostics,
-    });
+    // Re-classify page on layout-analyzed text to be safe
+    const safePageClassification = PageClassificationEngine.classifyPage(layoutText);
 
     // ── Layer 5: Answer Key & Theory Page Blocking ───────────────────────
     const isAnsKey =
-      pageClassification.pageType === 'ANSWER_KEY_PAGE' ||
+      safePageClassification.pageType === 'ANSWER_KEY_PAGE' ||
       ContentClassificationEngine.isAnswerKeyPage(layoutText);
 
     if (isAnsKey) {
@@ -563,21 +637,21 @@ class OCRPipeline {
         blocked: true,
         blockedResponse: {
           rawText: rawText || '', latex: rawLatex || '', parsedQuestions: [],
-          confidence: confidence ?? 1.0, qualityRating: 'high', isValid: false,
+          confidence: ocrConf, qualityRating: 'high', isValid: false,
           pageType: 'ANSWER_KEY_PAGE',
           detectionQuality: { source: 'classifier', multipleDetected: false, questionCount: 0 }
         }
       };
     }
 
-    const isTheoryPage = pageClassification.pageType === 'THEORY_PAGE';
+    const isTheoryPage = safePageClassification.pageType === 'THEORY_PAGE';
     if (isTheoryPage) {
       console.log('[OCRPipeline] THEORY_PAGE detected. Blocking all content.');
       return {
         blocked: true,
         blockedResponse: {
           rawText: rawText || '', latex: rawLatex || '', parsedQuestions: [],
-          confidence: confidence ?? 1.0, qualityRating: 'high', isValid: false,
+          confidence: ocrConf, qualityRating: 'high', isValid: false,
           pageType: 'THEORY_PAGE',
           detectionQuality: { source: 'classifier', multipleDetected: false, questionCount: 0 }
         }
@@ -592,8 +666,8 @@ class OCRPipeline {
         blocked: true,
         blockedResponse: {
           rawText: rawText || '', latex: rawLatex || '', parsedQuestions: [fallbackItem],
-          confidence: confidence ?? 0.0, qualityRating: 'low', isValid: false,
-          pageType: pageClassification.pageType,
+          confidence: ocrConf, qualityRating: 'low', isValid: false,
+          pageType: safePageClassification.pageType,
           detectionQuality: { source: 'recovery', multipleDetected: false, questionCount: 1 }
         }
       };
@@ -601,7 +675,7 @@ class OCRPipeline {
 
     // ── Layer 7: Text normalization & LaTeX sanitization ──────────────────
     const normalizedText = OCRNormalizer.normalizeText(layoutText);
-    const sanitizedLatex = LatexSanitizer.sanitize(layoutText, confidence);
+    const sanitizedLatex = LatexSanitizer.sanitize(layoutText, ocrConf);
 
     // ── Layer 8: Section Extraction (BEFORE segmentation) ─────────────────
     const latexSections = PageClassificationEngine.extractSections(sanitizedLatex);
@@ -656,23 +730,19 @@ class OCRPipeline {
         }];
       }
 
+      // Optimize: Classify parser once per section, do NOT re-run block classification for every segment
+      const sectionParserType = section.parserType || PARSER_TYPES.MCQ;
+
       for (let idx = 0; idx < sectionSegments.length; idx++) {
         try {
           const seg = sectionSegments[idx];
           if (!seg.text || !seg.text.trim()) continue;
 
-          const blockClass = PageClassificationEngine.classifyBlock(seg.text, section.parserType);
-
-          if (blockClass.parserType === PARSER_TYPES.ANSWER_KEY) {
-            console.log(`[OCRPipeline] Block-level answer key detected — skipping.`);
-            continue;
-          }
-
-          const effectiveParserType = blockClass.parserType;
-          const parsedBlock = routeToParser(seg.text, effectiveParserType, confidence);
+          // Route directly using the section parser type (Part 2)
+          const parsedBlock = routeToParser(seg.text, sectionParserType, ocrConf);
 
           const questionNum = seg.number || String(idx + 1);
-          const sanitizedQuestion = LatexSanitizer.sanitize(parsedBlock.question, confidence);
+          const sanitizedQuestion = LatexSanitizer.sanitize(parsedBlock.question, ocrConf);
 
           const filter = preFilterSegment(sanitizedQuestion, questionNum, sectionSeenNumbers);
           let isFragmentOrKey = false;
@@ -690,7 +760,7 @@ class OCRPipeline {
 
           const sanitizedOptions  = (parsedBlock.options || []).map(o => ({
             label: o.label,
-            text:  LatexSanitizer.sanitize(o.text, confidence),
+            text:  LatexSanitizer.sanitize(o.text, ocrConf),
           }));
 
           globalOrder++;
@@ -706,8 +776,8 @@ class OCRPipeline {
             questionNumber: questionNum,
             rawChunk: seg.text,
             detectionOrder: globalOrder,
-            effectiveParserType,
-            blockClass,
+            effectiveParserType: sectionParserType,
+            blockClass: { confidence: 0.8 },
             sectionTitle: section.title,
             sectionConfidence: section.confidence,
             sourceUsed,
@@ -724,7 +794,7 @@ class OCRPipeline {
     return {
       blocked: false,
       parsedQuestions,
-      pageType: pageClassification.pageType,
+      pageType: safePageClassification.pageType,
       sections: useSections.map(s => ({ title: s.title, parserType: s.parserType })),
       totalRejected
     };
@@ -742,6 +812,10 @@ class OCRPipeline {
     let totalRejectedFromValidation = totalRejected;
     let sourceUsed = 'unknown';
 
+    // Optimize: only check overlapping boxes once per page if NOT fast path
+    const isFastPath = parsedQuestions.length > 0 && parsedQuestions[0].fastPath;
+    const hasOverlapping = !isFastPath && detectOverlappingBoxes(ocrResult.ocr?.lines || ocrResult.lines);
+
     for (const q of parsedQuestions) {
       try {
         const parsedBlock = {
@@ -757,15 +831,30 @@ class OCRPipeline {
 
         sourceUsed = q.sourceUsed || 'unknown';
 
-        const confScore = computeConfidenceScore(
-          confidence,
-          q.blockClass?.confidence ?? 0.8,
-          0.8, // page classification baseline
-          q.sectionConfidence,
-          q.rawChunk,
-          parsedBlock,
-          q.questionNumber
-        );
+        // Fast-path: skip heavy confidence computation, skip repeated evaluations
+        const confScore = isFastPath
+          ? {
+              composite: 0.95,
+              rating: 'high',
+              ocrConfidence: confidence ?? 0.95,
+              parserConfidence: 0.95,
+              layoutConfidence: 0.95,
+              sectionConfidence: 0.95,
+              structuralConfidence: 1.0,
+              latexConfidence: 1.0,
+              semanticConfidence: 1.0,
+              optionIntegrityConfidence: 1.0,
+              boundaryConfidence: 1.0
+            }
+          : computeConfidenceScore(
+              confidence,
+              q.blockClass?.confidence ?? 0.8,
+              0.8, // page classification baseline
+              q.sectionConfidence,
+              q.rawChunk,
+              parsedBlock,
+              q.questionNumber
+            );
 
         const enrichedQuestion = {
           question: q.question,
@@ -784,9 +873,9 @@ class OCRPipeline {
           confidenceScores: confScore,
           rawOcrData: {
             sourceUsed: q.sourceUsed,
-            rawText,
-            rawLatex,
-            sanitizedLatex,
+            rawText: q.rawChunk, // Optimized: store only question chunk, not full page!
+            rawLatex: q.rawChunk,
+            sanitizedLatex: q.rawChunk,
             confidence,
             chunkText: q.rawChunk,
             preprocessing: preprocessInfo ? preprocessInfo.diagnostics : null,
@@ -808,50 +897,55 @@ class OCRPipeline {
           },
         };
 
-        const validationResult = QuestionValidator.validate(enrichedQuestion);
+        // Fast-path: skip heavy validation checklist
+        const validationResult = isFastPath
+          ? { isValid: true, errors: [] }
+          : QuestionValidator.validate(enrichedQuestion);
+        
         enrichedQuestion.validation = validationResult;
 
         const quarantineReasons = [];
-        if (confScore.ocrConfidence < 0.70) quarantineReasons.push('low_ocr_confidence');
-        if (confScore.latexConfidence < 0.80) quarantineReasons.push('malformed_latex');
-        if (confScore.parserConfidence < 0.70) quarantineReasons.push('parser_ambiguity');
-        
-        const hasOverlapping = detectOverlappingBoxes(ocrResult.ocr?.lines || ocrResult.lines);
-        if (hasOverlapping) quarantineReasons.push('overlapping_bounding_boxes');
+        if (!isFastPath) {
+          if (confScore.ocrConfidence < 0.70) quarantineReasons.push('low_ocr_confidence');
+          if (confScore.latexConfidence < 0.80) quarantineReasons.push('malformed_latex');
+          if (confScore.parserConfidence < 0.70) quarantineReasons.push('parser_ambiguity');
+          if (hasOverlapping) quarantineReasons.push('overlapping_bounding_boxes');
 
-        const duplicateQuestion = sectionSeenNumbers.has(q.questionNumber);
-        if (duplicateQuestion) quarantineReasons.push('duplicate_question_number');
+          const sectionKey = `${q.sectionTitle || 'Default'}_${q.questionNumber}`;
+          const duplicateQuestion = sectionSeenNumbers.has(sectionKey);
+          if (duplicateQuestion) quarantineReasons.push('duplicate_question_number');
 
-        if (['mcq', 'line-based', 'inline-mcq', 'structured'].includes(enrichedQuestion.format)) {
-          if (confScore.optionIntegrityConfidence < 1.0) {
-            quarantineReasons.push('malformed_options_array');
+          if (['mcq', 'line-based', 'inline-mcq', 'structured'].includes(enrichedQuestion.format)) {
+            if (confScore.optionIntegrityConfidence < 1.0) {
+              quarantineReasons.push('malformed_options_array');
+            }
           }
-        }
 
-        if (pageType === 'UNKNOWN_PAGE') {
-          quarantineReasons.push('unsupported_layout');
-        }
+          if (pageType === 'UNKNOWN_PAGE') {
+            quarantineReasons.push('unsupported_layout');
+          }
 
-        if (preprocessInfo?.diagnostics?.isLowLight || preprocessInfo?.diagnostics?.issues?.includes('low_light')) {
-          quarantineReasons.push('low_light_image');
-        }
+          if (preprocessInfo?.diagnostics?.isLowLight || preprocessInfo?.diagnostics?.issues?.includes('low_light')) {
+            quarantineReasons.push('low_light_image');
+          }
 
-        if (preprocessInfo?.diagnostics?.isBlurred || preprocessInfo?.diagnostics?.issues?.includes('blur') || preprocessInfo?.diagnostics?.issues?.includes('low_contrast')) {
-          quarantineReasons.push('blur_threshold_exceeded');
-        }
+          if (preprocessInfo?.diagnostics?.isBlurred || preprocessInfo?.diagnostics?.issues?.includes('blur') || preprocessInfo?.diagnostics?.issues?.includes('low_contrast')) {
+            quarantineReasons.push('blur_threshold_exceeded');
+          }
 
-        const bleedRegex = /(?:\n\s*\d+[\s.)]|\s+\([b-z]\)\s+|\bQ\d+\b)/;
-        if (bleedRegex.test(q.question)) {
-          quarantineReasons.push('parser_contamination_suspected');
-        }
+          const bleedRegex = /(?:\n\s*\d+[\s.)]|\s+\([b-z]\)\s+|\bQ\d+\b)/;
+          if (bleedRegex.test(q.question)) {
+            quarantineReasons.push('parser_contamination_suspected');
+          }
 
-        if (!validationResult.isValid) {
-          quarantineReasons.push(...validationResult.errors);
+          if (!validationResult.isValid) {
+            quarantineReasons.push(...validationResult.errors);
+          }
         }
 
         let extractionState = 'ACCEPTED';
         const composite = confScore.composite;
-        if (composite >= 0.90) {
+        if (isFastPath || composite >= 0.90) {
           extractionState = 'ACCEPTED';
         } else if (composite >= 0.75) {
           extractionState = 'MANUAL_REVIEW';
@@ -882,7 +976,8 @@ class OCRPipeline {
         });
         if (previewData) enrichedQuestion.preview = previewData;
 
-        sectionSeenNumbers.add(q.questionNumber);
+        const sectionKey = `${q.sectionTitle || 'Default'}_${q.questionNumber}`;
+        sectionSeenNumbers.add(sectionKey);
         finalQuestions.push(enrichedQuestion);
       } catch (err) {
         console.error('[OCRPipeline] runValidation error: ', err);

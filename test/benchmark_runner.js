@@ -430,7 +430,7 @@ async function runBenchmark() {
   console.log(`====================================================\n`);
 
   // Write reports
-  const artifactDir = '/home/kalpajit/.gemini/antigravity-cli/brain/6b65817b-40ad-46a3-b0aa-66b135eb9f62';
+  const artifactDir = '/home/kalpajit/.gemini/antigravity-cli/brain/28bfb2e5-37ff-4606-aded-26da3a45788c';
   const rootDir = '/home/kalpajit/MathswithSD';
 
   const writeReport = (filename, content) => {
