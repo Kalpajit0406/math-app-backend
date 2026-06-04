@@ -1,11 +1,20 @@
 const SelfAssessmentService = require('../services/selfAssessmentService');
+const Student = require('../models/studentModel');
 
 exports.generateAssessment = async (req, res) => {
   try {
     const studentId = req.user.id || req.user._id;
-    // Enforce class level from server-side user details (cannot be overridden by request params!)
-    const classNo = req.user.classNo;
+    const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student profile not found.'
+      });
+    }
+
+    const classNo = student.classNo;
     const deviceFingerprint = req.headers['x-device-fingerprint'] || req.headers['user-agent'] || 'unknown';
+    const { chapters, limit, time } = req.body;
 
     if (!classNo) {
       return res.status(400).json({
@@ -14,7 +23,15 @@ exports.generateAssessment = async (req, res) => {
       });
     }
 
-    const session = await SelfAssessmentService.generateAssessment(studentId, classNo, deviceFingerprint);
+    const session = await SelfAssessmentService.generateAssessment(
+      studentId,
+      classNo,
+      deviceFingerprint,
+      chapters,
+      limit,
+      time
+    );
+
     return res.status(201).json({
       success: true,
       data: session
@@ -30,6 +47,42 @@ exports.generateAssessment = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to generate assessment'
+    });
+  }
+};
+
+exports.getChapters = async (req, res) => {
+  try {
+    const studentId = req.user.id || req.user._id;
+    const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student profile not found.'
+      });
+    }
+
+    const classNo = student.classNo;
+    if (!classNo) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student profile missing class assignment.'
+      });
+    }
+
+    const Question = require('../models/questionModel');
+    const chapters = await Question.distinct('chapter', { classNo: Number(classNo), chapter: { $ne: null, $ne: "" } });
+    chapters.sort();
+
+    return res.json({
+      success: true,
+      data: chapters
+    });
+  } catch (error) {
+    console.error('[SelfAssessment] Get chapters failed:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to retrieve chapters'
     });
   }
 };

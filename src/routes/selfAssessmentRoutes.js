@@ -3,6 +3,7 @@ const selfAssessmentController = require('../controllers/selfAssessmentControlle
 const authMiddleware = require('../middleware/authMiddleware');
 
 // All routes require student authentication
+router.get('/chapters', authMiddleware, selfAssessmentController.getChapters);
 router.post('/generate', authMiddleware, selfAssessmentController.generateAssessment);
 router.get('/question', authMiddleware, selfAssessmentController.getCurrentQuestion);
 router.post('/submit', authMiddleware, selfAssessmentController.submitAnswer);

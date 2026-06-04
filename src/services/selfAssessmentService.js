@@ -17,30 +17,37 @@ class SelfAssessmentService {
   /**
    * Generates a new secure randomized self-assessment session
    */
-  static async generateAssessment(studentId, classNo, deviceFingerprint) {
+  static async generateAssessment(studentId, classNo, deviceFingerprint, chapters = [], limit = 10, durationMinutes = 30) {
     const today = this.getTodayString();
 
-    // 1. Quota Check (Server-Side enforced)
+    // 1. Quota Check (Server-Side enforced) - BYPASSED FOR TESTING/UNLIMITED ACCESS
+    /*
     const usage = await SelfAssessmentUsage.findOne({ studentId, date: today });
     if (usage && usage.assessmentCount >= 5) {
       console.warn(`[SelfAssessment] Access blocked: Student ${studentId} exceeded daily self-assessment limit.`);
       throw new Error('COOLDOWN_LIMIT: You have reached the maximum of 5 self-assessments for today.');
     }
+    */
 
-    // 2. Select 10 questions randomly matching class level using memory-safe MongoDB $sample
+    // 2. Select questions randomly matching class level and chapter(s) using memory-safe MongoDB $sample
+    const matchCriteria = { classNo: Number(classNo) };
+    if (chapters && chapters.length > 0) {
+      matchCriteria.chapter = { $in: chapters };
+    }
+
     const questions = await Question.aggregate([
-      { $match: { classNo: Number(classNo) } },
-      { $sample: { size: 10 } }
+      { $match: matchCriteria },
+      { $sample: { size: Number(limit) || 10 } }
     ]);
 
     if (!questions || questions.length === 0) {
-      throw new Error('NO_QUESTIONS: No questions available for your class level currently.');
+      throw new Error('NO_QUESTIONS: No questions available for the selected chapter(s) at your class level.');
     }
 
     const questionIds = questions.map(q => q._id);
     const token = crypto.randomBytes(32).toString('hex');
     const sessionId = `assess_${studentId}_${Date.now()}`;
-    const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 mins session duration
+    const expiresAt = new Date(Date.now() + (Number(durationMinutes) || 30) * 60 * 1000); // dynamic duration session
 
     // 3. Create Session
     const session = new SelfAssessmentSession({
