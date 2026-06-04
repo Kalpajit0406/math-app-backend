@@ -126,7 +126,7 @@ exports.getQuestionAnalytics = async (req, res) => {
 exports.getExamQuestionsAnalytics = async (req, res) => {
   try {
     const { examId } = req.params;
-    const { Exam } = require('../models/examModel');
+    const Exam = require('../models/examModel');
 
     const exam = await Exam.findById(examId).lean();
     if (!exam) {

@@ -96,7 +96,9 @@ async function evaluateAttemptIfNeeded(attempt, exam) {
   if (isExamEnded) {
     let score = 0;
     for (const res of attempt.responses) {
-      const question = exam.questions.id(res.questionId);
+      const question = (exam.questions && typeof exam.questions.id === 'function')
+        ? exam.questions.id(res.questionId)
+        : (exam.questions ? exam.questions.find(q => q._id && res.questionId && q._id.toString() === res.questionId.toString()) : null);
       if (question) {
         res.isCorrect = evaluateQuestionCorrectness(question, res.userAnswer);
         if (res.isCorrect) score++;

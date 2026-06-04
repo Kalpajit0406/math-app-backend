@@ -158,7 +158,7 @@ class PerformanceAnalytics {
         // Find chapter from populated examId.questions subdocuments
         if (attempt.examId.questions) {
           const q = attempt.examId.questions.find(
-            item => item._id.toString() === response.questionId.toString()
+            item => item && item._id && response.questionId && item._id.toString() === response.questionId.toString()
           );
           if (q && q.chapter) {
             chapter = q.chapter;
@@ -167,7 +167,7 @@ class PerformanceAnalytics {
         
         // Fallback to checking the global Question collection just in case
         if (chapter === 'General') {
-          const question = await Question.findById(response.questionId).lean();
+          const question = response.questionId ? await Question.findById(response.questionId).lean() : null;
           if (question && question.chapter) {
             chapter = question.chapter;
           } else if (attempt.examId.chapters && attempt.examId.chapters.length > 0) {
