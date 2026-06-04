@@ -74,7 +74,7 @@ class ContentClassificationEngine {
     // e.g. "Mark 1", "Level 1", "Class XI", "Semester-I", "Unit-1"
     const metadataPatterns = [
       /^(?:marks?|val)\s*[:\-]?\s*\d+\s*$/i,
-      /^level\s*\d+\s*$/i,
+      /^(?:exe\s+)?level\s*(?:[ivx]+|\d+)\s*$/i,
       /^class\s+(?:IX|X|XI|XII|\d+)\s*$/i,
       /^semester\s*[\-\s]?\s*(?:I|II|III|IV|V|VI|\d+)\s*$/i,
       /^unit\s*[\-\s]?\s*(?:I|II|III|IV|V|VI|\d+)\s*$/i
