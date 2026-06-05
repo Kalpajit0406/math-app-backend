@@ -211,7 +211,50 @@ class LatexSanitizer {
   // ─── PRIVATE: SAFE NORMALIZATION ──────────────────────────────────────────
 
   static _safeNormalize(s) {
-    // Collapse multiple escaped underscores into a single blank line pattern (\_____)
+    // ── PART A: Mathpix Formatting Artifact Removal ──────────────────────────
+    // Remove \boldsymbol wrappers: \boldsymbol{X} → X
+    s = s.replace(/\\boldsymbol\s*\{([^}]*)\}/g, '$1');
+    // Remove \mathbf wrappers around plain numbers/letters: \mathbf{24} → 24
+    s = s.replace(/\\mathbf\s*\{([^}]*)\}/g, '$1');
+    // Remove \mathit wrappers: \mathit{x} → x
+    s = s.replace(/\\mathit\s*\{([^}]*)\}/g, '$1');
+    // Remove \mathrm wrappers (e.g., \mathrm{sin} → keep if trig, else strip)
+    // We keep \mathrm but just strip the wrapper
+    s = s.replace(/\\mathrm\s*\{([^}]*)\}/g, '$1');
+
+    // ── PART B: \operatorname spaced-out token normalization ─────────────────
+    // \operatorname { s i n } → \sin
+    // First compact spaces inside operatorname braces: { s i n } → {sin}
+    s = s.replace(/\\operatorname\s*\{\s*([a-zA-Z](?:\s+[a-zA-Z])+)\s*\}/g, (match, spaced) => {
+      const compacted = spaced.replace(/\s+/g, ''); // "s i n" → "sin"
+      const trigMap = {
+        'sin': '\\sin', 'cos': '\\cos', 'tan': '\\tan',
+        'cot': '\\cot', 'sec': '\\sec', 'csc': '\\csc',
+        'log': '\\log', 'ln':  '\\ln',  'exp': '\\exp',
+        'lim': '\\lim', 'max': '\\max', 'min': '\\min',
+        'det': '\\det', 'gcd': '\\gcd', 'sup': '\\sup',
+        'inf': '\\inf', 'arg': '\\arg', 'Arg': '\\arg',
+        'Re':  '\\Re',  'Im':  '\\Im',
+      };
+      return trigMap[compacted] || `\\operatorname{${compacted}}`;
+    });
+    // \operatorname{sin} → \sin (no spaces in braces case)
+    s = s.replace(/\\operatorname\s*\{\s*(sin|cos|tan|cot|sec|csc|log|ln|exp|lim|max|min|det|gcd|sup|inf|arg|Re|Im)\s*\}/g,
+      (_, name) => `\\${name}`);
+
+    // ── PART C: Blank normalization ──────────────────────────────────────────
+    // $____$ or $\_\_\_\_$ → ---
+    s = s.replace(/\$\s*(?:_+|\\_+|\.\.+|\. \. \. ?\.)\s*\$/g, '---');
+    // \(____\) or \[____\] form
+    s = s.replace(/\\[\(\[]\s*(?:_+|\\_+|\.\.+)\s*\\[\)\]]/g, '---');
+    // Standalone long underscore sequences outside math → ---
+    s = s.replace(/(?<![\\$])_{4,}(?![\w{])/g, '---');
+    // Escaped underscores that form blanks: \_\_\_\_ → ---
+    s = s.replace(/(?:\\_){3,}/g, '---');
+    // Collapse repeated --- into single ---
+    s = s.replace(/-{3,}/g, '---');
+
+    // Collapse multiple escaped underscores (now handled above, but keep for safety)
     s = s.replace(/(?:\\_)+/g, (match) => '\\' + '_'.repeat(match.length / 2));
 
     // Remove dangerous injection commands

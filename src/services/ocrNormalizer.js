@@ -83,6 +83,41 @@ class OCRNormalizer {
     // Join continuation lines BUT protect LaTeX blocks and question/option starts
     s = this._smartJoinLines(s);
 
+    // ── 9. Stray symbol cleanup ──────────────────────────────────────────────────
+    // Remove null bytes and replacement characters
+    s = s.replace(/\uFFFD/g, '?');
+    // Normalize repeated punctuation artifacts (--... or ==... from OCR)
+    s = s.replace(/={3,}/g, '=').replace(/\*{3,}/g, '...');
+
+    return s.trim();
+  }
+
+  /**
+   * Clean up a single parsed question text.
+   * Call this after parsing (not on raw OCR).
+   */
+  static cleanQuestionText(text) {
+    if (!text || typeof text !== 'string') return text;
+    let s = text;
+
+    // Normalize repeated spaces
+    s = s.replace(/[ \t]+/g, ' ');
+
+    // Fix malformed punctuation: multiple dots not part of ellipsis
+    s = s.replace(/\.{4,}/g, '...');
+
+    // Remove dangling backslashes at end
+    s = s.replace(/\\+$/, '');
+
+    // Collapse blank lines inside question text
+    s = s.replace(/\n{3,}/g, '\n\n');
+
+    // Normalize option label references inside question text:
+    // e.g. "between (c) and (d)" → "between (C) and (D)"
+    // Only apply when NOT at start of line (so we don't hit actual option labels)
+    s = s.replace(/((?:between|and|or|option|answer|choose|select)\s+)\(([a-d])\)/gi,
+      (_, prefix, label) => `${prefix}(${label.toUpperCase()})`);
+
     return s.trim();
   }
 

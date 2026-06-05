@@ -412,19 +412,25 @@ function computeConfidenceScore(ocrConfidence, parserConfidence, layoutConfidenc
   unclosed += stack.length;
   const latexConfidence = Math.max(0, 1.0 - (0.15 * unclosed));
 
-  // 3. Semantic confidence
-  let semanticConfidence = 1.0;
-  const mathKeywords = /\b(?:find|evaluate|solve|equals?|determine|calculate|prove|show|simplify|integrate|differentiate|matrix|equation|probability|triangle|circle|derivative|angle|sum|product|ratio|fraction|expression|value|what|how|where|prove|verify|construct)\b/i;
+  // 3. Semantic confidence — improved: boost for math notation, trig, equations
+  let semanticConfidence = 0.85; // default: moderate
+  const mathKeywords = /\b(?:find|evaluate|solve|equals?|determine|calculate|prove|show|simplify|integrate|differentiate|matrix|equation|probability|triangle|circle|derivative|angle|sum|product|ratio|fraction|expression|value|what|how|where|verify|construct)\b/i;
+  const mathSymbols = /[+\-=*/^\\{}\[\]|<>∫∑∏√±≤≥≠≈∞αβγδεθλμπσφω]/;
+  const trigPatterns = /\\(?:sin|cos|tan|cot|sec|csc|log|ln|exp|lim|max|min)/;
   const cleanText = questionText.replace(/\s+/g, '');
   if (cleanText.length > 0) {
-    const validChars = cleanText.match(/[a-zA-Z0-9+\-=*/^$\\_{}[\]()|<>.,;?!]/g) || [];
+    const validChars = cleanText.match(/[a-zA-Z0-9+\-=*/^$\\_{}\[\]()|<>.,;?!]/g) || [];
     const validRatio = validChars.length / cleanText.length;
-    if (validRatio < 0.60) {
+    if (validRatio < 0.50) {
       semanticConfidence = 0.40;
-    } else if (!mathKeywords.test(questionText)) {
-      semanticConfidence = 0.70;
-    } else {
+    } else if (trigPatterns.test(questionText) || mathSymbols.test(questionText)) {
+      // Contains valid math notation — boost
+      semanticConfidence = 0.95;
+    } else if (mathKeywords.test(questionText)) {
       semanticConfidence = 1.0;
+    } else {
+      // Valid chars but no clear math pattern — neutral
+      semanticConfidence = 0.80;
     }
   } else {
     semanticConfidence = 0.40;
@@ -434,29 +440,46 @@ function computeConfidenceScore(ocrConfidence, parserConfidence, layoutConfidenc
   let optionIntegrityConfidence = 1.0;
   if (['mcq', 'line-based', 'inline-mcq', 'structured'].includes(format)) {
     if (filledOptions >= 4) optionIntegrityConfidence = 1.0;
-    else if (filledOptions === 3) optionIntegrityConfidence = 0.75;
-    else if (filledOptions === 2) optionIntegrityConfidence = 0.50;
+    else if (filledOptions === 3) optionIntegrityConfidence = 0.80;
+    else if (filledOptions === 2) optionIntegrityConfidence = 0.55;
     else optionIntegrityConfidence = 0.0;
   } else {
-    if (filledOptions > 0) optionIntegrityConfidence = 0.50;
+    // Non-MCQ: options absence is expected
+    optionIntegrityConfidence = 1.0;
   }
 
   // 5. Question-boundary confidence
-  let boundaryConfidence = questionNumber != null ? 1.0 : 0.70;
+  let boundaryConfidence = questionNumber != null ? 1.0 : 0.75;
   const bleedRegex = /(?:\n\s*\d+[\s.)]|\s+\([b-z]\)\s+|\bQ\d+\b)/;
   if (bleedRegex.test(questionText)) {
     boundaryConfidence = Math.max(0, boundaryConfidence - 0.25);
   }
 
-  // Weighted composite score
-  const composite = (ocr * 0.25) +
-                    (layout * 0.15) +
-                    (parser * 0.15) +
-                    (structuralConfidence * 0.15) +
-                    (latexConfidence * 0.10) +
-                    (semanticConfidence * 0.10) +
-                    (optionIntegrityConfidence * 0.05) +
-                    (boundaryConfidence * 0.05);
+  // ── STRUCTURAL BOOST ──────────────────────────────────────────────────────
+  // If structure + options are perfect, reduce OCR confidence dominance.
+  // An MCQ with 4 clean options and valid boundaries is almost certainly correct.
+  let structuralBoost = 0.0;
+  const isMCQFormat = ['mcq', 'line-based', 'inline-mcq', 'structured'].includes(format);
+  if (isMCQFormat && filledOptions >= 4 && structuralConfidence >= 0.85 && boundaryConfidence >= 0.75) {
+    structuralBoost = 0.08; // bonus for structurally-perfect MCQ
+  } else if (!isMCQFormat && structuralConfidence >= 0.90) {
+    structuralBoost = 0.04;
+  }
+
+  // ── WEIGHTED COMPOSITE ────────────────────────────────────────────────────
+  // OCR weight reduced: structure correctness is more reliable than raw OCR conf.
+  // Priority: structural > option integrity > parser > boundary > latex > semantic > ocr
+  const composite = (structuralConfidence      * 0.22) +
+                    (optionIntegrityConfidence  * 0.18) +
+                    (parser                    * 0.18) +
+                    (boundaryConfidence        * 0.14) +
+                    (latexConfidence           * 0.10) +
+                    (semanticConfidence        * 0.08) +
+                    (ocr                       * 0.06) +
+                    (layout                    * 0.04) +
+                    structuralBoost;
+
+  const clampedComposite = Math.max(0, Math.min(1, composite));
 
   return {
     ocrConfidence:             ocr,
@@ -468,8 +491,9 @@ function computeConfidenceScore(ocrConfidence, parserConfidence, layoutConfidenc
     semanticConfidence,
     optionIntegrityConfidence,
     boundaryConfidence,
-    composite:                 Math.max(0, Math.min(1, composite)),
-    rating: composite >= 0.90 ? 'high' : composite >= 0.75 ? 'medium' : 'low',
+    structuralBoost,
+    composite:                 clampedComposite,
+    rating: clampedComposite >= 0.90 ? 'high' : clampedComposite >= 0.75 ? 'medium' : 'low',
   };
 }
 
@@ -857,7 +881,7 @@ class OCRPipeline {
             );
 
         const enrichedQuestion = {
-          question: q.question,
+          question: OCRNormalizer.cleanQuestionText(q.question),
           options: q.options,
           columnA: q.columnA,
           columnB: q.columnB,
@@ -905,23 +929,43 @@ class OCRPipeline {
         enrichedQuestion.validation = validationResult;
 
         const quarantineReasons = [];
+
+        // ── STRUCTURAL INTEGRITY CHECK ─────────────────────────────────────
+        // Determine if this question is structurally clean (independent of OCR conf)
+        const isMCQFormatQ = ['mcq', 'line-based', 'inline-mcq', 'structured'].includes(enrichedQuestion.format);
+        const optionsFilled = (enrichedQuestion.options || []).filter(o => (typeof o === 'object' ? o.text : o) && String(typeof o === 'object' ? o.text : o).trim()).length;
+        const isStructurallyClean = (
+          confScore.structuralConfidence >= 0.85 &&
+          confScore.boundaryConfidence   >= 0.70 &&
+          confScore.parserConfidence     >= 0.70 &&
+          (!isMCQFormatQ || optionsFilled >= 3)
+        );
+
         if (!isFastPath) {
-          if (confScore.ocrConfidence < 0.70) quarantineReasons.push('low_ocr_confidence');
-          if (confScore.latexConfidence < 0.80) quarantineReasons.push('malformed_latex');
-          if (confScore.parserConfidence < 0.70) quarantineReasons.push('parser_ambiguity');
+          // Only quarantine for low OCR confidence when structure is also weak
+          if (confScore.ocrConfidence < 0.55 && !isStructurallyClean) {
+            quarantineReasons.push('low_ocr_confidence');
+          }
+
+          // LaTeX confidence threshold relaxed: 0.60 (was 0.80)
+          if (confScore.latexConfidence < 0.60) quarantineReasons.push('malformed_latex');
+
+          // Parser ambiguity: only if really low
+          if (confScore.parserConfidence < 0.55) quarantineReasons.push('parser_ambiguity');
+
           if (hasOverlapping) quarantineReasons.push('overlapping_bounding_boxes');
 
           const sectionKey = `${q.sectionTitle || 'Default'}_${q.questionNumber}`;
           const duplicateQuestion = sectionSeenNumbers.has(sectionKey);
           if (duplicateQuestion) quarantineReasons.push('duplicate_question_number');
 
-          if (['mcq', 'line-based', 'inline-mcq', 'structured'].includes(enrichedQuestion.format)) {
-            if (confScore.optionIntegrityConfidence < 1.0) {
-              quarantineReasons.push('malformed_options_array');
-            }
+          // Only quarantine for missing options if fewer than 2 valid options
+          if (isMCQFormatQ && optionsFilled < 2) {
+            quarantineReasons.push('malformed_options_array');
           }
 
-          if (pageType === 'UNKNOWN_PAGE') {
+          // UNKNOWN_PAGE: only quarantine if structurally dirty
+          if (pageType === 'UNKNOWN_PAGE' && !isStructurallyClean) {
             quarantineReasons.push('unsupported_layout');
           }
 
@@ -943,6 +987,8 @@ class OCRPipeline {
           }
         }
 
+        // ── EXTRACTION STATE DECISION ──────────────────────────────────────
+        // New thresholds: 90+→ACCEPTED, 75–89→MANUAL_REVIEW, 60–74→QUARANTINED, <60→REJECTED
         let extractionState = 'ACCEPTED';
         const composite = confScore.composite;
         if (isFastPath || composite >= 0.90) {
@@ -955,8 +1001,16 @@ class OCRPipeline {
           extractionState = 'REJECTED';
         }
 
+        // Override quarantine: structurally clean questions stay at MANUAL_REVIEW minimum
         if (quarantineReasons.length > 0 && extractionState !== 'REJECTED') {
-          extractionState = 'QUARANTINED';
+          if (isStructurallyClean && quarantineReasons.every(r =>
+            ['low_ocr_confidence', 'unsupported_layout'].includes(r)
+          )) {
+            // Structurally perfect — downgrade quarantine to manual review
+            extractionState = 'MANUAL_REVIEW';
+          } else {
+            extractionState = 'QUARANTINED';
+          }
         }
 
         enrichedQuestion.extractionState = extractionState;
