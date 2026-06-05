@@ -102,6 +102,7 @@ app.use((req, res, next) => {
 });
 
 const questionRoutes = require('./routes/questionRoutes');
+const chapterRoutes = require('./routes/chapterRoutes');
 
 // Mount routes at /api/v1 to match frontend AppConstants
 app.use('/api/v1/student', authRoutes);
@@ -109,6 +110,7 @@ app.use('/api/v1/tests', examRoutes);
 app.use('/api/v1/testResponse', attemptRoutes);
 app.use('/api/v1/announcements', announcementRoutes);
 app.use('/api/v1/question', questionRoutes);
+app.use('/api/v1/chapters', chapterRoutes);
 app.use('/api/v1/ratings', ratingRoutes);
 app.use('/api/v1/analytics', analyticsRoutes);
 app.use('/api/v1/admin/ocr/session', ocrSessionRoutes);

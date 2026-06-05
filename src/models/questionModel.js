@@ -6,6 +6,11 @@ const questionSchema = new mongoose.Schema({
     enum: ["Bengali", "English", "Both"],
     required: [true, "Preferred language is required"],
   },
+  chapterId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Chapter',
+    required: true,
+  },
   chapter: {
     type: String,
     required: true,
@@ -55,6 +60,34 @@ const questionSchema = new mongoose.Schema({
         delete ret.__v;
         return ret;
       }
+    }
+  });
+
+  questionSchema.pre('validate', async function (next) {
+    if (this.chapter && this.classNo && !this.chapterId) {
+      try {
+        const Chapter = mongoose.model('Chapter');
+        const { normalizeChapterName } = require('../utils/chapterNormalization');
+        const normalized = normalizeChapterName(this.chapter);
+        
+        let chap = await Chapter.findOne({ classId: this.classNo, normalizedChapterName: normalized });
+        if (!chap) {
+          chap = await Chapter.create({
+            classId: this.classNo,
+            chapterName: this.chapter,
+          });
+        }
+        this.chapterId = chap._id;
+        this.chapter = chap.chapterName;
+      } catch (err) {
+        if (typeof next === 'function') {
+          return next(err);
+        }
+        throw err;
+      }
+    }
+    if (typeof next === 'function') {
+      next();
     }
   });
 

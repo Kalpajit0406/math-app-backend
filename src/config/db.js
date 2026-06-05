@@ -76,6 +76,10 @@ const connectDB = async () => {
         
         // Create database indexes for performance
         await ensureIndexes(mongoose);
+
+        // Seed initial chapters and classes
+        const seedChapters = require('../scripts/seedChapters');
+        await seedChapters();
         
         return conn;
       } catch (error) {

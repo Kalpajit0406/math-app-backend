@@ -70,9 +70,9 @@ exports.getChapters = async (req, res) => {
       });
     }
 
-    const Question = require('../models/questionModel');
-    const chapters = await Question.distinct('chapter', { classNo: Number(classNo), chapter: { $ne: null, $ne: "" } });
-    chapters.sort();
+    const Chapter = require('../models/chapterModel');
+    const chaptersList = await Chapter.find({ classId: Number(classNo), isActive: true }).sort({ chapterName: 1 });
+    const chapters = chaptersList.map(c => c.chapterName);
 
     return res.json({
       success: true,

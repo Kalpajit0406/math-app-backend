@@ -32,6 +32,9 @@ async function ensureIndexes(mongoose) {
     const Question = require('../models/questionModel');
     const Exam = require('../models/examModel');
     const Attempt = require('../models/attemptModel');
+    const Class = require('../models/classModel');
+    const Chapter = require('../models/chapterModel');
+    const SyncVersion = require('../models/syncVersionModel');
 
     // Student indexes
     await safeCreateIndex(Student.collection, { studentPhone: 1 }, { unique: true });
@@ -45,7 +48,21 @@ async function ensureIndexes(mongoose) {
     await safeCreateIndex(Question.collection, { language: 1 });
     await safeCreateIndex(Question.collection, { createdAt: -1 });
     await safeCreateIndex(Question.collection, { classNo: 1, language: 1 });
+    await safeCreateIndex(Question.collection, { chapterId: 1 });
     console.log('✓ Question indexes created');
+
+    // Class indexes
+    await safeCreateIndex(Class.collection, { classId: 1 }, { unique: true });
+    console.log('✓ Class indexes created');
+
+    // Chapter indexes
+    await safeCreateIndex(Chapter.collection, { classId: 1, normalizedChapterName: 1 }, { unique: true });
+    await safeCreateIndex(Chapter.collection, { normalizedChapterName: 1 });
+    console.log('✓ Chapter indexes created');
+
+    // SyncVersion indexes
+    await safeCreateIndex(SyncVersion.collection, { key: 1 }, { unique: true });
+    console.log('✓ SyncVersion indexes created');
 
     // Exam indexes
     await safeCreateIndex(Exam.collection, { createdBy: 1 });
