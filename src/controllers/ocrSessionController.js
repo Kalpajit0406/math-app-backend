@@ -2,8 +2,18 @@ const { OCRPipeline } = require('../services/ocrPipeline');
 const { VerificationQueueManager } = require('../services/verificationQueueManager');
 const Question = require('../models/questionModel');
 const { uploadOnCloudinary } = require('../utils/cloudinary');
+const { REDIS_URL } = require('../config/redis');
 
-const OCR_SESSION_TIMEOUT_MS = Number.parseInt(process.env.OCR_SESSION_TIMEOUT_MS || '30000', 10);
+// Use async queue only if a real Redis URL is configured (not the default localhost fallback
+// which is unavailable on Render/cloud without an add-on)
+const HAS_REAL_REDIS = !!(
+  process.env.REDIS_URL &&
+  process.env.REDIS_URL.trim() &&
+  !process.env.REDIS_URL.includes('127.0.0.1') &&
+  !process.env.REDIS_URL.includes('localhost')
+);
+
+const OCR_SESSION_TIMEOUT_MS = Number.parseInt(process.env.OCR_SESSION_TIMEOUT_MS || '120000', 10);
 
 const withTimeout = (promise, timeoutMs, timeoutMessage) => {
   return Promise.race([
@@ -39,13 +49,58 @@ const resolveSource = (req) => {
 };
 
 /**
+ * Run OCR pipeline and update session with results (used inline when no Redis worker available)
+ */
+async function processOCRAndUpdateSession(source, sessionId, userId) {
+  const startedAt = Date.now();
+  try {
+    let ocrResult;
+    if (source.type === 'buffer') {
+      ocrResult = await OCRPipeline.runFromBuffer(source.buffer, source.mimetype, source.filename);
+    } else {
+      throw new Error('Unsupported source type for inline processing: ' + source.type);
+    }
+
+    // OCRPipeline.runFromBuffer returns:
+    //   { parsedQuestions, pageType, sections, totalRejected, rawText, latex, confidence, ... }
+    const parsedQuestions = ocrResult.parsedQuestions || [];
+    const pageType        = ocrResult.pageType || 'UNKNOWN_PAGE';
+    const sections        = ocrResult.sections || [];
+    const totalRejected   = ocrResult.totalRejected || 0;
+    const processingTimeMs = Date.now() - startedAt;
+
+    await VerificationQueueManager.updateSession(sessionId, {
+      items: parsedQuestions,
+      status: 'completed',
+      progress: 100,
+      pipelineMetadata: {
+        pageType,
+        sectionsFound: sections.length,
+        totalExtracted: parsedQuestions.length,
+        totalRejected,
+        sourceUsed: source.type,
+        processingTimeMs,
+      },
+    });
+
+    console.log(`[ocrSessionController] Inline OCR done for session ${sessionId}: ${parsedQuestions.length} questions in ${processingTimeMs}ms`);
+  } catch (err) {
+    console.error(`[ocrSessionController] Inline OCR failed for session ${sessionId}:`, err.message);
+    await VerificationQueueManager.updateSession(sessionId, {
+      status: 'failed',
+      progress: 0,
+    }).catch(() => {});
+  }
+}
+
+/**
  * Start Verification Session (Asynchronous Flow)
  * POST /api/v1/admin/ocr/session/start
  */
 const startSession = async (req, res) => {
   const requestStartedAt = Date.now();
   try {
-    console.log('[ocrSessionController] startSession: upload received (async flow)');
+    console.log(`[ocrSessionController] startSession: upload received (mode=${HAS_REAL_REDIS ? 'async-queue' : 'inline'})`);
 
     const source = resolveSource(req);
     if (!source) {
@@ -79,7 +134,7 @@ const startSession = async (req, res) => {
       userId,
       [], // No items yet
       86400, // 24 hours TTL
-      null, // scannedImageUrl will be attached by the worker
+      null,
       {
         pageType: 'UNKNOWN_PAGE',
         sectionsFound: 0,
@@ -88,47 +143,68 @@ const startSession = async (req, res) => {
         sourceUsed: source.type,
         processingTimeMs: 0
       },
-      'pending', // status
-      0 // progress
+      'pending',
+      0
     );
 
-    // Create tracking OCRJob in MongoDB
-    const OCRJob = require('../models/ocrJobModel');
-    const job = new OCRJob({
-      status: 'pending',
-      sourceType: source.type,
-      filename: source.filename || 'image.jpg',
-      mimetype: source.mimetype || 'image/jpeg',
-      buffer: source.type === 'buffer' ? source.buffer : Buffer.from(source.src || '', 'utf8'),
-      availableAt: new Date(),
-    });
-    await job.save();
-
-    // Enqueue job to Redis preprocessing queue
-    const DistributedQueue = require('../utils/redisQueue');
-    const preprocessingQueue = new DistributedQueue('preprocessing');
-    await preprocessingQueue.addJob(job._id.toString(), {
-      jobId: job._id.toString(),
-      sessionId: session.sessionId,
-      sourceType: source.type,
-      mimetype: source.mimetype,
-      filename: source.filename
-    });
-
-    console.log(`[ocrSessionController] startSession: job enqueued with jobId=${job._id}, sessionId=${session.sessionId}`);
-
-    return res.status(202).json({
-      success: true,
-      data: {
-        sessionId: session.sessionId,
-        currentIndex: 0,
-        total: 0,
-        items: [],
+    if (HAS_REAL_REDIS) {
+      // ── ASYNC MODE: enqueue to Redis worker (requires separate worker process) ──
+      const OCRJob = require('../models/ocrJobModel');
+      const job = new OCRJob({
         status: 'pending',
-        progress: 0,
-        expiresAt: session.expiresAt
-      }
-    });
+        sourceType: source.type,
+        filename: source.filename || 'image.jpg',
+        mimetype: source.mimetype || 'image/jpeg',
+        buffer: source.type === 'buffer' ? source.buffer : Buffer.from(source.src || '', 'utf8'),
+        availableAt: new Date(),
+      });
+      await job.save();
+
+      const DistributedQueue = require('../utils/redisQueue');
+      const preprocessingQueue = new DistributedQueue('preprocessing');
+      await preprocessingQueue.addJob(job._id.toString(), {
+        jobId: job._id.toString(),
+        sessionId: session.sessionId,
+        sourceType: source.type,
+        mimetype: source.mimetype,
+        filename: source.filename
+      });
+
+      console.log(`[ocrSessionController] Job enqueued: jobId=${job._id}, sessionId=${session.sessionId}`);
+
+      return res.status(202).json({
+        success: true,
+        data: {
+          sessionId: session.sessionId,
+          currentIndex: 0,
+          total: 0,
+          items: [],
+          status: 'pending',
+          progress: 0,
+          expiresAt: session.expiresAt
+        }
+      });
+    } else {
+      // ── INLINE MODE: process directly, no separate worker needed ──
+      // Run OCR in background (non-blocking), respond immediately with pending
+      // The Flutter app polls GET /session/:id until status=completed
+      setImmediate(() => processOCRAndUpdateSession(source, session.sessionId, userId));
+
+      console.log(`[ocrSessionController] Inline OCR started for session ${session.sessionId}`);
+
+      return res.status(202).json({
+        success: true,
+        data: {
+          sessionId: session.sessionId,
+          currentIndex: 0,
+          total: 0,
+          items: [],
+          status: 'pending',
+          progress: 0,
+          expiresAt: session.expiresAt
+        }
+      });
+    }
   } catch (error) {
     console.error('[ocrSessionController] startSession error:', error);
     res.status(500).json({ success: false, message: error.message || 'OCR session startup failed' });
