@@ -15,7 +15,15 @@ const authService = {
     if (!studentData?.password) throw new Error('Password is required');
 
     const existingUser = await Student.findOne({ studentPhone: studentData.studentPhone });
-    if (existingUser) throw new Error('Student with this phone number already exists');
+    if (existingUser) {
+      // Allow rejected students to re-register: wipe their old record so they
+      // get a clean slate. Pending and verified accounts are still blocked.
+      if (existingUser.isRejected) {
+        await Student.deleteOne({ _id: existingUser._id });
+      } else {
+        throw new Error('Student with this phone number already exists');
+      }
+    }
 
     const hashedPassword = await bcrypt.hash(studentData.password, 10);
     const student = new Student({ ...studentData, password: hashedPassword });
