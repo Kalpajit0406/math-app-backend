@@ -19,4 +19,7 @@ router.post('/bulk-accept', authMiddleware, authorizeRoles('admin', 'teacher'), 
 router.post('/bulk-reject', authMiddleware, authorizeRoles('admin', 'teacher'), authController.bulkRejectStudents);
 router.post('/bulk-delete', authMiddleware, authorizeRoles('admin', 'teacher'), authController.bulkDeleteStudents);
 
+// Public endpoint — no auth required, used by the app before registration
+router.get('/phone-status/:phone', authController.getPhoneStatus);
+
 module.exports = router;

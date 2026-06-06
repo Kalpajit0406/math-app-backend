@@ -1,4 +1,5 @@
 const authService = require('../services/authService');
+const PhoneRecord = require('../models/phoneRecordModel');
 
 const register = async (req, res) => {
   try {
@@ -82,9 +83,23 @@ const rejectStudent = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Student id is required' });
     }
 
-    const updated = await Student.findByIdAndUpdate(id, { verified: false, isRejected: true }, { new: true });
-    if (!updated) {
+    const student = await Student.findById(id);
+    if (!student) {
       return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    student.verified = false;
+    student.isRejected = true;
+    await student.save();
+
+    // Blacklist the phone number if this was their 5th (final) attempt
+    const phone = student.studentPhone;
+    const record = await PhoneRecord.findOne({ phone });
+    if (record && record.attemptCount >= 5) {
+      await PhoneRecord.findOneAndUpdate(
+        { phone },
+        { $set: { blacklisted: true, blacklistedAt: new Date() } }
+      );
     }
 
     res.json({ success: true, message: 'Student rejected' });
@@ -258,6 +273,24 @@ const approveProfileEdit = async (req, res) => {
   }
 };
 
+const getPhoneStatus = async (req, res) => {
+  try {
+    const { phone } = req.params;
+    if (!phone) return res.status(400).json({ success: false, message: 'Phone is required' });
+
+    const record = await PhoneRecord.findOne({ phone: decodeURIComponent(phone).trim() });
+    return res.json({
+      success: true,
+      data: {
+        blacklisted: record?.blacklisted ?? false,
+        attemptCount: record?.attemptCount ?? 0,
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -270,5 +303,6 @@ module.exports = {
   bulkDeleteStudents,
   submitProfileEditRequest,
   getPendingProfileEdits,
-  approveProfileEdit
+  approveProfileEdit,
+  getPhoneStatus,
 };
