@@ -211,7 +211,7 @@ class VerificationQueueManager {
       updates.items = formattedItems;
     }
 
-    return VerificationSession.findOneAndUpdate({ sessionId }, { $set: updates }, { new: true });
+    return VerificationSession.findOneAndUpdate({ sessionId }, { $set: updates }, { returnDocument: 'after' });
   }
 
   /** Retrieve session by ID. */

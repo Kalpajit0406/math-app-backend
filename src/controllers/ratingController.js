@@ -46,7 +46,7 @@ exports.rateQuestion = async (req, res) => {
         isCorrectAnswer,
         timeSpent,
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
 
     res.json({

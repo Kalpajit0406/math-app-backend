@@ -38,7 +38,7 @@ async function seedTeacher() {
           isRejected: false,
         },
       },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     );
     console.log('Teacher student profile upserted successfully.');
 
@@ -51,7 +51,7 @@ async function seedTeacher() {
             role,
           },
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true },
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
       );
       console.log('Teacher user profile upserted successfully.');
     }

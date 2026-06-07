@@ -138,7 +138,7 @@ const seedChapters = async () => {
         await Class.findOneAndUpdate(
           { classId: c.classId },
           c,
-          { upsert: true, new: true }
+          { upsert: true, returnDocument: 'after' }
         );
       } catch (err) {
         if (err.code !== 11000) throw err;
@@ -158,7 +158,7 @@ const seedChapters = async () => {
           await Chapter.findOneAndUpdate(
             { classId: numericClassId, normalizedChapterName: normalized },
             { classId: numericClassId, chapterName: chapterName.trim() },
-            { upsert: true, new: true, runValidators: true }
+            { upsert: true, returnDocument: 'after', runValidators: true }
           );
         } catch (err) {
           if (err.code !== 11000) {

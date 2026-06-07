@@ -70,7 +70,7 @@ class SelfAssessmentService {
     await SelfAssessmentUsage.findOneAndUpdate(
       { studentId, date: today },
       { $inc: { assessmentCount: 1 }, $set: { lastAssessmentAt: new Date() } },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
 
     return {

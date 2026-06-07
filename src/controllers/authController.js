@@ -65,7 +65,7 @@ const acceptStudent = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Student id is required' });
     }
 
-    const updated = await Student.findByIdAndUpdate(id, { verified: true, isRejected: false }, { new: true });
+    const updated = await Student.findByIdAndUpdate(id, { verified: true, isRejected: false }, { returnDocument: 'after' });
     if (!updated) {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }

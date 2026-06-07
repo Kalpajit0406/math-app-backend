@@ -148,7 +148,7 @@ const updateQuestion = async (req, res) => {
       }
     }
 
-    const updated = await Question.findByIdAndUpdate(id, updateData, { new: true });
+    const updated = await Question.findByIdAndUpdate(id, updateData, { returnDocument: 'after' });
     if (!updated) return res.status(404).json({ success: false, message: "Question not found" });
 
     res.json({ success: true, data: updated });

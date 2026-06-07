@@ -374,7 +374,7 @@ const verifyItem = async (req, res) => {
         question: finalQuestion,
         diagram: diagramUrl,
         questionHash: hash
-      }, { new: true });
+      }, { returnDocument: 'after' });
 
       if (!finalQuestionObj) {
         return res.status(404).json({ success: false, message: 'Question to replace not found' });

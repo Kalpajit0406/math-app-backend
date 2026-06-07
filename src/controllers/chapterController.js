@@ -12,7 +12,7 @@ const incrementSyncVersion = async () => {
     await SyncVersion.findOneAndUpdate(
       { key: 'chapterVersion' },
       { $inc: { value: 1 } },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
   } catch (error) {
     console.error('Failed to increment chapter sync version:', error.message);

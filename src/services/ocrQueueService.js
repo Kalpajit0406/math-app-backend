@@ -31,7 +31,7 @@ class OCRQueueService {
     return OCRJob.findByIdAndUpdate(
       jobId,
       { $set: { status: 'processing', lockedAt: new Date(), updatedAt: Date.now() }, $inc: { attempts: 1 } },
-      { new: true }
+      { returnDocument: 'after' }
     ).exec();
   }
 
@@ -82,7 +82,7 @@ class OCRQueueService {
           lockedAt: null,
         }
       },
-      { new: true }
+      { returnDocument: 'after' }
     ).exec();
   }
 

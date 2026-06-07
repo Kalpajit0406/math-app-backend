@@ -44,7 +44,7 @@ const authService = {
     await PhoneRecord.findOneAndUpdate(
       { phone },
       { $inc: { attemptCount: 1 }, $set: { lastAttemptAt: new Date() } },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
 
     // 5. Save student
