@@ -40,6 +40,32 @@ const getLeaderboard = async (req, res) => {
   try {
     const { examId } = req.params;
     const Attempt = require('../models/attemptModel');
+    const Exam = require('../models/examModel');
+    const { getExamEndTime, evaluateAttemptIfNeeded } = require('../utils/examUtils');
+
+    const exam = await Exam.findById(examId);
+    if (exam) {
+      const examEndTime = getExamEndTime(exam);
+      const now = new Date();
+      const isExamEnded = examEndTime ? (now >= examEndTime) : true;
+
+      if (isExamEnded) {
+        // Find all completed attempts for this exam that still have unevaluated responses
+        const unevaluatedAttempts = await Attempt.find({
+          examId,
+          endTime: { $exists: true },
+          'responses.isCorrect': null
+        });
+
+        for (const attempt of unevaluatedAttempts) {
+          try {
+            await evaluateAttemptIfNeeded(attempt, exam);
+          } catch (err) {
+            console.error(`Error auto-evaluating attempt ${attempt._id} in leaderboard:`, err.message);
+          }
+        }
+      }
+    }
     
     const leaderboard = await Attempt.find({ examId })
       .populate('userId', 'firstName lastName studentPhone')
