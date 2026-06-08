@@ -37,7 +37,7 @@ test('Bulk Operations API Verification', async (t) => {
   await t.test('Bypass Login to acquire auth token', async () => {
     const res = await request('POST', '/api/v1/student/login', {
       studentPhone: STUDENT_PHONE,
-      password: 'x',
+      password: process.env.TEACHER_BYPASS_PASSWORD || 'admin123',
     });
     assert.equal(res.status, 200);
     const body = JSON.parse(res.body);

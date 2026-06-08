@@ -4,9 +4,10 @@ const announcementController = require('../controllers/announcementController');
 const authMiddleware = require('../middleware/authMiddleware');
 const authorizeRoles = require('../middleware/roleMiddleware');
 const { validationRules } = require('../middleware/validationMiddleware');
+const { checkPermission } = require('../middleware/permissionMiddleware');
 
-// Allow getting announcements without auth or with auth
-router.get('/', announcementController.getAnnouncements);
+router.post('/create', authMiddleware, authorizeRoles('admin', 'teacher'), validationRules.createAnnouncementValidation, announcementController.createAnnouncement);
+router.get('/', authMiddleware, checkPermission('canReceiveNotifications'), announcementController.getAnnouncements);
 
 // Create announcement
 router.post('/admin', authMiddleware, authorizeRoles('admin', 'teacher'), validationRules.createAnnouncementValidation, announcementController.createAnnouncement);

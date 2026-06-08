@@ -249,8 +249,6 @@ class LatexSanitizer {
     s = s.replace(/\\[\(\[]\s*(?:_+|\\_+|\.\.+)\s*\\[\)\]]/g, '---');
     // Standalone long underscore sequences outside math → ---
     s = s.replace(/(?<![\\$])_{4,}(?![\w{])/g, '---');
-    // Escaped underscores that form blanks: \_\_\_\_ → ---
-    s = s.replace(/(?:\\_){3,}/g, '---');
     // Collapse repeated --- into single ---
     s = s.replace(/-{3,}/g, '---');
 

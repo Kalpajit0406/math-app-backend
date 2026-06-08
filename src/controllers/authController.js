@@ -92,17 +92,153 @@ const rejectStudent = async (req, res) => {
     student.isRejected = true;
     await student.save();
 
-    // Blacklist the phone number if this was their 5th (final) attempt
     const phone = student.studentPhone;
-    const record = await PhoneRecord.findOne({ phone });
-    if (record && record.attemptCount >= 5) {
+    const deviceFingerprint = student.deviceFingerprint;
+
+    // Increment attempt count in PhoneRecord and check limit
+    const pRecord = await PhoneRecord.findOneAndUpdate(
+      { phone },
+      { $max: { attemptCount: student.requestAttempts }, $set: { lastAttemptAt: new Date() } },
+      { upsert: true, returnDocument: 'after' }
+    );
+
+    if (deviceFingerprint) {
+      await PhoneRecord.findOneAndUpdate(
+        { deviceFingerprint },
+        { $max: { attemptCount: student.requestAttempts }, $set: { lastAttemptAt: new Date() } },
+        { upsert: true }
+      );
+    }
+
+    // Blacklist the phone number and device fingerprint if this was their 5th (final) attempt
+    if (student.requestAttempts >= 5 || (pRecord && pRecord.attemptCount >= 5)) {
       await PhoneRecord.findOneAndUpdate(
         { phone },
         { $set: { blacklisted: true, blacklistedAt: new Date() } }
       );
+      if (deviceFingerprint) {
+        await PhoneRecord.findOneAndUpdate(
+          { deviceFingerprint },
+          { $set: { blacklisted: true, blacklistedAt: new Date() } }
+        );
+      }
     }
 
-    res.json({ success: true, message: 'Student rejected' });
+    res.json({ success: true, message: 'Student rejected successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const blacklistStudent = async (req, res) => {
+  try {
+    const { id, blacklist } = req.body;
+    if (!id) {
+      return res.status(400).json({ success: false, message: 'Student id is required' });
+    }
+
+    const student = await Student.findById(id);
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    const phone = student.studentPhone;
+    const deviceFingerprint = student.deviceFingerprint;
+    const shouldBlacklist = blacklist !== false;
+
+    if (shouldBlacklist) {
+      student.accountType = 'BLOCKED';
+      student.verified = false;
+      await student.save();
+
+      await PhoneRecord.findOneAndUpdate(
+        { phone },
+        { $set: { blacklisted: true, blacklistedAt: new Date() } },
+        { upsert: true }
+      );
+      if (deviceFingerprint) {
+        await PhoneRecord.findOneAndUpdate(
+          { deviceFingerprint },
+          { $set: { blacklisted: true, blacklistedAt: new Date() } },
+          { upsert: true }
+        );
+      }
+      res.json({ success: true, message: 'Student blacklisted successfully' });
+    } else {
+      if (student.accountType === 'BLOCKED') {
+        student.accountType = 'NORMAL';
+        await student.save();
+      }
+      await PhoneRecord.findOneAndUpdate(
+        { phone },
+        { $set: { blacklisted: false, attemptCount: 0, blacklistedAt: undefined } }
+      );
+      if (deviceFingerprint) {
+        await PhoneRecord.findOneAndUpdate(
+          { deviceFingerprint },
+          { $set: { blacklisted: false, attemptCount: 0, blacklistedAt: undefined } }
+        );
+      }
+      res.json({ success: true, message: 'Student unblacklisted successfully' });
+    }
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const updateAccountStatus = async (req, res) => {
+  try {
+    const { id, accountType, isJoint, resetTrialLimits } = req.body;
+    if (!id) {
+      return res.status(400).json({ success: false, message: 'Student id is required' });
+    }
+
+    const student = await Student.findById(id);
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    if (accountType !== undefined) {
+      if (!['NORMAL', 'TRIAL', 'JOINT_ENTRANCE', 'PREMIUM', 'BLOCKED'].includes(accountType)) {
+        return res.status(400).json({ success: false, message: 'Invalid account type' });
+      }
+      student.accountType = accountType;
+      if (accountType === 'BLOCKED') {
+        student.verified = false;
+      }
+      if (accountType === 'NORMAL' || accountType === 'PREMIUM') {
+        student.trialApproved = true;
+        student.verified = true;
+      }
+    }
+
+    if (isJoint !== undefined) {
+      student.isJoint = !!isJoint;
+    }
+
+    if (resetTrialLimits === true) {
+      const SelfAssessmentUsage = require('../models/selfAssessmentUsageModel');
+      await SelfAssessmentUsage.findOneAndUpdate(
+        { studentId: student._id },
+        { $set: { dailyGenerationCount: 0, lastGenerationDate: new Date() } },
+        { upsert: true }
+      );
+      
+      await PhoneRecord.findOneAndUpdate(
+        { phone: student.studentPhone },
+        { $set: { attemptCount: 0, blacklisted: false, blacklistedAt: undefined } }
+      );
+      if (student.deviceFingerprint) {
+        await PhoneRecord.findOneAndUpdate(
+          { deviceFingerprint: student.deviceFingerprint },
+          { $set: { attemptCount: 0, blacklisted: false, blacklistedAt: undefined } }
+        );
+      }
+      student.requestAttempts = 0;
+    }
+
+    await student.save();
+    res.json({ success: true, message: 'Student status updated successfully', data: student });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -305,4 +441,6 @@ module.exports = {
   getPendingProfileEdits,
   approveProfileEdit,
   getPhoneStatus,
+  blacklistStudent,
+  updateAccountStatus,
 };

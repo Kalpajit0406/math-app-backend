@@ -23,6 +23,14 @@ const studentSchema = new mongoose.Schema({
     isJoint: { type: Boolean },
     requestedAt: { type: Date }
   },
+  accountType: {
+    type: String,
+    enum: ['NORMAL', 'TRIAL', 'JOINT_ENTRANCE', 'PREMIUM', 'BLOCKED'],
+    default: 'NORMAL'
+  },
+  trialApproved: { type: Boolean, default: false },
+  requestAttempts: { type: Number, default: 0 },
+  deviceFingerprint: { type: String, trim: true }
 }, { 
   timestamps: true,
   toJSON: {
@@ -40,3 +48,4 @@ const studentSchema = new mongoose.Schema({
 });
 
 module.exports = mongoose.model('Student', studentSchema);
+

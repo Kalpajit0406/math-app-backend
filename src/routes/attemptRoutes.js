@@ -4,14 +4,15 @@ const attemptController = require('../controllers/attemptController');
 const testResponseController = require('../controllers/testResponseController');
 const authMiddleware = require('../middleware/authMiddleware');
 const { validationRules } = require('../middleware/validationMiddleware');
+const { checkPermission } = require('../middleware/permissionMiddleware');
 
 // Attempt routes (Flutter)
-router.post('/start', authMiddleware, attemptController.startAttempt);
-router.post('/submit', authMiddleware, validationRules.submitAttemptValidation, attemptController.submitAttempt);
-router.post('/sync-offline', authMiddleware, validationRules.syncOfflineAttemptValidation, attemptController.syncOfflineAttempt);
-router.get('/result/:id', authMiddleware, attemptController.getResult);
-router.get('/leaderboard/:examId', authMiddleware, attemptController.getLeaderboard);
-router.get('/completed-exam-ids', authMiddleware, attemptController.getCompletedExamIds);
+router.post('/start', authMiddleware, checkPermission('canAccessTeacherExams'), attemptController.startAttempt);
+router.post('/submit', authMiddleware, checkPermission('canAccessTeacherExams'), validationRules.submitAttemptValidation, attemptController.submitAttempt);
+router.post('/sync-offline', authMiddleware, checkPermission('canAccessTeacherExams'), validationRules.syncOfflineAttemptValidation, attemptController.syncOfflineAttempt);
+router.get('/result/:id', authMiddleware, checkPermission('canAccessTeacherExams'), attemptController.getResult);
+router.get('/leaderboard/:examId', authMiddleware, checkPermission('canAccessLeaderboard'), attemptController.getLeaderboard);
+router.get('/completed-exam-ids', authMiddleware, checkPermission('canAccessTeacherExams'), attemptController.getCompletedExamIds);
 
 // TestResponse routes (Web)
 router.post('/', authMiddleware, testResponseController.saveStudentTest);

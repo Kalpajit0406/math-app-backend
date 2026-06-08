@@ -102,6 +102,9 @@ const validationRules = {
     if (!validStudentClasses.includes(Number(classNo))) {
       errors.push('Invalid class number (must be 9, 10, 11, or 12)');
     }
+    if (req.body.accountType === 'TRIAL' && ![11, 12].includes(Number(classNo))) {
+      errors.push('Free-tier/Trial registration is only allowed for Class 11 and Class 12');
+    }
     if (req.body.isJoint && ![11, 12].includes(Number(classNo))) {
       errors.push('Joint Entrance is only available for classes 11 and 12');
     }

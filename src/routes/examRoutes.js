@@ -5,6 +5,7 @@ const testConfigController = require('../controllers/testConfigController');
 const authMiddleware = require('../middleware/authMiddleware');
 const authorizeRoles = require('../middleware/roleMiddleware');
 const { validationRules } = require('../middleware/validationMiddleware');
+const { checkPermission } = require('../middleware/permissionMiddleware');
 
 // Dispatcher for GET / to handle both Flutter and Web clients
 const getExamsOrTests = (req, res, next) => {
@@ -13,7 +14,9 @@ const getExamsOrTests = (req, res, next) => {
   
   if (userAgent.includes('Dart') || authHeader) {
     return authMiddleware(req, res, () => {
-      examController.getExams(req, res, next);
+      checkPermission('canAccessTeacherExams')(req, res, () => {
+        examController.getExams(req, res, next);
+      });
     });
   } else {
     return testConfigController.getAllStudentTests(req, res, next);
@@ -22,7 +25,7 @@ const getExamsOrTests = (req, res, next) => {
 
 // Exam routes (Flutter)
 router.post('/create', authMiddleware, authorizeRoles('admin', 'teacher'), validationRules.createExamValidation, examController.createExam);
-router.get('/:id', authMiddleware, examController.getExamById);
+router.get('/:id', authMiddleware, checkPermission('canAccessTeacherExams'), examController.getExamById);
 
 // TestConfig routes (Web)
 router.post('/', testConfigController.createTestConfig);

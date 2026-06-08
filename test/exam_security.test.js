@@ -41,7 +41,7 @@ test('Exam Security Telemetry and Anti-Cheat API Verification', async (t) => {
   await t.test('Acquire auth token via student phone bypass', async () => {
     const res = await request('POST', '/api/v1/student/login', {
       studentPhone: STUDENT_PHONE,
-      password: 'x',
+      password: process.env.TEACHER_BYPASS_PASSWORD || 'admin123',
     });
     assert.equal(res.status, 200);
     const body = JSON.parse(res.body);

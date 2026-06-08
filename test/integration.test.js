@@ -7,7 +7,7 @@ const http = require('http');
 
 const BASE_URL = 'http://localhost:5000';
 const TEACHER_PHONE = '6289855545';
-const TEACHER_PASS = 'x';
+const TEACHER_PASS = process.env.TEACHER_BYPASS_PASSWORD || 'admin123';
 
 let testsPassed = 0;
 let testsFailed = 0;
@@ -91,7 +91,7 @@ async function runTests() {
 
   // Test 3: Fetch announcements (verify creation)
   await test('Fetch Announcements', async () => {
-    const res = await request('GET', '/api/v1/announcements');
+    const res = await request('GET', '/api/v1/announcements', null, { Authorization: `Bearer ${token}` });
     if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
     const body = JSON.parse(res.body);
     if (!Array.isArray(body.data)) throw new Error('Data is not an array');

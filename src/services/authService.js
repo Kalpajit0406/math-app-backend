@@ -19,21 +19,79 @@ const authService = {
 
     const phone = studentData.studentPhone;
 
-    // 1. Check blacklist
-    const record = await PhoneRecord.findOne({ phone });
-    if (record?.blacklisted) {
-      throw new Error('Your number has been blocklisted. Please contact the administrator.');
+    // Hashing of deviceBlueprint if provided
+    let deviceFingerprint = null;
+    if (studentData.deviceBlueprint) {
+      const crypto = require('crypto');
+      const { androidId, model, manufacturer, appInstallId } = studentData.deviceBlueprint;
+      const rawString = `${androidId || ''}_${model || ''}_${manufacturer || ''}_${appInstallId || ''}`;
+      deviceFingerprint = crypto.createHash('sha256').update(rawString).digest('hex');
+    } else if (studentData.deviceFingerprint) {
+      deviceFingerprint = studentData.deviceFingerprint;
     }
 
-    // 2. Safety cap — should never reach here if blacklist works, but guard anyway
-    if (record && record.attemptCount >= MAX_ATTEMPTS) {
-      throw new Error('Maximum registration attempts reached. Please contact the administrator.');
+    const isCooldownActive = (blacklistedAt) => {
+      if (!blacklistedAt) return false;
+      const cooldownPeriod = 30 * 24 * 60 * 60 * 1000; // 30 days
+      return (new Date() - new Date(blacklistedAt)) < cooldownPeriod;
+    };
+
+    // 1. Check phone blacklist
+    const phoneRecord = await PhoneRecord.findOne({ phone });
+    if (phoneRecord) {
+      if (phoneRecord.blacklisted) {
+        if (isCooldownActive(phoneRecord.blacklistedAt)) {
+          throw new Error('Your phone number has been temporarily blacklisted for 30 days due to repeated rejection. Please contact Soumen Sir.');
+        } else {
+          // Cooldown expired
+          phoneRecord.blacklisted = false;
+          phoneRecord.attemptCount = 0;
+          phoneRecord.blacklistedAt = undefined;
+          await phoneRecord.save();
+        }
+      }
+      if (phoneRecord.attemptCount >= 5) {
+        throw new Error('Maximum registration attempts reached for this phone. Please contact Soumen Sir.');
+      }
+    }
+
+    // 2. Check fingerprint blacklist
+    if (deviceFingerprint) {
+      const fpRecord = await PhoneRecord.findOne({ deviceFingerprint });
+      if (fpRecord) {
+        if (fpRecord.blacklisted) {
+          if (isCooldownActive(fpRecord.blacklistedAt)) {
+            throw new Error('This device has been temporarily blacklisted for 30 days due to repeated abuse. Please contact Soumen Sir.');
+          } else {
+            // Cooldown expired
+            fpRecord.blacklisted = false;
+            fpRecord.attemptCount = 0;
+            fpRecord.blacklistedAt = undefined;
+            await fpRecord.save();
+          }
+        }
+        if (fpRecord.attemptCount >= 5) {
+          throw new Error('Maximum registration attempts reached for this device. Please contact Soumen Sir.');
+        }
+      }
+
+      // Prevent duplicate registration abuse (if there is an active/approved trial student with this fingerprint)
+      const existingFingerprintUser = await Student.findOne({ 
+        deviceFingerprint, 
+        verified: true, 
+        accountType: 'TRIAL' 
+      });
+      if (existingFingerprintUser) {
+        throw new Error('A trial account has already been registered and approved on this device.');
+      }
     }
 
     // 3. Handle existing student record
+    let finalAttempts = 1;
     const existingUser = await Student.findOne({ studentPhone: phone });
     if (existingUser) {
       if (existingUser.isRejected) {
+        finalAttempts = (existingUser.requestAttempts || 0) + 1;
         await Student.deleteOne({ _id: existingUser._id });
       } else {
         throw new Error('Student with this phone number already exists');
@@ -47,9 +105,34 @@ const authService = {
       { upsert: true, returnDocument: 'after' }
     );
 
-    // 5. Save student
+    if (deviceFingerprint) {
+      await PhoneRecord.findOneAndUpdate(
+        { deviceFingerprint },
+        { $inc: { attemptCount: 1 }, $set: { lastAttemptAt: new Date() } },
+        { upsert: true, returnDocument: 'after' }
+      );
+    }
+
+    // 5. If trial registration, class level must be 11 or 12
+    if (studentData.accountType === 'TRIAL') {
+      const clsNum = Number(studentData.classNo);
+      if (clsNum !== 11 && clsNum !== 12) {
+        throw new Error('Free-tier/Trial registration is only allowed for Class 11 and Class 12.');
+      }
+    }
+
+    // 6. Save student
     const hashedPassword = await bcrypt.hash(studentData.password, 10);
-    const student = new Student({ ...studentData, password: hashedPassword });
+    const isTrial = studentData.accountType === 'TRIAL';
+    
+    const student = new Student({ 
+      ...studentData, 
+      password: hashedPassword,
+      deviceFingerprint,
+      requestAttempts: finalAttempts,
+      trialApproved: !isTrial, // non-trials don't need trial approval
+      verified: false // all accounts require verification initially
+    });
     return await student.save();
   },
 

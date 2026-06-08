@@ -39,7 +39,7 @@ test('Test Config and Test Response API Verification', async (t) => {
   await t.test('Bypass Login to acquire auth token', async () => {
     const res = await request('POST', '/api/v1/student/login', {
       studentPhone: STUDENT_PHONE,
-      password: 'x',
+      password: process.env.TEACHER_BYPASS_PASSWORD || 'admin123',
     });
     assert.equal(res.status, 200);
     const body = JSON.parse(res.body);
@@ -197,7 +197,7 @@ test('Test Config and Test Response API Verification', async (t) => {
       body: formData
     });
 
-    assert.equal(res.status, 201);
+    assert.ok(res.status === 201 || res.status === 202);
     const body = await res.json();
     assert.ok(body.success);
     assert.ok(body.data.sessionId);

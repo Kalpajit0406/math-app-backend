@@ -127,7 +127,7 @@ test('Phone Registration Limiter and Blacklisting Integration Tests', async (t) 
         await authService.register(dummyStudentData);
       },
       (err) => {
-        assert.ok(err.message.includes('blocklisted'));
+        assert.ok(err.message.includes('blacklisted') || err.message.includes('blocklisted'));
         return true;
       }
     );

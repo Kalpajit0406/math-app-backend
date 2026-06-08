@@ -19,26 +19,67 @@ class SelfAssessmentService {
    */
   static async generateAssessment(studentId, classNo, deviceFingerprint, chapters = [], limit = 10, durationMinutes = 30) {
     const today = this.getTodayString();
+    const mongoose = require('mongoose');
+    const Student = require('../models/studentModel');
 
-    // 1. Quota Check (Server-Side enforced) - BYPASSED FOR TESTING/UNLIMITED ACCESS
-    /*
-    const usage = await SelfAssessmentUsage.findOne({ studentId, date: today });
-    if (usage && usage.assessmentCount >= 5) {
-      console.warn(`[SelfAssessment] Access blocked: Student ${studentId} exceeded daily self-assessment limit.`);
-      throw new Error('COOLDOWN_LIMIT: You have reached the maximum of 5 self-assessments for today.');
+    const student = await Student.findById(studentId);
+    if (!student) {
+      throw new Error('Student profile not found.');
     }
-    */
 
-    // 2. Select questions randomly matching class level and chapter(s) using memory-safe MongoDB $sample
+    // 1. Quota Check (Server-Side enforced for Trial)
+    if (student.accountType === 'TRIAL') {
+      const usage = await SelfAssessmentUsage.findOne({ studentId, date: today });
+      if (usage && usage.assessmentCount >= 5) {
+        console.warn(`[SelfAssessment] Access blocked: Student ${studentId} exceeded daily self-assessment limit.`);
+        throw new Error('COOLDOWN_LIMIT: You have reached the maximum of 5 self-assessments for today. Contact Soumen Sir to upgrade.');
+      }
+    }
+
+    // 2. Exposure Protection logic for Trial students
+    let allowedQuestionIds = null;
+    if (student.accountType === 'TRIAL') {
+      const pastSessions = await SelfAssessmentSession.find({ studentId }).select('questionPool').lean();
+      const seenQuestionIds = new Set();
+      for (const sess of pastSessions) {
+        if (sess.questionPool) {
+          for (const qId of sess.questionPool) {
+            seenQuestionIds.add(String(qId));
+          }
+        }
+      }
+
+      const MAX_UNIQUE_QUESTIONS = 50;
+      if (seenQuestionIds.size >= MAX_UNIQUE_QUESTIONS) {
+        allowedQuestionIds = Array.from(seenQuestionIds).map(id => new mongoose.Types.ObjectId(id));
+      }
+    }
+
+    // 3. Select questions randomly matching class level and chapter(s) using memory-safe MongoDB $sample
     const matchCriteria = { classNo: Number(classNo) };
     if (chapters && chapters.length > 0) {
       matchCriteria.chapter = { $in: chapters };
     }
+    if (allowedQuestionIds) {
+      matchCriteria._id = { $in: allowedQuestionIds };
+    }
 
-    const questions = await Question.aggregate([
+    let questions = await Question.aggregate([
       { $match: matchCriteria },
       { $sample: { size: Number(limit) || 10 } }
     ]);
+
+    if ((!questions || questions.length === 0) && allowedQuestionIds) {
+      // Relax chapter criteria, select from any seen questions for this class
+      const fallbackCriteria = { 
+        classNo: Number(classNo), 
+        _id: { $in: allowedQuestionIds } 
+      };
+      questions = await Question.aggregate([
+        { $match: fallbackCriteria },
+        { $sample: { size: Number(limit) || 10 } }
+      ]);
+    }
 
     if (!questions || questions.length === 0) {
       throw new Error('NO_QUESTIONS: No questions available for the selected chapter(s) at your class level.');
