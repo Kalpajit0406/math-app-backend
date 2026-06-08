@@ -40,10 +40,10 @@ const me = async (req, res) => {
 
 const getAllStudents = async (req, res) => {
   try {
-    const students = await Student.find({ role: 'student' });
-    const unverified = students.filter(s => !s.verified && !s.isRejected);
-    const verified = students.filter(s => s.verified);
-    const rejected = students.filter(s => s.isRejected);
+    const students = await Student.find({ accountType: { $nin: ['ADMIN', 'TEACHER'] } });
+    const unverified = students.filter(s => s.accountStatus === 'PENDING');
+    const verified = students.filter(s => s.accountStatus === 'APPROVED');
+    const rejected = students.filter(s => s.accountStatus === 'REJECTED');
     
     res.json({
       success: true,
@@ -65,7 +65,7 @@ const acceptStudent = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Student id is required' });
     }
 
-    const updated = await Student.findByIdAndUpdate(id, { verified: true, isRejected: false }, { returnDocument: 'after' });
+    const updated = await Student.findByIdAndUpdate(id, { accountStatus: 'APPROVED' }, { returnDocument: 'after' });
     if (!updated) {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
@@ -88,8 +88,7 @@ const rejectStudent = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
-    student.verified = false;
-    student.isRejected = true;
+    student.accountStatus = 'REJECTED';
     await student.save();
 
     const phone = student.studentPhone;
@@ -199,16 +198,15 @@ const updateAccountStatus = async (req, res) => {
     }
 
     if (accountType !== undefined) {
-      if (!['NORMAL', 'TRIAL', 'JOINT_ENTRANCE', 'PREMIUM', 'BLOCKED'].includes(accountType)) {
+      if (!['NORMAL', 'TRIAL', 'JOINT', 'JOINT_ENTRANCE', 'PREMIUM', 'ADMIN', 'BLOCKED'].includes(accountType)) {
         return res.status(400).json({ success: false, message: 'Invalid account type' });
       }
       student.accountType = accountType;
       if (accountType === 'BLOCKED') {
-        student.verified = false;
+        student.accountStatus = 'SUSPENDED';
       }
-      if (accountType === 'NORMAL' || accountType === 'PREMIUM') {
-        student.trialApproved = true;
-        student.verified = true;
+      if (accountType === 'NORMAL' || accountType === 'PREMIUM' || accountType === 'JOINT' || accountType === 'JOINT_ENTRANCE') {
+        student.accountStatus = 'APPROVED';
       }
     }
 
@@ -252,7 +250,7 @@ const bulkAcceptStudents = async (req, res) => {
     }
     const result = await Student.updateMany(
       { _id: { $in: ids } },
-      { verified: true, isRejected: false }
+      { accountStatus: 'APPROVED' }
     );
     res.json({
       success: true,
@@ -272,7 +270,7 @@ const bulkRejectStudents = async (req, res) => {
     }
     const result = await Student.updateMany(
       { _id: { $in: ids } },
-      { verified: false, isRejected: true }
+      { accountStatus: 'REJECTED' }
     );
     res.json({
       success: true,

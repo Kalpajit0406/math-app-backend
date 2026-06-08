@@ -72,7 +72,22 @@ const getQuestions = async (req, res) => {
         filter.language = { $in: [new RegExp(`^${language}$`, 'i'), 'Both'] };
       }
     }
-    if (chapter) filter.chapter = chapter;
+    if (chapter) {
+      const mongoose = require('mongoose');
+      const Chapter = mongoose.model('Chapter');
+      const { normalizeChapterName } = require('../utils/chapterNormalization');
+      const normalized = normalizeChapterName(chapter);
+      
+      const query = { normalizedChapterName: normalized };
+      if (filter.classNo) query.classId = filter.classNo;
+      
+      const chaps = await Chapter.find(query).select('_id');
+      if (chaps.length > 0) {
+        filter.chapterId = { $in: chaps.map(c => c._id) };
+      } else {
+        filter.chapterId = new mongoose.Types.ObjectId();
+      }
+    }
     if (search && search.trim() !== '') {
       filter.question = { $regex: search.trim(), $options: 'i' };
     }
@@ -83,9 +98,22 @@ const getQuestions = async (req, res) => {
       pagination
     );
 
+    const sanitizedData = result.data.map(q => {
+      const qObj = { ...q };
+      qObj.id = qObj._id;
+      if (qObj.chapterId) {
+        qObj.chapter = qObj.chapterId.chapterName || '';
+      } else {
+        qObj.chapter = qObj.chapter || '';
+      }
+      qObj.questionText = qObj.questionText || qObj.question || '';
+      qObj.type = qObj.type || ((qObj.options && qObj.options.length > 0) ? 'mcq' : 'numeric');
+      return qObj;
+    });
+
     res.json({
       success: true,
-      data: result.data,
+      data: sanitizedData,
       pagination: result.pagination
     });
   } catch (error) {

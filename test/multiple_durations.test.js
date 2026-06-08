@@ -27,6 +27,8 @@ const mongoose = require('mongoose');
 // Import models and controllers/services
 const Student = require('../src/models/studentModel');
 const Exam = require('../src/models/examModel');
+const Question = require('../src/models/questionModel');
+const Chapter = require('../src/models/chapterModel');
 const Attempt = require('../src/models/attemptModel');
 const attemptService = require('../src/services/attemptService');
 const attemptController = require('../src/controllers/attemptController');
@@ -78,6 +80,25 @@ test('Multiple Exams with Different Durations Independent Evaluation Tests', asy
     return `${y}-${m}-${d}`;
   };
 
+  // Create real questions in the database
+  const q1 = await Question.create({
+    question: 'What is 1+1?',
+    options: ['1', '2', '3', '4'],
+    correctAnswer: '2',
+    language: 'English',
+    classNo: 10,
+    chapter: 'Arithmetic'
+  });
+
+  const q2 = await Question.create({
+    question: 'What is 2+2?',
+    options: ['2', '3', '4', '5'],
+    correctAnswer: '4',
+    language: 'English',
+    classNo: 10,
+    chapter: 'Arithmetic'
+  });
+
   const exam1 = new Exam({
     title: '10 Min Test Mock',
     classNo: 10,
@@ -85,17 +106,7 @@ test('Multiple Exams with Different Durations Independent Evaluation Tests', asy
     duration: 1, // 1 minute
     date: formatDateStr(pastDate),
     time: formatTimeStr(pastDate),
-    questions: [
-      {
-        type: 'mcq',
-        questionText: 'What is 1+1?',
-        options: ['1', '2', '3', '4'],
-        correctAnswer: '2',
-        marks: 4,
-        negativeMarks: 1,
-        chapter: 'Arithmetic'
-      }
-    ]
+    questionIds: [q1._id]
   });
   await exam1.save();
   const exam1Id = exam1._id.toString();
@@ -107,17 +118,7 @@ test('Multiple Exams with Different Durations Independent Evaluation Tests', asy
     duration: 60, // 60 minutes
     date: formatDateStr(new Date()),
     time: formatTimeStr(new Date()),
-    questions: [
-      {
-        type: 'mcq',
-        questionText: 'What is 2+2?',
-        options: ['2', '3', '4', '5'],
-        correctAnswer: '4',
-        marks: 4,
-        negativeMarks: 1,
-        chapter: 'Arithmetic'
-      }
-    ]
+    questionIds: [q2._id]
   });
   await exam2.save();
   const exam2Id = exam2._id.toString();
@@ -128,10 +129,10 @@ test('Multiple Exams with Different Durations Independent Evaluation Tests', asy
 
   // Submit correct answers for both
   const sub1 = await attemptService.submitAttempt(userId, attempt1._id, [
-    { questionId: exam1.questions[0]._id, userAnswer: '2' }
+    { questionId: q1._id.toString(), userAnswer: '2' }
   ]);
   const sub2 = await attemptService.submitAttempt(userId, attempt2._id, [
-    { questionId: exam2.questions[0]._id, userAnswer: '4' }
+    { questionId: q2._id.toString(), userAnswer: '4' }
   ]);
 
   await t.test('1. Verify initial database records', async () => {
@@ -193,6 +194,8 @@ test('Multiple Exams with Different Durations Independent Evaluation Tests', asy
   await Student.findByIdAndDelete(userId);
   await Exam.findByIdAndDelete(exam1Id);
   await Exam.findByIdAndDelete(exam2Id);
+  await Question.findByIdAndDelete(q1._id);
+  await Question.findByIdAndDelete(q2._id);
   await Attempt.findByIdAndDelete(attempt1._id);
   await Attempt.findByIdAndDelete(attempt2._id);
 

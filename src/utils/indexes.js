@@ -44,7 +44,7 @@ async function ensureIndexes(mongoose) {
     console.log('✓ Student indexes created');
 
     // Question indexes
-    await safeCreateIndex(Question.collection, { classNo: 1, chapter: 1 });
+    await safeCreateIndex(Question.collection, { classNo: 1, chapterId: 1 });
     await safeCreateIndex(Question.collection, { language: 1 });
     await safeCreateIndex(Question.collection, { createdAt: -1 });
     await safeCreateIndex(Question.collection, { classNo: 1, language: 1 });
@@ -77,6 +77,21 @@ async function ensureIndexes(mongoose) {
     await safeCreateIndex(Attempt.collection, { createdAt: -1 });
     await safeCreateIndex(Attempt.collection, { endTime: 1 }); // For finding submitted attempts
     console.log('✓ Attempt indexes created');
+
+    // Drop legacy indexes
+    try {
+      await mongoose.connection.collection('studentperformances').dropIndex('studentMobile_1');
+      console.log('✓ Dropped legacy studentMobile_1 index from studentperformances');
+    } catch (err) {
+      // Ignore if index doesn't exist
+    }
+
+    try {
+      await Question.collection.dropIndex('classNo_1_chapter_1');
+      console.log('✓ Dropped legacy classNo_1_chapter_1 index from questions');
+    } catch (err) {
+      // Ignore if index doesn't exist
+    }
 
     console.log('✓ All database indexes created successfully');
   } catch (error) {

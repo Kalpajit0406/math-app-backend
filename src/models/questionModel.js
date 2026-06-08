@@ -11,10 +11,6 @@ const questionSchema = new mongoose.Schema({
     ref: 'Chapter',
     required: true,
   },
-  chapter: {
-    type: String,
-    required: true,
-  },
   classNo: {
     type: Number,
     required: true,
@@ -37,71 +33,113 @@ const questionSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-    diagram: {
-      type: String,
-      default: null,
-      validate: {
-        validator: function (url) {
-          if (url === null || url === '') return true;
-          return /^https?:\/\//i.test(url) || /^\/?public\//.test(url);
-        },
-        message: "Invalid diagram URL or path format",
+  diagram: {
+    type: String,
+    default: null,
+    validate: {
+      validator: function (url) {
+        if (url === null || url === '') return true;
+        return /^https?:\/\//i.test(url) || /^\/?public\//.test(url);
       },
+      message: "Invalid diagram URL or path format",
     },
-    questionHash: {
-      type: String,
-      index: true,
-    },
-  }, { 
-    timestamps: true,
-    toJSON: {
-      transform: (doc, ret) => {
-        ret.id = ret._id;
-        delete ret.__v;
-        return ret;
+  },
+  questionHash: {
+    type: String,
+    index: true,
+  },
+}, { 
+  timestamps: true,
+  toJSON: {
+    virtuals: true,
+    transform: (doc, ret) => {
+      ret.id = ret._id;
+      delete ret.__v;
+      return ret;
+    }
+  },
+  toObject: {
+    virtuals: true
+  }
+});
+
+// Virtual for chapter name
+questionSchema.virtual('chapter')
+  .get(function() {
+    if (this.chapterId && this.chapterId.chapterName) {
+      return this.chapterId.chapterName;
+    }
+    return this._tempChapterName || '';
+  })
+  .set(function(val) {
+    this._tempChapterName = val;
+  });
+
+// Virtual for questionText (mapping to question)
+questionSchema.virtual('questionText')
+  .get(function() {
+    return this.question;
+  })
+  .set(function(val) {
+    this.question = val;
+  });
+
+// Virtual for question type (MCQ vs Numeric)
+questionSchema.virtual('type')
+  .get(function() {
+    return (this.options && this.options.length > 0) ? 'mcq' : 'numeric';
+  });
+
+questionSchema.pre('validate', async function (next) {
+  const chapterName = this.chapter;
+  if (chapterName && this.classNo && !this.chapterId) {
+    try {
+      const Chapter = mongoose.model('Chapter');
+      const { normalizeChapterName } = require('../utils/chapterNormalization');
+      const normalized = normalizeChapterName(chapterName);
+      
+      let chap = await Chapter.findOne({ classId: this.classNo, normalizedChapterName: normalized });
+      if (!chap) {
+        chap = await Chapter.create({
+          classId: this.classNo,
+          chapterName: chapterName,
+        });
       }
-    }
-  });
-
-  questionSchema.pre('validate', async function (next) {
-    if (this.chapter && this.classNo && !this.chapterId) {
-      try {
-        const Chapter = mongoose.model('Chapter');
-        const { normalizeChapterName } = require('../utils/chapterNormalization');
-        const normalized = normalizeChapterName(this.chapter);
-        
-        let chap = await Chapter.findOne({ classId: this.classNo, normalizedChapterName: normalized });
-        if (!chap) {
-          chap = await Chapter.create({
-            classId: this.classNo,
-            chapterName: this.chapter,
-          });
-        }
-        this.chapterId = chap._id;
-        this.chapter = chap.chapterName;
-      } catch (err) {
-        if (typeof next === 'function') {
-          return next(err);
-        }
-        throw err;
+      this.chapterId = chap._id;
+    } catch (err) {
+      if (typeof next === 'function') {
+        return next(err);
       }
+      throw err;
     }
-    if (typeof next === 'function') {
-      next();
-    }
-  });
+  }
+  if (typeof next === 'function') {
+    next();
+  }
+});
 
-  questionSchema.pre('save', function (next) {
-    if (this.isModified('question') && this.question) {
-      const { normalizeQuestion, generateHash } = require('../services/questionDuplicateDetector');
-      const normalized = normalizeQuestion(this.question);
-      this.questionHash = generateHash(normalized);
-    }
-    if (next && typeof next === 'function') {
-      next();
-    }
-  });
+questionSchema.pre('save', function (next) {
+  if (this.isModified('question') && this.question) {
+    const { normalizeQuestion, generateHash } = require('../services/questionDuplicateDetector');
+    const normalized = normalizeQuestion(this.question);
+    this.questionHash = generateHash(normalized);
+  }
+  if (next && typeof next === 'function') {
+    next();
+  }
+});
 
-  questionSchema.index({ classNo: 1, language: 1, chapter: 1 });
+// Auto-populate chapter details
+questionSchema.pre('find', function() {
+  this.populate('chapterId');
+});
+
+questionSchema.pre('findOne', function() {
+  this.populate('chapterId');
+});
+
+// Indexes for fast querying
+questionSchema.index({ classNo: 1, language: 1 });
+questionSchema.index({ chapterId: 1 });
 
 module.exports = mongoose.model('Question', questionSchema);

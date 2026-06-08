@@ -130,8 +130,7 @@ const authService = {
       password: hashedPassword,
       deviceFingerprint,
       requestAttempts: finalAttempts,
-      trialApproved: !isTrial, // non-trials don't need trial approval
-      verified: false // all accounts require verification initially
+      accountStatus: 'PENDING'
     });
     return await student.save();
   },
@@ -153,8 +152,8 @@ const authService = {
           studentPhone: teacherBypassPhone,
           guardianPhone: teacherBypassPhone,
           password: hashedPassword,
-          role: 'teacher',
-          verified: true
+          accountType: 'ADMIN',
+          accountStatus: 'APPROVED'
         });
         await student.save();
       }

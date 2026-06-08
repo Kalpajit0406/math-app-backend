@@ -10,8 +10,9 @@ const performanceHistorySchema = new mongoose.Schema({
 });
 
 const studentPerformanceSchema = new mongoose.Schema({
-  studentMobile: {
-    type: String,
+  studentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Student',
     required: true,
     unique: true,
     index: true,
@@ -35,13 +36,26 @@ const studentPerformanceSchema = new mongoose.Schema({
 }, { 
   timestamps: true,
   toJSON: {
+    virtuals: true,
     transform: (doc, ret) => {
       ret.id = ret._id;
       delete ret._id;
       delete ret.__v;
       return ret;
     }
+  },
+  toObject: {
+    virtuals: true
   }
 });
+
+// Virtual for backward-compatible studentMobile
+studentPerformanceSchema.virtual('studentMobile')
+  .get(function() {
+    if (this.studentId && this.studentId.studentPhone) {
+      return this.studentId.studentPhone;
+    }
+    return '';
+  });
 
 module.exports = mongoose.model('StudentPerformance', studentPerformanceSchema);

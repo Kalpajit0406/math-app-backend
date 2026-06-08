@@ -18,7 +18,27 @@ class OCRQueueService {
   }
 
   static async enqueueFromBuffer({ buffer, mimetype, filename, sourceType = 'file' }) {
-    const job = new OCRJob({ buffer, mimetype, filename, sourceType, status: 'pending', availableAt: new Date() });
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Create temp directory if it doesn't exist
+    const tempDir = path.join(__dirname, '../../public/temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const ext = filename.split('.').pop() || 'jpg';
+    const diskPath = path.join(tempDir, `ocr-${Date.now()}-${Math.random().toString(36).substring(7)}.${ext}`);
+    fs.writeFileSync(diskPath, buffer);
+
+    const job = new OCRJob({ 
+      filePath: diskPath, 
+      mimetype, 
+      filename, 
+      sourceType, 
+      status: 'pending', 
+      availableAt: new Date() 
+    });
     await job.save();
     return job;
   }
@@ -48,8 +68,7 @@ class OCRQueueService {
           lockedAt: null,
           availableAt: new Date(),
           error: null,
-        },
-        $unset: { buffer: 1 }
+        }
       }
     ).exec();
   }
@@ -118,7 +137,21 @@ class OCRQueueService {
   }
 
   static async cleanupExpiredJobs() {
+    const fs = require('fs');
     const cutoff = new Date(Date.now() - this.retentionMs);
+    
+    // Find jobs that are about to be deleted to unlink their files
+    const jobs = await OCRJob.find({ status: { $in: ['done', 'failed'] }, updatedAt: { $lte: cutoff } }).select('filePath').exec();
+    for (const job of jobs) {
+      if (job.filePath && fs.existsSync(job.filePath)) {
+        try {
+          fs.unlinkSync(job.filePath);
+        } catch (err) {
+          console.error(`[OCRQueue] Failed to delete file ${job.filePath}:`, err.message);
+        }
+      }
+    }
+
     const result = await OCRJob.deleteMany({ status: { $in: ['done', 'failed'] }, updatedAt: { $lte: cutoff } }).exec();
     return result?.deletedCount || 0;
   }

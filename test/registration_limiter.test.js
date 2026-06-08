@@ -84,17 +84,17 @@ test('Phone Registration Limiter and Blacklisting Integration Tests', async (t) 
 
   await t.test('4. Simulate attempts 3, 4, and 5', async () => {
     // Reject 2nd attempt
-    await Student.findByIdAndUpdate(studentId, { verified: false, isRejected: true });
+    await Student.findByIdAndUpdate(studentId, { accountStatus: 'REJECTED' });
 
     // 3rd Attempt
     const student3 = await authService.register(dummyStudentData);
     assert.equal((await PhoneRecord.findOne({ phone: testPhone })).attemptCount, 3);
-    await Student.findByIdAndUpdate(student3._id, { verified: false, isRejected: true });
+    await Student.findByIdAndUpdate(student3._id, { accountStatus: 'REJECTED' });
 
     // 4th Attempt
     const student4 = await authService.register(dummyStudentData);
     assert.equal((await PhoneRecord.findOne({ phone: testPhone })).attemptCount, 4);
-    await Student.findByIdAndUpdate(student4._id, { verified: false, isRejected: true });
+    await Student.findByIdAndUpdate(student4._id, { accountStatus: 'REJECTED' });
 
     // 5th Attempt
     const student5 = await authService.register(dummyStudentData);

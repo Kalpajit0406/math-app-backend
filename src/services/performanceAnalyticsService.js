@@ -25,8 +25,7 @@ class PerformanceAnalytics {
         };
       }
 
-      const studentMobile = student.studentPhone;
-      const perf = await StudentPerformance.findOne({ studentMobile });
+      const perf = await StudentPerformance.findOne({ studentId: student._id });
       if (!perf || !perf.testHistory || perf.testHistory.length === 0) {
         return {
           studentId,
@@ -253,14 +252,27 @@ class PerformanceAnalytics {
     return parseFloat(((last5Avg - first5Avg) / first5Avg * 100).toFixed(1));
   }
 
-  static async savePerformance(studentMobile, testId, testType, score, totalQuestions) {
-    if (!studentMobile) return null;
+  static async savePerformance(studentMobileOrId, testId, testType, score, totalQuestions) {
+    if (!studentMobileOrId) return null;
     try {
+      const Student = require('../models/studentModel');
+      let studentId = studentMobileOrId;
+      
+      const mongoose = require('mongoose');
+      if (!mongoose.Types.ObjectId.isValid(studentMobileOrId)) {
+        const student = await Student.findOne({ studentPhone: studentMobileOrId }).select('_id');
+        if (!student) {
+          console.error(`[PerformanceAnalytics] Student not found for phone: ${studentMobileOrId}`);
+          return null;
+        }
+        studentId = student._id;
+      }
+
       const percentage = totalQuestions > 0 ? parseFloat(((score / totalQuestions) * 100).toFixed(1)) : 0.0;
       
-      let perf = await StudentPerformance.findOne({ studentMobile });
+      let perf = await StudentPerformance.findOne({ studentId });
       if (!perf) {
-        perf = new StudentPerformance({ studentMobile });
+        perf = new StudentPerformance({ studentId });
       }
 
       const exists = perf.testHistory.some(h => String(h.testId) === String(testId));
@@ -281,8 +293,9 @@ class PerformanceAnalytics {
         perf.averagePercentage = parseFloat((sumPercentage / perf.totalTestsTaken).toFixed(1));
 
         await perf.save();
-        console.log(`[PerformanceAnalytics] Saved performance for ${studentMobile}. Last %: ${percentage}%`);
+        console.log(`[PerformanceAnalytics] Saved performance for student ID: ${studentId}. Last %: ${percentage}%`);
       }
+      await perf.populate('studentId');
       return perf;
     } catch (err) {
       console.error('[PerformanceAnalytics] Error saving performance:', err.message);

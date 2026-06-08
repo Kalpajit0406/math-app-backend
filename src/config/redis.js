@@ -161,11 +161,26 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 
 let activeClient = null;
 
+const isConnectionError = (err) => {
+  if (!err) return false;
+  const msg = String(err.message || '').toLowerCase();
+  return (
+    msg.includes('econnrefused') ||
+    msg.includes('closed') ||
+    msg.includes('not writeable') ||
+    msg.includes('offline') ||
+    msg.includes('connection is not established') ||
+    msg.includes('stream is not readable') ||
+    msg.includes('command queue is disabled')
+  );
+};
+
 function getRedisClient() {
   if (!activeClient) {
     const realClient = new Redis(REDIS_URL, {
       maxRetriesPerRequest: null,
       enableReadyCheck: true,
+      enableOfflineQueue: false, // Immediately reject commands when connection is down
       reconnectOnError: (err) => {
         const targetError = 'READONLY';
         if (err.message.slice(0, targetError.length) === targetError) {
@@ -195,7 +210,7 @@ function getRedisClient() {
               const res = value.apply(target, args);
               if (res instanceof Promise) {
                 return res.catch(err => {
-                  if (err.message.includes('ECONNREFUSED')) {
+                  if (isConnectionError(err)) {
                     if (!useMock) {
                       console.warn('⚠️ Redis connection failed. Falling back to in-memory MockRedis.');
                       useMock = true;
@@ -210,7 +225,7 @@ function getRedisClient() {
               }
               return res;
             } catch (err) {
-              if (err.message.includes('ECONNREFUSED')) {
+              if (isConnectionError(err)) {
                 if (!useMock) {
                   console.warn('⚠️ Redis connection failed. Falling back to in-memory MockRedis.');
                   useMock = true;
@@ -236,7 +251,7 @@ function getRedisClient() {
     realClient.on('error', (err) => {
       if (!useMock) {
         console.error('Redis client error:', err.message);
-        if (err.message.includes('ECONNREFUSED')) {
+        if (isConnectionError(err)) {
           console.warn('⚠️ Redis server is unreachable. Falling back to high-performance in-memory MockRedis.');
           useMock = true;
         }

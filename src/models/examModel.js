@@ -1,22 +1,5 @@
 const mongoose = require('mongoose');
 
-const questionSchema = new mongoose.Schema({
-  type: {
-    type: String,
-    enum: ['mcq', 'numeric'],
-    required: true,
-  },
-  questionText: {
-    type: String,
-    required: true,
-  },
-  options: [String], // Array of strings for MCQ
-  correctAnswer: {
-    type: String,
-    required: true,
-  },
-});
-
 const examSchema = new mongoose.Schema({
   title: {
     type: String,
@@ -61,7 +44,11 @@ const examSchema = new mongoose.Schema({
     type: [String],
     default: [],
   },
-  questions: [questionSchema],
+  questionIds: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Question',
+    required: true
+  }],
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Student',
@@ -69,6 +56,7 @@ const examSchema = new mongoose.Schema({
 }, { 
   timestamps: true,
   toJSON: {
+    virtuals: true,
     transform: (doc, ret) => {
       ret.id = ret._id;
       delete ret.__v;
@@ -80,7 +68,51 @@ const examSchema = new mongoose.Schema({
       }
       return ret;
     }
+  },
+  toObject: {
+    virtuals: true
   }
+});
+
+// Virtual populate questions from Question collection
+examSchema.virtual('questions', {
+  ref: 'Question',
+  localField: 'questionIds',
+  foreignField: '_id'
+});
+
+// Auto-populate helper middlewares
+examSchema.pre('find', function() {
+  this.populate('questions');
+});
+
+examSchema.pre('findOne', function() {
+  this.populate('questions');
+});
+
+// Attach `.id()` method to populated questions array for compatibility with Mongoose DocumentArray
+function attachIdHelper(doc) {
+  if (doc && doc.questions) {
+    doc.questions.id = function(id) {
+      if (!id) return null;
+      const idStr = id.toString();
+      return this.find(q => q._id && q._id.toString() === idStr);
+    };
+  }
+}
+
+examSchema.post('find', function(docs) {
+  if (Array.isArray(docs)) {
+    docs.forEach(attachIdHelper);
+  }
+});
+
+examSchema.post('findOne', function(doc) {
+  attachIdHelper(doc);
+});
+
+examSchema.post('save', function(doc) {
+  attachIdHelper(doc);
 });
 
 module.exports = mongoose.model('Exam', examSchema);

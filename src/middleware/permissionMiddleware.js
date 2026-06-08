@@ -50,25 +50,30 @@ const checkPermission = (permissionName) => {
     }
 
     try {
-      const student = await Student.findById(req.user.id).select('accountType verified isRejected');
+      const student = await Student.findById(req.user.id).select('accountType accountStatus permissions');
       if (!student) {
         return res.status(404).json({ success: false, message: 'Student profile not found.' });
       }
 
-      if (student.accountType === 'BLOCKED') {
+      if (student.accountStatus === 'SUSPENDED' || student.accountType === 'BLOCKED') {
         return res.status(403).json({ success: false, code: 'ACCOUNT_BLOCKED', message: 'Your account is blocked. Please contact Soumen Sir.' });
       }
 
-      if (!student.verified) {
+      if (student.accountStatus === 'PENDING') {
         return res.status(403).json({ success: false, code: 'ACCOUNT_PENDING', message: 'Wait until your request gets approved or contact Soumen Sir.' });
       }
 
-      if (student.isRejected) {
+      if (student.accountStatus === 'REJECTED') {
         return res.status(403).json({ success: false, code: 'ACCOUNT_REJECTED', message: 'Your request was rejected. Please contact Soumen Sir.' });
       }
 
-      const permissions = getPermissionsForAccount(student.accountType);
-      if (!permissions[permissionName]) {
+      // Check centralized permission engine
+      const hasPermission = student.permissions && (
+        student.permissions[permissionName] === true ||
+        student.permissions[permissionName.replace('Teacher', '')] === true
+      );
+
+      if (!hasPermission) {
         return res.status(403).json({
           success: false,
           code: 'PERMISSION_DENIED',

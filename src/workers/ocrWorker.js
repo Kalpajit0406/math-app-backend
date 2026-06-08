@@ -31,7 +31,15 @@ async function runWorkerLoop() {
         console.log(`[ocrWorker] Processing job ${job._id}`);
         try {
           const processingJob = await OCRQueueService.markProcessing(job._id);
-          const res = await OCRPipeline.runFromBuffer(job.buffer, job.mimetype || 'image/jpeg', job.filename || 'image.jpg');
+          const fs = require('fs');
+          let fileBuffer = job.buffer;
+          if (!fileBuffer && job.filePath && fs.existsSync(job.filePath)) {
+            fileBuffer = fs.readFileSync(job.filePath);
+          }
+          if (!fileBuffer) {
+            throw new Error('No image buffer or file path available for job.');
+          }
+          const res = await OCRPipeline.runFromBuffer(fileBuffer, job.mimetype || 'image/jpeg', job.filename || 'image.jpg');
           await OCRQueueService.markDone(processingJob._id, res);
           console.log(`[ocrWorker] Job ${job._id} done`);
         } catch (err) {
