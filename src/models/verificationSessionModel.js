@@ -47,7 +47,12 @@ const verificationItemSchema = new mongoose.Schema({
   },
 
   // ── Diagnostics ───────────────────────────────────────────────────────────
-  rawOcrData: { type: Object, default: {} },
+  rawOcrData: {
+    ocrConfidence: { type: Number, default: null },
+    summary:       { type: String, default: '' },
+    ocrHash:       { type: String, default: '' },
+    sourceUsed:    { type: String, default: 'unknown' }
+  },
 
   // ── Status ────────────────────────────────────────────────────────────────
   verified:        { type: Boolean, default: false },

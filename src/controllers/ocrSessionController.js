@@ -302,6 +302,9 @@ const deleteItem = async (req, res) => {
  * POST /api/v1/admin/ocr/session/:sessionId/item/:index/verify
  */
 const verifyItem = async (req, res) => {
+  const mongoose = require('mongoose');
+  const dbSession = await mongoose.startSession();
+  let transactionStarted = false;
   try {
     const { sessionId, index } = req.params;
     const { chapter, classNo, correctAnswer, language, questionText, options, action, replaceQuestionId } = req.body;
@@ -313,13 +316,22 @@ const verifyItem = async (req, res) => {
       });
     }
 
-    const session = await VerificationQueueManager.getSession(sessionId);
+    try {
+      await dbSession.startTransaction();
+      transactionStarted = true;
+    } catch (err) {
+      // Replica sets not enabled
+    }
+
+    const session = await VerificationQueueManager.getSession(sessionId, transactionStarted ? dbSession : null);
     if (!session) {
+      if (transactionStarted) await dbSession.abortTransaction();
       return res.status(404).json({ success: false, message: 'Verification session not found' });
     }
 
     const idx = VerificationQueueManager.getRawIndex(session, parseInt(index));
     if (idx === -1) {
+      if (transactionStarted) await dbSession.abortTransaction();
       return res.status(404).json({ success: false, message: 'Item index not found' });
     }
 
@@ -333,6 +345,7 @@ const verifyItem = async (req, res) => {
       try {
         finalOptions = JSON.parse(options);
       } catch (e) {
+        if (transactionStarted) await dbSession.abortTransaction();
         return res.status(400).json({ success: false, message: "Invalid options format" });
       }
     }
@@ -361,6 +374,8 @@ const verifyItem = async (req, res) => {
     // Build or update the Question
     let finalQuestionObj;
     let isReplacement = false;
+    const opts = transactionStarted ? { session: dbSession } : {};
+
     if (action === 'replace' && replaceQuestionId) {
       const { normalizeQuestion, generateHash } = require('../services/questionDuplicateDetector');
       const hash = generateHash(normalizeQuestion(finalQuestion));
@@ -374,14 +389,15 @@ const verifyItem = async (req, res) => {
         question: finalQuestion,
         diagram: diagramUrl,
         questionHash: hash
-      }, { returnDocument: 'after' });
+      }, { ...opts, returnDocument: 'after' });
 
       if (!finalQuestionObj) {
+        if (transactionStarted) await dbSession.abortTransaction();
         return res.status(404).json({ success: false, message: 'Question to replace not found' });
       }
       isReplacement = true;
     } else {
-      finalQuestionObj = await Question.create({
+      const newQuestions = await Question.create([{
         language,
         chapter,
         classNo: parseInt(classNo),
@@ -389,7 +405,8 @@ const verifyItem = async (req, res) => {
         options: finalOptions,
         question: finalQuestion,
         diagram: diagramUrl
-      });
+      }], opts);
+      finalQuestionObj = newQuestions[0];
     }
 
     // Mark as verified in the session
@@ -397,7 +414,11 @@ const verifyItem = async (req, res) => {
       questionText: finalQuestion,
       options: finalOptions,
       verified: true
-    });
+    }, transactionStarted ? dbSession : null);
+
+    if (transactionStarted) {
+      await dbSession.commitTransaction();
+    }
 
     res.status(201).json({
       success: true,
@@ -405,8 +426,13 @@ const verifyItem = async (req, res) => {
       data: finalQuestionObj
     });
   } catch (error) {
+    if (transactionStarted && dbSession.inTransaction()) {
+      await dbSession.abortTransaction();
+    }
     console.error('[ocrSessionController] verifyItem error:', error);
     res.status(500).json({ success: false, message: error.message });
+  } finally {
+    dbSession.endSession();
   }
 };
 
@@ -481,6 +507,23 @@ const setCurrentIndex = async (req, res) => {
   }
 };
 
+const getArchivedOcr = async (req, res) => {
+  try {
+    const { sessionId, itemId } = req.params;
+    const OcrArchive = require('../models/ocrArchiveModel');
+    const archive = await OcrArchive.findOne({ sessionId, itemId });
+    if (!archive) {
+      return res.status(404).json({ success: false, message: 'Archived OCR data not found' });
+    }
+    res.json({
+      success: true,
+      data: archive.rawOcrData
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   startSession,
   getSession,
@@ -489,5 +532,6 @@ module.exports = {
   verifyItem,
   nextItem,
   prevItem,
-  setCurrentIndex
+  setCurrentIndex,
+  getArchivedOcr
 };

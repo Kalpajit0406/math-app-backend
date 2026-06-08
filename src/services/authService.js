@@ -21,13 +21,20 @@ const authService = {
 
     // Hashing of deviceBlueprint if provided
     let deviceFingerprint = null;
+    let fingerprintHash = null;
+    let deviceName = null;
     if (studentData.deviceBlueprint) {
       const crypto = require('crypto');
       const { androidId, model, manufacturer, appInstallId } = studentData.deviceBlueprint;
       const rawString = `${androidId || ''}_${model || ''}_${manufacturer || ''}_${appInstallId || ''}`;
       deviceFingerprint = crypto.createHash('sha256').update(rawString).digest('hex');
+      fingerprintHash = crypto.createHash('sha256').update(deviceFingerprint).digest('hex');
+      deviceName = `${manufacturer || ''} ${model || ''}`.trim() || 'Unknown Device';
     } else if (studentData.deviceFingerprint) {
+      const crypto = require('crypto');
       deviceFingerprint = studentData.deviceFingerprint;
+      fingerprintHash = crypto.createHash('sha256').update(deviceFingerprint).digest('hex');
+      deviceName = 'Unknown Device';
     }
 
     const isCooldownActive = (blacklistedAt) => {
@@ -129,42 +136,81 @@ const authService = {
       ...studentData, 
       password: hashedPassword,
       deviceFingerprint,
+      fingerprintHash,
+      lastKnownDevices: deviceName ? [deviceName] : [],
       requestAttempts: finalAttempts,
       accountStatus: 'PENDING'
     });
     return await student.save();
   },
 
-  login: async (studentPhone, password) => {
+  login: async (studentPhone, password, deviceBlueprint = null) => {
     const teacherBypassPhone = getTeacherBypassPhone();
+    const crypto = require('crypto');
 
-    // Explicitly opt-in for local/dev environments only.
+    // Hashing of deviceBlueprint if provided
+    let deviceFingerprint = null;
+    let fingerprintHash = null;
+    let deviceName = null;
+    if (deviceBlueprint) {
+      const { androidId, model, manufacturer, appInstallId } = deviceBlueprint;
+      const rawString = `${androidId || ''}_${model || ''}_${manufacturer || ''}_${appInstallId || ''}`;
+      deviceFingerprint = crypto.createHash('sha256').update(rawString).digest('hex');
+      fingerprintHash = crypto.createHash('sha256').update(deviceFingerprint).digest('hex');
+      deviceName = `${manufacturer || ''} ${model || ''}`.trim() || 'Unknown Device';
+    }
+
+    // Check fingerprint blacklist
+    if (deviceFingerprint) {
+      const fpRecord = await PhoneRecord.findOne({ deviceFingerprint });
+      if (fpRecord && fpRecord.blacklisted) {
+        const cooldownPeriod = 30 * 24 * 60 * 60 * 1000; // 30 days
+        if (fpRecord.blacklistedAt && (new Date() - new Date(fpRecord.blacklistedAt)) < cooldownPeriod) {
+          throw new Error('This device has been temporarily blacklisted for 30 days due to repeated abuse. Please contact Soumen Sir.');
+        }
+      }
+    }
+
+    // 1. Explicitly opt-in for local/dev environments only.
     if (isTeacherBypassEnabled() && teacherBypassPhone && studentPhone === teacherBypassPhone) {
-      let student = await Student.findOne({ studentPhone });
-      if (!student) {
+      let student = await Student.findOne({ studentPhone }).select('+passwordHash');
+      if (!student || !student.passwordHash) {
         const bypassPasswordSeed = process.env.TEACHER_BYPASS_PASSWORD || `teacher-bypass:${teacherBypassPhone}`;
         const hashedPassword = await bcrypt.hash(bypassPasswordSeed, 10);
-        student = new Student({
-          firstName: 'Teacher',
-          lastName: 'Admin',
-          classNo: 10,
-          language: 'English',
-          studentPhone: teacherBypassPhone,
-          guardianPhone: teacherBypassPhone,
-          password: hashedPassword,
-          accountType: 'ADMIN',
-          accountStatus: 'APPROVED'
-        });
+        if (!student) {
+          student = new Student({
+            firstName: 'Teacher',
+            lastName: 'Admin',
+            classNo: 10,
+            language: 'English',
+            studentPhone: teacherBypassPhone,
+            guardianPhone: teacherBypassPhone,
+            password: hashedPassword,
+            accountType: 'ADMIN',
+            accountStatus: 'APPROVED'
+          });
+        } else {
+          student.password = hashedPassword;
+        }
         await student.save();
       }
 
-      const isMatch = await bcrypt.compare(password, student.password);
+      const isMatch = await bcrypt.compare(password, student.passwordHash);
       if (!isMatch) throw new Error('Invalid credentials');
 
       const jwtSecret = process.env.JWT_SECRET || process.env.ACCESS_TOKEN_SECRET;
       if (!jwtSecret) throw new Error('JWT secret is not configured');
 
       student.jwtVersion = (student.jwtVersion || 0) + 1;
+      if (deviceFingerprint) {
+        student.deviceFingerprint = deviceFingerprint;
+        student.fingerprintHash = fingerprintHash;
+        if (!student.lastKnownDevices) student.lastKnownDevices = [];
+        if (!student.lastKnownDevices.includes(deviceName)) {
+          student.lastKnownDevices.push(deviceName);
+          if (student.lastKnownDevices.length > 5) student.lastKnownDevices.shift();
+        }
+      }
       await student.save();
 
       const accessToken = jwt.sign(
@@ -181,16 +227,25 @@ const authService = {
       throw new Error('Phone and password are required');
     }
 
-    const student = await Student.findOne({ studentPhone });
+    const student = await Student.findOne({ studentPhone }).select('+passwordHash');
     if (!student) throw new Error('Invalid credentials');
 
-    const isMatch = await bcrypt.compare(password, student.password);
+    const isMatch = await bcrypt.compare(password, student.passwordHash);
     if (!isMatch) throw new Error('Invalid credentials');
 
     const jwtSecret = process.env.JWT_SECRET || process.env.ACCESS_TOKEN_SECRET;
     if (!jwtSecret) throw new Error('JWT secret is not configured');
 
     student.jwtVersion = (student.jwtVersion || 0) + 1;
+    if (deviceFingerprint) {
+      student.deviceFingerprint = deviceFingerprint;
+      student.fingerprintHash = fingerprintHash;
+      if (!student.lastKnownDevices) student.lastKnownDevices = [];
+      if (!student.lastKnownDevices.includes(deviceName)) {
+        student.lastKnownDevices.push(deviceName);
+        if (student.lastKnownDevices.length > 5) student.lastKnownDevices.shift();
+      }
+    }
     await student.save();
 
     const accessToken = jwt.sign(

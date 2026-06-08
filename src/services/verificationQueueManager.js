@@ -38,7 +38,9 @@ class VerificationQueueManager {
     const questions = Array.isArray(parsedQuestions) ? parsedQuestions : [];
 
     const items = [];
+    const archiveDocs = [];
     const { QuestionDuplicateDetector } = require('./questionDuplicateDetector');
+    const mongoose = require('mongoose');
 
     for (let idx = 0; idx < questions.length; idx++) {
       const q = questions[idx];
@@ -75,7 +77,21 @@ class VerificationQueueManager {
         console.error('[VerificationQueueManager] Duplicate check failed for item:', err.message);
       }
 
+      const _id = q._id || q.id || new mongoose.Types.ObjectId();
+      const rawData = q.rawOcrData || {};
+      const crypto = require('crypto');
+      const rawText = rawData.rawText || q.rawChunk || '';
+      const ocrHash = crypto.createHash('sha256').update(rawText).digest('hex');
+
+      const compactOcrData = {
+        ocrConfidence: confScores.ocrConfidence ?? q.ocrConfidence ?? rawData.confidence ?? null,
+        summary: qText.substring(0, 100),
+        ocrHash,
+        sourceUsed: rawData.sourceUsed || (pipelineMeta && pipelineMeta.sourceUsed) || 'unknown'
+      };
+
       items.push({
+        _id,
         questionText:    qText,
         options:         optionsArray.slice(0, 4),
         questionNumber:  q.questionNumber || String(idx + 1),
@@ -99,7 +115,7 @@ class VerificationQueueManager {
           composite:                 confScores.composite                 ?? null,
           rating:                    confScores.rating                    ?? 'medium',
         },
-        rawOcrData: q.rawOcrData || {},
+        rawOcrData: compactOcrData,
         validationErrors:   Array.isArray(validation.errors)   ? validation.errors   : [],
         validationWarnings: Array.isArray(validation.warnings) ? validation.warnings : [],
         verified:        false,
@@ -107,6 +123,14 @@ class VerificationQueueManager {
         extractionState: q.extractionState || 'ACCEPTED',
         duplicateInfo
       });
+
+      if (Object.keys(rawData).length > 0) {
+        archiveDocs.push({
+          sessionId,
+          itemId: _id,
+          rawOcrData: rawData
+        });
+      }
     }
 
     const session = await VerificationSession.create({
@@ -128,15 +152,25 @@ class VerificationQueueManager {
       },
     });
 
+    if (archiveDocs.length > 0) {
+      try {
+        const OcrArchive = require('../models/ocrArchiveModel');
+        await OcrArchive.insertMany(archiveDocs);
+      } catch (err) {
+        console.error('[VerificationQueueManager] Failed to write OCR archive in createSession:', err.message);
+      }
+    }
+
     return session;
   }
 
   /** Update session items, status, and progress. */
   static async updateSession(sessionId, updates) {
-    // If updating items, make sure to format them as verificationItems if they are raw parsedQuestions
     if (updates.items && Array.isArray(updates.items)) {
       const formattedItems = [];
+      const archiveDocs = [];
       const { QuestionDuplicateDetector } = require('./questionDuplicateDetector');
+      const mongoose = require('mongoose');
 
       for (let idx = 0; idx < updates.items.length; idx++) {
         const q = updates.items[idx];
@@ -175,7 +209,21 @@ class VerificationQueueManager {
           }
         }
 
+        const _id = q._id || q.id || new mongoose.Types.ObjectId();
+        const rawData = q.rawOcrData || {};
+        const crypto = require('crypto');
+        const rawText = rawData.rawText || q.rawChunk || '';
+        const ocrHash = crypto.createHash('sha256').update(rawText).digest('hex');
+
+        const compactOcrData = {
+          ocrConfidence: confScores.ocrConfidence ?? q.ocrConfidence ?? rawData.confidence ?? null,
+          summary: qText.substring(0, 100),
+          ocrHash,
+          sourceUsed: rawData.sourceUsed || 'unknown'
+        };
+
         formattedItems.push({
+          _id,
           questionText:    qText,
           options:         optionsArray.slice(0, 4),
           questionNumber:  q.questionNumber || String(idx + 1),
@@ -199,7 +247,7 @@ class VerificationQueueManager {
             composite:                 confScores.composite                 ?? null,
             rating:                    confScores.rating                    ?? 'medium',
           },
-          rawOcrData: q.rawOcrData || {},
+          rawOcrData: compactOcrData,
           validationErrors:   Array.isArray(validation.errors)   ? validation.errors   : [],
           validationWarnings: Array.isArray(validation.warnings) ? validation.warnings : [],
           verified:        q.verified || false,
@@ -207,16 +255,36 @@ class VerificationQueueManager {
           extractionState: q.extractionState || 'ACCEPTED',
           duplicateInfo
         });
+
+        if (Object.keys(rawData).length > 0) {
+          archiveDocs.push({
+            sessionId,
+            itemId: _id,
+            rawOcrData: rawData
+          });
+        }
       }
       updates.items = formattedItems;
+
+      if (archiveDocs.length > 0) {
+        try {
+          const OcrArchive = require('../models/ocrArchiveModel');
+          await OcrArchive.deleteMany({ sessionId });
+          await OcrArchive.insertMany(archiveDocs);
+        } catch (err) {
+          console.error('[VerificationQueueManager] Failed to write OCR archive in updateSession:', err.message);
+        }
+      }
     }
 
     return VerificationSession.findOneAndUpdate({ sessionId }, { $set: updates }, { returnDocument: 'after' });
   }
 
   /** Retrieve session by ID. */
-  static async getSession(sessionId) {
-    return await VerificationSession.findOne({ sessionId });
+  static async getSession(sessionId, dbSession = null) {
+    const query = VerificationSession.findOne({ sessionId });
+    if (dbSession) query.session(dbSession);
+    return await query;
   }
 
   /** Get all non-deleted items. */
@@ -317,8 +385,8 @@ class VerificationQueueManager {
    * Update a question's text, options, and verification status.
    * Supports both MCQ fields and non-MCQ structured fields.
    */
-  static async updateQuestion(sessionId, index, updateData) {
-    const session = await this.getSession(sessionId);
+  static async updateQuestion(sessionId, index, updateData, dbSession = null) {
+    const session = await this.getSession(sessionId, dbSession);
     if (!session || !session.items[index]) return null;
 
     const item = session.items[index];
@@ -370,7 +438,7 @@ class VerificationQueueManager {
       if (updateData.verified) item.verifiedAt = new Date();
     }
 
-    await session.save();
+    await session.save({ session: dbSession ? dbSession : undefined });
     return item;
   }
 

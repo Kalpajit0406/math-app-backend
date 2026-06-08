@@ -35,20 +35,26 @@ async function ensureIndexes(mongoose) {
     const Class = require('../models/classModel');
     const Chapter = require('../models/chapterModel');
     const SyncVersion = require('../models/syncVersionModel');
+    const VerificationSession = require('../models/verificationSessionModel');
+    const OcrArchive = require('../models/ocrArchiveModel');
+    const RateLimit = require('../models/rateLimitModel');
+    const AuditLog = require('../models/auditLogModel');
 
     // Student indexes
     await safeCreateIndex(Student.collection, { studentPhone: 1 }, { unique: true });
-    await safeCreateIndex(Student.collection, { role: 1 });
-    await safeCreateIndex(Student.collection, { classNo: 1 });
+    await safeCreateIndex(Student.collection, { deviceFingerprint: 1 });
+    await safeCreateIndex(Student.collection, { accountType: 1 });
+    await safeCreateIndex(Student.collection, { accountStatus: 1 });
     await safeCreateIndex(Student.collection, { createdAt: -1 });
     console.log('✓ Student indexes created');
 
     // Question indexes
-    await safeCreateIndex(Question.collection, { classNo: 1, chapterId: 1 });
-    await safeCreateIndex(Question.collection, { language: 1 });
-    await safeCreateIndex(Question.collection, { createdAt: -1 });
-    await safeCreateIndex(Question.collection, { classNo: 1, language: 1 });
+    await safeCreateIndex(Question.collection, { questionHash: 1 }, { unique: true, sparse: true });
     await safeCreateIndex(Question.collection, { chapterId: 1 });
+    await safeCreateIndex(Question.collection, { classNo: 1 });
+    await safeCreateIndex(Question.collection, { language: 1 });
+    await safeCreateIndex(Question.collection, { classNo: 1, language: 1 });
+    await safeCreateIndex(Question.collection, { isDeleted: 1 });
     console.log('✓ Question indexes created');
 
     // Class indexes
@@ -56,8 +62,23 @@ async function ensureIndexes(mongoose) {
     console.log('✓ Class indexes created');
 
     // Chapter indexes
-    await safeCreateIndex(Chapter.collection, { classId: 1, normalizedChapterName: 1 }, { unique: true });
+    // Note: Drop the legacy index first to avoid options conflicts
+    try {
+      await Chapter.collection.dropIndex('classId_1_normalizedChapterName_1');
+      console.log('✓ Dropped legacy classId_1_normalizedChapterName_1 index from chapters');
+    } catch (err) {}
+
+    // Note: Use partial unique index for active chapters (isDeleted: false) to prevent name collisions on soft-deleted items
+    try {
+      await Chapter.collection.createIndex(
+        { classId: 1, normalizedChapterName: 1 },
+        { unique: true, partialFilterExpression: { isDeleted: false } }
+      );
+    } catch (err) {
+      if (!isIgnorableIndexError(err)) throw err;
+    }
     await safeCreateIndex(Chapter.collection, { normalizedChapterName: 1 });
+    await safeCreateIndex(Chapter.collection, { isDeleted: 1 });
     console.log('✓ Chapter indexes created');
 
     // SyncVersion indexes
@@ -67,16 +88,43 @@ async function ensureIndexes(mongoose) {
     // Exam indexes
     await safeCreateIndex(Exam.collection, { createdBy: 1 });
     await safeCreateIndex(Exam.collection, { classNo: 1 });
+    await safeCreateIndex(Exam.collection, { date: 1 });
     await safeCreateIndex(Exam.collection, { createdAt: -1 });
+    await safeCreateIndex(Exam.collection, { isDeleted: 1 });
     console.log('✓ Exam indexes created');
 
     // Attempt indexes
-    await safeCreateIndex(Attempt.collection, { userId: 1, examId: 1 });
-    await safeCreateIndex(Attempt.collection, { examId: 1 });
     await safeCreateIndex(Attempt.collection, { userId: 1 });
+    await safeCreateIndex(Attempt.collection, { examId: 1 });
+    await safeCreateIndex(Attempt.collection, { startTime: 1 });
+    await safeCreateIndex(Attempt.collection, { userId: 1, examId: 1 });
     await safeCreateIndex(Attempt.collection, { createdAt: -1 });
-    await safeCreateIndex(Attempt.collection, { endTime: 1 }); // For finding submitted attempts
     console.log('✓ Attempt indexes created');
+
+    // Verification Sessions indexes
+    await safeCreateIndex(VerificationSession.collection, { sessionId: 1 }, { unique: true });
+    await safeCreateIndex(VerificationSession.collection, { status: 1 });
+    await safeCreateIndex(VerificationSession.collection, { expiresAt: 1 }, { expireAfterSeconds: 0 });
+    console.log('✓ Verification Session indexes created');
+
+    // OcrArchive indexes
+    await safeCreateIndex(OcrArchive.collection, { sessionId: 1 });
+    await safeCreateIndex(OcrArchive.collection, { itemId: 1 });
+    await safeCreateIndex(OcrArchive.collection, { createdAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
+    console.log('✓ OcrArchive indexes created');
+
+    // RateLimit indexes
+    await safeCreateIndex(RateLimit.collection, { key: 1 }, { unique: true });
+    await safeCreateIndex(RateLimit.collection, { expireAt: 1 }, { expireAfterSeconds: 0 });
+    console.log('✓ RateLimit indexes created');
+
+    // AuditLog indexes
+    await safeCreateIndex(AuditLog.collection, { actorId: 1 });
+    await safeCreateIndex(AuditLog.collection, { action: 1 });
+    await safeCreateIndex(AuditLog.collection, { targetType: 1 });
+    await safeCreateIndex(AuditLog.collection, { targetId: 1 });
+    await safeCreateIndex(AuditLog.collection, { timestamp: -1 });
+    console.log('✓ AuditLog indexes created');
 
     // Drop legacy indexes
     try {

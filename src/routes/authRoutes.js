@@ -5,8 +5,13 @@ const authMiddleware = require('../middleware/authMiddleware');
 const authorizeRoles = require('../middleware/roleMiddleware');
 const { validationRules } = require('../middleware/validationMiddleware');
 
-router.post('/register', validationRules.registerValidation, authController.register);
-router.post('/login', validationRules.loginValidation, authController.login);
+const createRateLimiter = require('../middleware/rateLimitMiddleware');
+
+const registerLimiter = createRateLimiter('register', 5, 600, 'Too many registration attempts. Please try again in 10 minutes.');
+const loginLimiter = createRateLimiter('login', 10, 300, 'Too many login attempts. Please try again in 5 minutes.');
+
+router.post('/register', registerLimiter, validationRules.registerValidation, authController.register);
+router.post('/login', loginLimiter, validationRules.loginValidation, authController.login);
 router.get('/me', authMiddleware, authController.me);
 router.post('/profile-edit-request', authMiddleware, authController.submitProfileEditRequest);
 router.get('/pending-profile-edits', authMiddleware, authorizeRoles('admin', 'teacher'), authController.getPendingProfileEdits);

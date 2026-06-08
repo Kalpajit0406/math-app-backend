@@ -4,6 +4,20 @@ const Student = require('../models/studentModel');
 const createExam = async (req, res) => {
   try {
     const exam = await examService.createExam(req.body, req.user.id);
+
+    const auditLogService = require('../services/auditLogService');
+    await auditLogService.log({
+      actorId: req.user.id,
+      action: 'exam_create',
+      targetType: 'Exam',
+      targetId: exam._id,
+      metadata: {
+        title: exam.title,
+        classNo: exam.classNo,
+        questionCount: exam.questionIds ? exam.questionIds.length : 0
+      }
+    });
+
     res.status(201).json({ success: true, data: exam });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });

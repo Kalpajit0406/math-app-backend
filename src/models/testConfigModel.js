@@ -40,27 +40,83 @@ const testConfigSchema = new mongoose.Schema(
       required: [true, "Negative marks per question is required"],
       min: [0, "Negative marks cannot be negative"],
     },
-    chapters: {
-      type: [String],
-      required: [true, "Chapters are required"],
-      validate: {
-        validator: function (val) {
-          return Array.isArray(val) && val.length > 0;
-        },
-        message: "At least one chapter is required",
-      },
-    },
+    chapterIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Chapter',
+    }],
+    isDeleted: { type: Boolean, default: false, index: true },
+    deletedAt: { type: Date },
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' }
   },
   { 
     timestamps: true,
     toJSON: {
+      virtuals: true,
       transform: (doc, ret) => {
         ret.id = ret._id;
         delete ret.__v;
+        if (ret.chapterIds) {
+          ret.chapters = ret.chapterIds.map(ch => {
+            if (ch && typeof ch === 'object' && ch.chapterName) {
+              return ch.chapterName;
+            }
+            return ch.toString();
+          });
+        } else {
+          ret.chapters = ret.chapters || [];
+        }
         return ret;
       }
+    },
+    toObject: {
+      virtuals: true
     }
   }
 );
+
+// Virtual getter/setter for chapters
+testConfigSchema.virtual('chapters')
+  .get(function() {
+    if (this.chapterIds && this.chapterIds.length > 0) {
+      return this.chapterIds.map(ch => {
+        if (ch && typeof ch === 'object' && ch.chapterName) {
+          return ch.chapterName;
+        }
+        return ch.toString();
+      });
+    }
+    return this._tempChapters || [];
+  })
+  .set(function(val) {
+    this._tempChapters = val;
+  });
+
+// Pre-validate hook to resolve chapters array of strings to chapterIds
+testConfigSchema.pre('validate', async function (next) {
+  if (this._tempChapters && Array.isArray(this._tempChapters) && this._tempChapters.length > 0) {
+    try {
+      const { resolveChapterIds } = require('../utils/chapterNormalization');
+      const resolved = await resolveChapterIds(this.classNo || 10, this._tempChapters);
+      this.chapterIds = resolved;
+    } catch (err) {
+      return next(err);
+    }
+  }
+  next();
+});
+
+// Pre-find hook to automatically filter out soft-deleted test configs
+testConfigSchema.pre(/^find/, function() {
+  this.where({ isDeleted: { $ne: true } });
+});
+
+// Auto-populate helper middlewares
+testConfigSchema.pre('find', function() {
+  this.populate('chapterIds');
+});
+
+testConfigSchema.pre('findOne', function() {
+  this.populate('chapterIds');
+});
 
 module.exports = mongoose.model('TestConfig', testConfigSchema);

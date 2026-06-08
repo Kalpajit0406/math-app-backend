@@ -48,6 +48,9 @@ const questionSchema = new mongoose.Schema({
     type: String,
     index: true,
   },
+  isDeleted: { type: Boolean, default: false, index: true },
+  deletedAt: { type: Date },
+  deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' }
 }, { 
   timestamps: true,
   toJSON: {
@@ -127,6 +130,11 @@ questionSchema.pre('save', function (next) {
   if (next && typeof next === 'function') {
     next();
   }
+});
+
+// Pre-find hook to automatically filter out soft-deleted questions
+questionSchema.pre(/^find/, function() {
+  this.where({ isDeleted: { $ne: true } });
 });
 
 // Auto-populate chapter details

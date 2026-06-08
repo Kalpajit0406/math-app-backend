@@ -1,7 +1,8 @@
 const Exam = require('../models/examModel');
 const Question = require('../models/questionModel');
+const mongoose = require('mongoose');
 
-const normalizeExamData = async (examData = {}) => {
+const normalizeExamData = async (examData = {}, session = null) => {
   const title = examData.title || `Class ${examData.classNo} ${examData.language} Test`;
   const totalTime = Number.parseInt(examData.totalTime || examData.duration || '0', 10) || 0;
   const negativeMarking = Number(examData.negativeMarking !== undefined ? examData.negativeMarking : 0.0);
@@ -9,6 +10,8 @@ const normalizeExamData = async (examData = {}) => {
   const chapters = Array.isArray(examData.chapters) ? examData.chapters : [];
 
   let questionIds = [...(examData.questionIds || [])];
+
+  const opts = session ? { session } : {};
 
   // 1. If inline questions are provided, save them first
   if (Array.isArray(examData.questions) && examData.questions.length > 0) {
@@ -18,15 +21,15 @@ const normalizeExamData = async (examData = {}) => {
         createdIds.push(q._id || q.id);
         continue;
       }
-      const newQ = await Question.create({
+      const newQ = await Question.create([{
         question: q.question || q.questionText || '',
         options: q.options || [],
         correctAnswer: q.correctAnswer || '',
         language: q.language || examData.language || 'English',
         classNo: Number(q.classNo || examData.classNo || 10),
         chapter: q.chapter || 'General',
-      });
-      createdIds.push(newQ._id);
+      }], opts);
+      createdIds.push(newQ[0]._id);
     }
     questionIds = [...questionIds, ...createdIds];
   }
@@ -49,15 +52,18 @@ const normalizeExamData = async (examData = {}) => {
       if (resolvedChapterIds.length > 0) {
         filter.chapterId = { $in: resolvedChapterIds };
       } else {
-        const mongoose = require('mongoose');
         filter.chapterId = new mongoose.Types.ObjectId();
       }
     }
 
-    const sampleQuestions = await Question.aggregate([
+    const aggregatePipeline = [
       { $match: filter },
       { $sample: { size: totalQuestions } }
-    ]);
+    ];
+
+    const sampleQuestions = session 
+      ? await Question.aggregate(aggregatePipeline).session(session)
+      : await Question.aggregate(aggregatePipeline);
 
     if (sampleQuestions.length < totalQuestions) {
       throw new Error(`Insufficient questions in database. Requested: ${totalQuestions}, Available: ${sampleQuestions.length} for Class ${examData.classNo}, Language ${examData.language}`);
@@ -83,13 +89,37 @@ const normalizeExamData = async (examData = {}) => {
 
 const examService = {
   createExam: async (examData, userId) => {
-    const normalizedData = await normalizeExamData(examData);
-    const exam = new Exam({
-      ...normalizedData,
-      createdBy: userId,
-    });
-    const saved = await exam.save();
-    return await saved.populate('questions');
+    const session = await mongoose.startSession();
+    let transactionStarted = false;
+    try {
+      try {
+        await session.startTransaction();
+        transactionStarted = true;
+      } catch (err) {
+        // Replica sets not enabled
+      }
+
+      const normalizedData = await normalizeExamData(examData, transactionStarted ? session : null);
+      const exam = new Exam({
+        ...normalizedData,
+        createdBy: userId,
+      });
+      const saved = await exam.save({ session: transactionStarted ? session : undefined });
+
+      if (transactionStarted) {
+        await session.commitTransaction();
+      }
+
+      const populated = await Exam.findById(saved._id).populate('questions');
+      return populated;
+    } catch (error) {
+      if (transactionStarted && session.inTransaction()) {
+        await session.abortTransaction();
+      }
+      throw error;
+    } finally {
+      session.endSession();
+    }
   },
 
   getExams: async () => {
@@ -109,11 +139,18 @@ const examService = {
     };
 
     if (isJoint && (Number(classNo) === 11 || Number(classNo) === 12)) {
+      const Chapter = require('../models/chapterModel');
+      const targetParentChapters = await Chapter.find({
+        classId: 13,
+        normalizedChapterName: { $in: [String(classNo).toLowerCase(), 'joint', 'jee'] }
+      }).select('_id');
+      const parentIds = targetParentChapters.map(c => c._id);
+
       query.$or = [
         { classNo: Number(classNo) },
         {
           classNo: 13,
-          chapters: { $in: [String(classNo), 'Joint'] }
+          chapterIds: { $in: parentIds }
         }
       ];
     } else {

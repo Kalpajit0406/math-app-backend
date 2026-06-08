@@ -12,11 +12,11 @@ const register = async (req, res) => {
 
 const login = async (req, res) => {
   try {
-    const { studentPhone, password } = req.body;
+    const { studentPhone, password, deviceBlueprint } = req.body;
     if (!studentPhone || !password) {
       return res.status(400).json({ success: false, message: 'Phone and password are required' });
     }
-    const data = await authService.login(studentPhone, password);
+    const data = await authService.login(studentPhone, password, deviceBlueprint);
     // Note: data contains { student, accessToken }
     res.json({ success: true, data });
   } catch (error) {
@@ -70,6 +70,18 @@ const acceptStudent = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
+    const auditLogService = require('../services/auditLogService');
+    await auditLogService.log({
+      actorId: req.user.id,
+      action: updated.accountType === 'TRIAL' ? 'trial_approval' : 'student_approval',
+      targetType: 'Student',
+      targetId: updated._id,
+      metadata: {
+        studentPhone: updated.studentPhone,
+        accountType: updated.accountType
+      }
+    });
+
     res.json({ success: true, message: 'Student accepted' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -90,6 +102,18 @@ const rejectStudent = async (req, res) => {
 
     student.accountStatus = 'REJECTED';
     await student.save();
+
+    const auditLogService = require('../services/auditLogService');
+    await auditLogService.log({
+      actorId: req.user.id,
+      action: 'student_rejection',
+      targetType: 'Student',
+      targetId: student._id,
+      metadata: {
+        studentPhone: student.studentPhone,
+        requestAttempts: student.requestAttempts
+      }
+    });
 
     const phone = student.studentPhone;
     const deviceFingerprint = student.deviceFingerprint;
@@ -162,6 +186,19 @@ const blacklistStudent = async (req, res) => {
           { upsert: true }
         );
       }
+
+      const auditLogService = require('../services/auditLogService');
+      await auditLogService.log({
+        actorId: req.user.id,
+        action: 'blacklist',
+        targetType: 'Student',
+        targetId: student._id,
+        metadata: {
+          studentPhone: student.studentPhone,
+          deviceFingerprint: student.deviceFingerprint
+        }
+      });
+
       res.json({ success: true, message: 'Student blacklisted successfully' });
     } else {
       if (student.accountType === 'BLOCKED') {
@@ -178,6 +215,19 @@ const blacklistStudent = async (req, res) => {
           { $set: { blacklisted: false, attemptCount: 0, blacklistedAt: undefined } }
         );
       }
+
+      const auditLogService = require('../services/auditLogService');
+      await auditLogService.log({
+        actorId: req.user.id,
+        action: 'unblacklist',
+        targetType: 'Student',
+        targetId: student._id,
+        metadata: {
+          studentPhone: student.studentPhone,
+          deviceFingerprint: student.deviceFingerprint
+        }
+      });
+
       res.json({ success: true, message: 'Student unblacklisted successfully' });
     }
   } catch (error) {
@@ -186,19 +236,36 @@ const blacklistStudent = async (req, res) => {
 };
 
 const updateAccountStatus = async (req, res) => {
+  const mongoose = require('mongoose');
+  const session = await mongoose.startSession();
+  let transactionStarted = false;
   try {
     const { id, accountType, isJoint, resetTrialLimits } = req.body;
     if (!id) {
       return res.status(400).json({ success: false, message: 'Student id is required' });
     }
 
-    const student = await Student.findById(id);
+    try {
+      await session.startTransaction();
+      transactionStarted = true;
+    } catch (err) {
+      // Replica sets not enabled
+    }
+
+    const opts = transactionStarted ? { session } : {};
+
+    const student = await Student.findById(id).session(transactionStarted ? session : undefined);
     if (!student) {
+      if (transactionStarted) await session.abortTransaction();
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
+    const oldAccountType = student.accountType;
+    const oldAccountStatus = student.accountStatus;
+
     if (accountType !== undefined) {
       if (!['NORMAL', 'TRIAL', 'JOINT', 'JOINT_ENTRANCE', 'PREMIUM', 'ADMIN', 'BLOCKED'].includes(accountType)) {
+        if (transactionStarted) await session.abortTransaction();
         return res.status(400).json({ success: false, message: 'Invalid account type' });
       }
       student.accountType = accountType;
@@ -219,26 +286,54 @@ const updateAccountStatus = async (req, res) => {
       await SelfAssessmentUsage.findOneAndUpdate(
         { studentId: student._id },
         { $set: { dailyGenerationCount: 0, lastGenerationDate: new Date() } },
-        { upsert: true }
+        { upsert: true, ...opts }
       );
       
       await PhoneRecord.findOneAndUpdate(
         { phone: student.studentPhone },
-        { $set: { attemptCount: 0, blacklisted: false, blacklistedAt: undefined } }
+        { $set: { attemptCount: 0, blacklisted: false, blacklistedAt: undefined } },
+        opts
       );
       if (student.deviceFingerprint) {
         await PhoneRecord.findOneAndUpdate(
           { deviceFingerprint: student.deviceFingerprint },
-          { $set: { attemptCount: 0, blacklisted: false, blacklistedAt: undefined } }
+          { $set: { attemptCount: 0, blacklisted: false, blacklistedAt: undefined } },
+          opts
         );
       }
       student.requestAttempts = 0;
     }
 
-    await student.save();
+    await student.save({ session: transactionStarted ? session : undefined });
+
+    const auditLogService = require('../services/auditLogService');
+    await auditLogService.log({
+      actorId: req.user.id,
+      action: 'student_conversion',
+      targetType: 'Student',
+      targetId: student._id,
+      metadata: {
+        oldAccountType,
+        newAccountType: student.accountType,
+        oldAccountStatus,
+        newAccountStatus: student.accountStatus,
+        isJointChanged: isJoint !== undefined,
+        resetTrialLimits: resetTrialLimits
+      }
+    }, transactionStarted ? session : null);
+
+    if (transactionStarted) {
+      await session.commitTransaction();
+    }
+
     res.json({ success: true, message: 'Student status updated successfully', data: student });
   } catch (error) {
+    if (transactionStarted && session.inTransaction()) {
+      await session.abortTransaction();
+    }
     res.status(500).json({ success: false, message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 

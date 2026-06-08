@@ -6,8 +6,10 @@ const AccountType = {
   NORMAL: 'NORMAL',
   TRIAL: 'TRIAL',
   JOINT: 'JOINT',
+  JOINT_ENTRANCE: 'JOINT_ENTRANCE',
   PREMIUM: 'PREMIUM',
-  ADMIN: 'ADMIN'
+  ADMIN: 'ADMIN',
+  BLOCKED: 'BLOCKED'
 };
 
 const AccountStatus = {

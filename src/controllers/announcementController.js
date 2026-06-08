@@ -26,7 +26,12 @@ const getAnnouncements = async (req, res) => {
     // If admin requests (no targetClass), they see all.
     let filter = {};
     if (targetClass) {
-      filter.targetClass = { $in: ['all', targetClass.toString()] };
+      if (targetClass.toString() !== 'all') {
+        const classNum = Number(targetClass);
+        if (!isNaN(classNum)) {
+          filter.targetClassIds = classNum;
+        }
+      }
     }
 
     const announcements = await Announcement.find(filter).sort({ createdAt: -1 });
@@ -42,11 +47,30 @@ const bulkDeleteAnnouncements = async (req, res) => {
     if (!Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ success: false, message: 'Announcement ids must be a non-empty array' });
     }
-    const result = await Announcement.deleteMany({ _id: { $in: ids } });
+    const result = await Announcement.updateMany(
+      { _id: { $in: ids } },
+      {
+        isDeleted: true,
+        deletedAt: new Date(),
+        deletedBy: req.user?.id
+      }
+    );
+
+    // Log audit actions
+    const auditLogService = require('../services/auditLogService');
+    for (const id of ids) {
+      await auditLogService.log({
+        actorId: req.user?.id,
+        action: 'announcement_delete',
+        targetType: 'Announcement',
+        targetId: id
+      });
+    }
+
     res.json({
       success: true,
-      message: `${result.deletedCount || 0} announcement(s) deleted`,
-      deletedCount: result.deletedCount
+      message: `${result.modifiedCount || 0} announcement(s) deleted`,
+      deletedCount: result.modifiedCount
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

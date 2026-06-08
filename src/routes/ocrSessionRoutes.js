@@ -8,9 +8,13 @@ const { secureMemoryUpload, secureDiskUpload } = require('../middleware/uploadMi
 router.use(authMiddleware);
 router.use(authorizeRoles('admin', 'teacher'));
 
+const createRateLimiter = require('../middleware/rateLimitMiddleware');
+const ocrLimiter = createRateLimiter('ocr_upload', 15, 300, 'Too many OCR uploads. Please try again in 5 minutes.');
+
 // OCR verification session endpoints
-router.post('/start', secureMemoryUpload.single('image'), ocrSessionController.startSession);
+router.post('/start', ocrLimiter, secureMemoryUpload.single('image'), ocrSessionController.startSession);
 router.get('/:sessionId', ocrSessionController.getSession);
+router.get('/:sessionId/item/:itemId/raw', ocrSessionController.getArchivedOcr);
 router.put('/:sessionId/item/:index', ocrSessionController.updateItem);
 router.delete('/:sessionId/item/:index', ocrSessionController.deleteItem);
 router.post('/:sessionId/item/:index/verify', secureDiskUpload.single('diagram'), ocrSessionController.verifyItem);

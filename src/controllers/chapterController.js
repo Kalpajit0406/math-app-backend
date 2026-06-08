@@ -127,38 +127,28 @@ const editChapter = async (req, res) => {
       chapter.chapterName = chapterName.trim();
       await chapter.save({ session: transactionStarted ? session : undefined });
 
-      // Update linked questions
-      await Question.updateMany(
-        { chapterId: id },
-        { chapter: chapterName.trim() },
-        { session: transactionStarted ? session : undefined }
-      );
-
-      // Update exam references
-      await Exam.updateMany(
-        { classNo: classId, chapters: oldChapterName },
-        { $set: { "chapters.$[elem]": chapterName.trim() } },
-        { 
-          arrayFilters: [{ elem: oldChapterName }],
-          session: transactionStarted ? session : undefined 
-        }
-      );
-
-      // Update test config references
-      await TestConfig.updateMany(
-        { classNo: classId, chapters: oldChapterName },
-        { $set: { "chapters.$[elem]": chapterName.trim() } },
-        { 
-          arrayFilters: [{ elem: oldChapterName }],
-          session: transactionStarted ? session : undefined 
-        }
-      );
+      chapter.chapterName = chapterName.trim();
+      await chapter.save({ session: transactionStarted ? session : undefined });
 
       if (transactionStarted) {
         await session.commitTransaction();
       }
 
       await incrementSyncVersion();
+
+      // Log audit action
+      const auditLogService = require('../services/auditLogService');
+      await auditLogService.log({
+        actorId: req.user.id,
+        action: 'chapter_rename',
+        targetType: 'Chapter',
+        targetId: chapter._id,
+        metadata: {
+          oldName: oldChapterName,
+          newName: chapterName.trim(),
+          classId
+        }
+      });
 
       res.json({
         success: true,
@@ -174,26 +164,31 @@ const editChapter = async (req, res) => {
         transactionStarted = true;
       } catch (err) {}
 
-      // Delete questions
-      await Question.deleteMany(
+      // Soft-delete questions cascading
+      await Question.updateMany(
         { chapterId: id },
+        { isDeleted: true, deletedAt: new Date(), deletedBy: req.user?.id },
         { session: transactionStarted ? session : undefined }
       );
 
-      // Delete chapter
-      await Chapter.findByIdAndDelete(id, { session: transactionStarted ? session : undefined });
+      // Soft-delete chapter
+      await Chapter.findByIdAndUpdate(
+        id,
+        { isDeleted: true, deletedAt: new Date(), deletedBy: req.user?.id },
+        { session: transactionStarted ? session : undefined }
+      );
 
-      // Remove from exams
+      // Soft-delete exams referencing this chapter
       await Exam.updateMany(
-        { classNo: classId },
-        { $pull: { chapters: oldChapterName } },
+        { chapterIds: id },
+        { isDeleted: true, deletedAt: new Date(), deletedBy: req.user?.id },
         { session: transactionStarted ? session : undefined }
       );
 
-      // Remove from test configs
+      // Soft-delete test configs referencing this chapter
       await TestConfig.updateMany(
-        { classNo: classId },
-        { $pull: { chapters: oldChapterName } },
+        { chapterIds: id },
+        { isDeleted: true, deletedAt: new Date(), deletedBy: req.user?.id },
         { session: transactionStarted ? session : undefined }
       );
 
@@ -203,11 +198,26 @@ const editChapter = async (req, res) => {
 
       await incrementSyncVersion();
 
+      // Log audit action
+      const auditLogService = require('../services/auditLogService');
+      await auditLogService.log({
+        actorId: req.user.id,
+        action: 'chapter_deletion',
+        targetType: 'Chapter',
+        targetId: id,
+        metadata: {
+          chapterName: oldChapterName,
+          classId,
+          cascadeDeletedQuestions: true
+        }
+      });
+
       res.json({
         success: true,
         message: 'Chapter and all linked questions deleted successfully.'
       });
     }
+
 
   } catch (error) {
     if (session.inTransaction()) {
@@ -238,26 +248,31 @@ const deleteChapter = async (req, res) => {
       transactionStarted = true;
     } catch (err) {}
 
-    // Cascade delete questions
-    await Question.deleteMany(
+    // Cascade soft-delete questions
+    await Question.updateMany(
       { chapterId: id },
+      { isDeleted: true, deletedAt: new Date(), deletedBy: req.user?.id },
       { session: transactionStarted ? session : undefined }
     );
 
-    // Delete chapter entry
-    await Chapter.findByIdAndDelete(id, { session: transactionStarted ? session : undefined });
+    // Soft-delete chapter entry
+    await Chapter.findByIdAndUpdate(
+      id,
+      { isDeleted: true, deletedAt: new Date(), deletedBy: req.user?.id },
+      { session: transactionStarted ? session : undefined }
+    );
 
-    // Remove reference from exams
+    // Soft-delete exams referencing this chapter
     await Exam.updateMany(
-      { classNo: classId },
-      { $pull: { chapters: oldChapterName } },
+      { chapterIds: id },
+      { isDeleted: true, deletedAt: new Date(), deletedBy: req.user?.id },
       { session: transactionStarted ? session : undefined }
     );
 
-    // Remove reference from test configs
+    // Soft-delete test configs referencing this chapter
     await TestConfig.updateMany(
-      { classNo: classId },
-      { $pull: { chapters: oldChapterName } },
+      { chapterIds: id },
+      { isDeleted: true, deletedAt: new Date(), deletedBy: req.user?.id },
       { session: transactionStarted ? session : undefined }
     );
 
@@ -266,6 +281,20 @@ const deleteChapter = async (req, res) => {
     }
 
     await incrementSyncVersion();
+
+    // Log audit action
+    const auditLogService = require('../services/auditLogService');
+    await auditLogService.log({
+      actorId: req.user.id,
+      action: 'chapter_deletion',
+      targetType: 'Chapter',
+      targetId: id,
+      metadata: {
+        chapterName: oldChapterName,
+        classId,
+        cascadeDeletedQuestions: true
+      }
+    });
 
     res.json({
       success: true,

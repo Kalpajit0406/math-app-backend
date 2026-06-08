@@ -20,7 +20,10 @@ const chapterSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true,
-  }
+  },
+  isDeleted: { type: Boolean, default: false, index: true },
+  deletedAt: { type: Date },
+  deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' }
 }, {
   timestamps: true,
   toJSON: {
@@ -32,8 +35,11 @@ const chapterSchema = new mongoose.Schema({
   }
 });
 
-// Composite unique index to ensure no duplicate chapters exist in the same class
-chapterSchema.index({ classId: 1, normalizedChapterName: 1 }, { unique: true });
+// Composite partial unique index to ensure no duplicate active chapters exist in the same class
+chapterSchema.index(
+  { classId: 1, normalizedChapterName: 1 },
+  { unique: true, partialFilterExpression: { isDeleted: false } }
+);
 
 // Auto-populate normalizedChapterName before validation
 chapterSchema.pre('validate', function(next) {
@@ -43,6 +49,11 @@ chapterSchema.pre('validate', function(next) {
   if (typeof next === 'function') {
     next();
   }
+});
+
+// Pre-find hook to automatically filter out soft-deleted chapters
+chapterSchema.pre(/^find/, function() {
+  this.where({ isDeleted: { $ne: true } });
 });
 
 module.exports = mongoose.model('Chapter', chapterSchema);

@@ -40,10 +40,10 @@ const examSchema = new mongoose.Schema({
     type: Number,
     default: 1.0,
   },
-  chapters: {
-    type: [String],
-    default: [],
-  },
+  chapterIds: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Chapter',
+  }],
   questionIds: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Question',
@@ -53,6 +53,9 @@ const examSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Student',
   },
+  isDeleted: { type: Boolean, default: false, index: true },
+  deletedAt: { type: Date },
+  deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' }
 }, { 
   timestamps: true,
   toJSON: {
@@ -60,6 +63,16 @@ const examSchema = new mongoose.Schema({
     transform: (doc, ret) => {
       ret.id = ret._id;
       delete ret.__v;
+      if (ret.chapterIds) {
+        ret.chapters = ret.chapterIds.map(ch => {
+          if (ch && typeof ch === 'object' && ch.chapterName) {
+            return ch.chapterName;
+          }
+          return ch.toString();
+        });
+      } else {
+        ret.chapters = ret.chapters || [];
+      }
       if (ret.questions) {
         ret.questions = ret.questions.map(q => {
           q.id = q._id;
@@ -81,13 +94,49 @@ examSchema.virtual('questions', {
   foreignField: '_id'
 });
 
+// Virtual getter/setter for chapters
+examSchema.virtual('chapters')
+  .get(function() {
+    if (this.chapterIds && this.chapterIds.length > 0) {
+      return this.chapterIds.map(ch => {
+        if (ch && typeof ch === 'object' && ch.chapterName) {
+          return ch.chapterName;
+        }
+        return ch.toString();
+      });
+    }
+    return this._tempChapters || [];
+  })
+  .set(function(val) {
+    this._tempChapters = val;
+  });
+
+// Pre-validate hook to resolve chapters array of strings to chapterIds
+examSchema.pre('validate', async function (next) {
+  if (this._tempChapters && Array.isArray(this._tempChapters) && this._tempChapters.length > 0) {
+    try {
+      const { resolveChapterIds } = require('../utils/chapterNormalization');
+      const resolved = await resolveChapterIds(this.classNo || 10, this._tempChapters);
+      this.chapterIds = resolved;
+    } catch (err) {
+      return next(err);
+    }
+  }
+  next();
+});
+
+// Pre-find hook to automatically filter out soft-deleted exams
+examSchema.pre(/^find/, function() {
+  this.where({ isDeleted: { $ne: true } });
+});
+
 // Auto-populate helper middlewares
 examSchema.pre('find', function() {
-  this.populate('questions');
+  this.populate('questions').populate('chapterIds');
 });
 
 examSchema.pre('findOne', function() {
-  this.populate('questions');
+  this.populate('questions').populate('chapterIds');
 });
 
 // Attach `.id()` method to populated questions array for compatibility with Mongoose DocumentArray

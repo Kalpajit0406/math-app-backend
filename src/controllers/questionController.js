@@ -182,8 +182,26 @@ const updateQuestion = async (req, res) => {
 const deleteQuestion = async (req, res) => {
   try {
     const { id } = req.params;
-    const deleted = await Question.findByIdAndDelete(id);
+    const deleted = await Question.findByIdAndUpdate(id, {
+      isDeleted: true,
+      deletedAt: new Date(),
+      deletedBy: req.user?.id
+    }, { returnDocument: 'after' });
     if (!deleted) return res.status(404).json({ success: false, message: "Question not found" });
+
+    // Log audit action
+    const auditLogService = require('../services/auditLogService');
+    await auditLogService.log({
+      actorId: req.user?.id,
+      action: 'question_delete',
+      targetType: 'Question',
+      targetId: deleted._id,
+      metadata: {
+        classNo: deleted.classNo,
+        chapterId: deleted.chapterId
+      }
+    });
+
     res.json({ success: true, message: "Question deleted successfully" });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

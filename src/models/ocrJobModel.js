@@ -1,10 +1,11 @@
 const mongoose = require('mongoose');
+const { OCRStatus } = require('../utils/constants');
 
 const OCRJobSchema = new mongoose.Schema({
   status: { 
     type: String, 
-    enum: ['pending', 'processing', 'done', 'failed'], 
-    default: 'pending' 
+    enum: Object.values(OCRStatus), 
+    default: OCRStatus.PENDING 
   },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

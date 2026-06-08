@@ -46,6 +46,21 @@ const createTestConfig = asyncHandler(async (req, res) => {
   });
 
   const savedTest = await newTest.save();
+
+  const auditLogService = require('../services/auditLogService');
+  await auditLogService.log({
+    actorId: req.user?.id,
+    action: 'test_config_create',
+    targetType: 'TestConfig',
+    targetId: savedTest._id,
+    metadata: {
+      date: savedTest.date,
+      time: savedTest.time,
+      classNo: savedTest.classNo,
+      language: savedTest.language
+    }
+  });
+
   return res.status(201).json({
     success: true,
     message: "Test configuration saved",
@@ -101,6 +116,21 @@ const deleteTestConfig = asyncHandler(async (req, res) => {
   if (!deletedTest) {
     throw new ApiError(404, "Test configuration not found");
   }
+
+  const auditLogService = require('../services/auditLogService');
+  await auditLogService.log({
+    actorId: req.user?.id,
+    action: 'test_config_delete',
+    targetType: 'TestConfig',
+    targetId: deletedTest._id,
+    metadata: {
+      date: deletedTest.date,
+      time: deletedTest.time,
+      classNo: deletedTest.classNo,
+      language: deletedTest.language
+    }
+  });
+
   return res.status(200).json({
     success: true,
     message: "Test configuration deleted",

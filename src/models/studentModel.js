@@ -22,7 +22,8 @@ const studentSchema = new mongoose.Schema({
   motherName: { type: String, trim: true },
   studentPhone: { type: String, required: true, unique: true, trim: true },
   guardianPhone: { type: String, required: true, trim: true },
-  password: { type: String, required: true },
+  passwordHash: { type: String, required: true, select: false },
+  passwordChangedAt: { type: Date },
   classChangeHistory: [{ type: Date }],
   pendingProfileEdit: {
     classNo: { type: Number, enum: [9, 10, 11, 12] },
@@ -32,13 +33,13 @@ const studentSchema = new mongoose.Schema({
   },
   accountType: {
     type: String,
-    enum: ['NORMAL', 'TRIAL', 'JOINT', 'JOINT_ENTRANCE', 'PREMIUM', 'ADMIN', 'BLOCKED'],
-    default: 'NORMAL'
+    enum: Object.values(AccountType),
+    default: AccountType.NORMAL
   },
   accountStatus: {
     type: String,
-    enum: ['PENDING', 'APPROVED', 'REJECTED', 'BLACKLISTED', 'SUSPENDED'],
-    default: 'PENDING'
+    enum: Object.values(AccountStatus),
+    default: AccountStatus.PENDING
   },
   permissions: {
     type: permissionsSchema,
@@ -46,6 +47,8 @@ const studentSchema = new mongoose.Schema({
   },
   requestAttempts: { type: Number, default: 0 },
   deviceFingerprint: { type: String, trim: true },
+  fingerprintHash: { type: String, trim: true },
+  lastKnownDevices: [{ type: String, trim: true }],
   jwtVersion: { type: Number, default: 0 }
 }, { 
   timestamps: true,
@@ -58,6 +61,7 @@ const studentSchema = new mongoose.Schema({
       delete ret._id;
       delete ret.__v;
       delete ret.password;
+      delete ret.passwordHash;
       return ret;
     }
   },
@@ -198,5 +202,29 @@ studentSchema.virtual('isJoint')
       this.accountType = 'NORMAL';
     }
   });
+
+// Virtual for legacy password field support
+studentSchema.virtual('password')
+  .get(function() {
+    return this.passwordHash;
+  })
+  .set(function(val) {
+    this.passwordHash = val;
+  });
+
+// Pre-save hook to enforce secure bcrypt password hashing and track passwordChangedAt
+studentSchema.pre('save', async function(next) {
+  if (this.isModified('passwordHash') && this.passwordHash) {
+    // Only hash if it's not already a bcrypt hash
+    if (!this.passwordHash.startsWith('$2a$') && !this.passwordHash.startsWith('$2b$') && !this.passwordHash.startsWith('$2y$')) {
+      const bcrypt = require('bcrypt');
+      this.passwordHash = await bcrypt.hash(this.passwordHash, 10);
+    }
+    this.passwordChangedAt = new Date();
+  }
+  if (typeof next === 'function') {
+    next();
+  }
+});
 
 module.exports = mongoose.model('Student', studentSchema);

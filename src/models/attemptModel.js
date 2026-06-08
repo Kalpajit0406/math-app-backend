@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { AntiCheatSeverity } = require('../utils/constants');
 
 const responseSchema = new mongoose.Schema({
   questionId: {
@@ -16,7 +17,7 @@ const violationSchema = new mongoose.Schema({
   },
   severity: {
     type: String,
-    enum: ['low', 'medium', 'critical'],
+    enum: Object.values(AntiCheatSeverity),
     required: true,
   },
   message: {
