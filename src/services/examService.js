@@ -44,7 +44,14 @@ const normalizeExamData = async (examData = {}) => {
       filter.language = { $in: [examData.language, 'Both'] };
     }
     if (chapters.length > 0) {
-      filter.chapter = { $in: chapters };
+      const { resolveChapterIds } = require('../utils/chapterNormalization');
+      const resolvedChapterIds = await resolveChapterIds(examData.classNo, chapters);
+      if (resolvedChapterIds.length > 0) {
+        filter.chapterId = { $in: resolvedChapterIds };
+      } else {
+        const mongoose = require('mongoose');
+        filter.chapterId = new mongoose.Types.ObjectId();
+      }
     }
 
     const sampleQuestions = await Question.aggregate([

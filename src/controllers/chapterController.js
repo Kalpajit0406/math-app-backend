@@ -46,15 +46,27 @@ const addChapter = async (req, res) => {
       return res.status(400).json({ success: false, message: 'classId and chapterName are required.' });
     }
 
-    const normalized = normalizeChapterName(chapterName);
-    const existing = await Chapter.findOne({ classId: parseInt(classId, 10), normalizedChapterName: normalized });
+    let finalChapterName = chapterName.trim();
+    const numericClassId = parseInt(classId, 10);
+
+    if (numericClassId === 13) {
+      const { parentChapter } = req.body;
+      if (!parentChapter || !['11', '12', 'JEE'].includes(parentChapter)) {
+        return res.status(400).json({ success: false, message: 'parentChapter ("11", "12", or "JEE") is required for class 13.' });
+      }
+      const cleanChapterName = chapterName.replace(/^(11|12|JEE):\s*/i, '').trim();
+      finalChapterName = `${parentChapter}: ${cleanChapterName}`;
+    }
+
+    const normalized = normalizeChapterName(finalChapterName);
+    const existing = await Chapter.findOne({ classId: numericClassId, normalizedChapterName: normalized });
     if (existing) {
       return res.status(400).json({ success: false, message: 'Chapter name already exists for this class.' });
     }
 
     const newChapter = await Chapter.create({
-      classId: parseInt(classId, 10),
-      chapterName: chapterName.trim()
+      classId: numericClassId,
+      chapterName: finalChapterName
     });
 
     await incrementSyncVersion();

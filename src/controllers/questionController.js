@@ -73,18 +73,12 @@ const getQuestions = async (req, res) => {
       }
     }
     if (chapter) {
-      const mongoose = require('mongoose');
-      const Chapter = mongoose.model('Chapter');
-      const { normalizeChapterName } = require('../utils/chapterNormalization');
-      const normalized = normalizeChapterName(chapter);
-      
-      const query = { normalizedChapterName: normalized };
-      if (filter.classNo) query.classId = filter.classNo;
-      
-      const chaps = await Chapter.find(query).select('_id');
-      if (chaps.length > 0) {
-        filter.chapterId = { $in: chaps.map(c => c._id) };
+      const { resolveChapterIds } = require('../utils/chapterNormalization');
+      const chapterIds = await resolveChapterIds(filter.classNo || 10, [chapter]);
+      if (chapterIds.length > 0) {
+        filter.chapterId = { $in: chapterIds };
       } else {
+        const mongoose = require('mongoose');
         filter.chapterId = new mongoose.Types.ObjectId();
       }
     }

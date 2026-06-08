@@ -14,4 +14,39 @@ const normalizeChapterName = (name) => {
     .trim();                             // Trim start and end whitespace
 };
 
-module.exports = { normalizeChapterName };
+const resolveChapterIds = async (classId, chapterNames) => {
+  const mongoose = require('mongoose');
+  const Chapter = mongoose.model('Chapter');
+
+  if (!Array.isArray(chapterNames) || chapterNames.length === 0) {
+    return [];
+  }
+
+  const queryOrConditions = [];
+  const parentChapters = ['11', '12', 'jee'];
+
+  for (const name of chapterNames) {
+    const normalized = normalizeChapterName(name);
+    if (!normalized) continue;
+
+    if (Number(classId) === 13 && parentChapters.includes(normalized)) {
+      // It's a parent chapter in Class 13. Match the parent itself OR any subchapter starting with "parent "
+      queryOrConditions.push({ normalizedChapterName: normalized });
+      queryOrConditions.push({ normalizedChapterName: new RegExp(`^${normalized}\\s`) });
+    } else {
+      // Standard exact match
+      queryOrConditions.push({ normalizedChapterName: normalized });
+    }
+  }
+
+  if (queryOrConditions.length === 0) return [];
+
+  const chapters = await Chapter.find({
+    classId: Number(classId),
+    $or: queryOrConditions
+  }).select('_id');
+
+  return chapters.map(c => c._id);
+};
+
+module.exports = { normalizeChapterName, resolveChapterIds };

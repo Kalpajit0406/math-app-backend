@@ -124,7 +124,7 @@ const initialChapters = {
   13: [
     "11",
     "12",
-    "Joint"
+    "JEE"
   ]
 };
 
