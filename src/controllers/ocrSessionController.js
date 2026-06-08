@@ -416,6 +416,22 @@ const verifyItem = async (req, res) => {
       verified: true
     }, transactionStarted ? dbSession : null);
 
+    // Audit the action
+    const auditLogService = require('../services/auditLogService');
+    await auditLogService.log({
+      actorId: req.user?.id,
+      action: isReplacement ? 'ocr_override_approval' : 'ocr_verification_finalize',
+      targetType: 'Question',
+      targetId: finalQuestionObj._id,
+      metadata: {
+        sessionId,
+        classNo: parseInt(classNo),
+        chapter,
+        isReplacement
+      },
+      req
+    }, transactionStarted ? dbSession : null);
+
     if (transactionStarted) {
       await dbSession.commitTransaction();
     }

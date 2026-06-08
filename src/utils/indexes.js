@@ -36,12 +36,16 @@ async function ensureIndexes(mongoose) {
     const Chapter = require('../models/chapterModel');
     const SyncVersion = require('../models/syncVersionModel');
     const VerificationSession = require('../models/verificationSessionModel');
+    const VerificationSessionItem = require('../models/verificationSessionItemModel');
     const OcrArchive = require('../models/ocrArchiveModel');
+    const OCRJob = require('../models/ocrJobModel');
+    const Announcement = require('../models/announcementModel');
     const RateLimit = require('../models/rateLimitModel');
     const AuditLog = require('../models/auditLogModel');
 
     // Student indexes
     await safeCreateIndex(Student.collection, { studentPhone: 1 }, { unique: true });
+    await safeCreateIndex(Student.collection, { fingerprintHash: 1 });
     await safeCreateIndex(Student.collection, { deviceFingerprint: 1 });
     await safeCreateIndex(Student.collection, { accountType: 1 });
     await safeCreateIndex(Student.collection, { accountStatus: 1 });
@@ -103,9 +107,29 @@ async function ensureIndexes(mongoose) {
 
     // Verification Sessions indexes
     await safeCreateIndex(VerificationSession.collection, { sessionId: 1 }, { unique: true });
+    await safeCreateIndex(VerificationSession.collection, { userId: 1 });
     await safeCreateIndex(VerificationSession.collection, { status: 1 });
     await safeCreateIndex(VerificationSession.collection, { expiresAt: 1 }, { expireAfterSeconds: 0 });
     console.log('✓ Verification Session indexes created');
+
+    // Verification Session Item indexes
+    await safeCreateIndex(VerificationSessionItem.collection, { sessionId: 1 });
+    await safeCreateIndex(VerificationSessionItem.collection, { expiresAt: 1 }, { expireAfterSeconds: 0 });
+    await safeCreateIndex(VerificationSessionItem.collection, { sessionId: 1, detectionOrder: 1 });
+    console.log('✓ Verification Session Item indexes created');
+
+    // OCRJob indexes
+    await safeCreateIndex(OCRJob.collection, { expiresAt: 1 }, { expireAfterSeconds: 0 });
+    await safeCreateIndex(OCRJob.collection, { status: 1 });
+    await safeCreateIndex(OCRJob.collection, { availableAt: 1 });
+    await safeCreateIndex(OCRJob.collection, { status: 1, availableAt: 1, createdAt: 1 });
+    console.log('✓ OCRJob indexes created');
+
+    // Announcement indexes
+    await safeCreateIndex(Announcement.collection, { targetClassIds: 1 });
+    await safeCreateIndex(Announcement.collection, { isDeleted: 1 });
+    await safeCreateIndex(Announcement.collection, { targetClassIds: 1, isDeleted: 1 });
+    console.log('✓ Announcement indexes created');
 
     // OcrArchive indexes
     await safeCreateIndex(OcrArchive.collection, { sessionId: 1 });

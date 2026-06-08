@@ -34,7 +34,7 @@ const ensureIndexes = async () => {
       },
     ]),
     Announcement.collection.createIndexes([
-      { key: { targetClass: 1, createdAt: -1 }, name: 'targetClass_createdAt_1' },
+      { key: { targetClassIds: 1, isDeleted: 1 }, name: 'targetClassIds_isDeleted_1' },
     ]),
     Question.collection.createIndexes([
       { key: { classNo: 1, language: 1, chapter: 1 }, name: 'class_language_chapter_1' },
@@ -54,8 +54,8 @@ const normalizeData = async () => {
       { updatePipeline: true },
     ),
     Announcement.updateMany(
-      { $or: [{ targetClass: null }, { targetClass: '' }, { targetClass: { $exists: false } }] },
-      { $set: { targetClass: 'all' } },
+      { $or: [{ targetClassIds: null }, { targetClassIds: { $exists: false } }, { targetClassIds: { $size: 0 } }] },
+      { $set: { targetClassIds: [9, 10, 11, 12, 13] } },
     ),
   ]);
 

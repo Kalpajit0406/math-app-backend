@@ -59,14 +59,32 @@ const getAllStudents = async (req, res) => {
 };
 
 const acceptStudent = async (req, res) => {
+  const mongoose = require('mongoose');
+  const session = await mongoose.startSession();
+  let transactionStarted = false;
   try {
     const { id } = req.body;
     if (!id) {
       return res.status(400).json({ success: false, message: 'Student id is required' });
     }
 
-    const updated = await Student.findByIdAndUpdate(id, { accountStatus: 'APPROVED' }, { returnDocument: 'after' });
+    try {
+      await session.startTransaction();
+      transactionStarted = true;
+    } catch (err) {
+      // Replica sets not enabled
+    }
+
+    const opts = transactionStarted ? { session } : {};
+
+    const updated = await Student.findByIdAndUpdate(
+      id,
+      { accountStatus: 'APPROVED' },
+      { returnDocument: 'after', ...opts }
+    );
+    
     if (!updated) {
+      if (transactionStarted) await session.abortTransaction();
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
@@ -79,12 +97,22 @@ const acceptStudent = async (req, res) => {
       metadata: {
         studentPhone: updated.studentPhone,
         accountType: updated.accountType
-      }
-    });
+      },
+      req
+    }, transactionStarted ? session : null);
+
+    if (transactionStarted) {
+      await session.commitTransaction();
+    }
 
     res.json({ success: true, message: 'Student accepted' });
   } catch (error) {
+    if (transactionStarted && session.inTransaction()) {
+      await session.abortTransaction();
+    }
     res.status(500).json({ success: false, message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 

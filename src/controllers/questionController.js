@@ -221,7 +221,7 @@ const getFilteredQuestions = async (req, res) => {
       }
     }
     
-    const questions = await Question.find(filter);
+    const questions = await Question.find(filter).lean();
     res.status(200).json({
       success: true,
       count: questions.length,

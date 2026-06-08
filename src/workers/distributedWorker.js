@@ -444,10 +444,10 @@ async function startValidationWorker() {
           });
         }
 
-        const session = await VerificationSession.findOne({ sessionId });
+        const session = await VerificationQueueManager.getSession(sessionId);
         if (session) {
           // Filter out duplicate answers on retries
-          const existingItems = session.items.filter(item => !item.questionNumber.startsWith(`${pageNum}-`));
+          const existingItems = (session.items || []).filter(item => !item.questionNumber.startsWith(`${pageNum}-`));
           const updatedItems = [...existingItems, ...(validationResult.parsedQuestions || [])];
 
           const children = await OCRJob.find({ filename: new RegExp(`^${parentJobId}_page_`) });

@@ -402,7 +402,7 @@ const validationRules = {
 
   // Announcement validation
   createAnnouncementValidation: (req, res, next) => {
-    const { title, message, targetClass, priority } = req.body;
+    const { title, message, targetClass, targetClassIds, priority } = req.body;
     
     const errors = [];
     if (!title || typeof title !== 'string' || title.length < 3 || title.length > 200) {
@@ -413,6 +413,17 @@ const validationRules = {
     }
     if (targetClass && !validateClassNumber(targetClass)) {
       errors.push('Invalid target class');
+    }
+    if (targetClassIds !== undefined) {
+      if (!Array.isArray(targetClassIds)) {
+        errors.push('targetClassIds must be an array of numbers');
+      } else {
+        for (const classId of targetClassIds) {
+          if (!validateClassNumber(classId)) {
+            errors.push(`Invalid class ID in targetClassIds: ${classId}`);
+          }
+        }
+      }
     }
     if (priority && !['low', 'medium', 'high'].includes(priority)) {
       errors.push('Invalid priority level');

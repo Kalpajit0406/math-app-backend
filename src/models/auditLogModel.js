@@ -27,6 +27,14 @@ const auditLogSchema = new mongoose.Schema({
     of: mongoose.Schema.Types.Mixed,
     default: {}
   },
+  ipAddress: {
+    type: String,
+    trim: true
+  },
+  deviceFingerprint: {
+    type: String,
+    trim: true
+  },
   timestamp: {
     type: Date,
     default: Date.now,

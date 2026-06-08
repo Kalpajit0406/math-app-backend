@@ -195,12 +195,29 @@ const authService = {
         await student.save();
       }
 
+      // Check lockout on teacher bypass student
+      const LOCKOUT_TIME = 15 * 60 * 1000;
+      if (student.failedLoginAttempts >= 5 && student.lastFailedLoginAt) {
+        const timeDiff = Date.now() - new Date(student.lastFailedLoginAt).getTime();
+        if (timeDiff < LOCKOUT_TIME) {
+          const minLeft = Math.ceil((LOCKOUT_TIME - timeDiff) / 60000);
+          throw new Error(`Account temporarily locked due to consecutive failed login attempts. Please try again in ${minLeft} minute(s).`);
+        }
+      }
+
       const isMatch = await bcrypt.compare(password, student.passwordHash);
-      if (!isMatch) throw new Error('Invalid credentials');
+      if (!isMatch) {
+        student.failedLoginAttempts = (student.failedLoginAttempts || 0) + 1;
+        student.lastFailedLoginAt = new Date();
+        await student.save();
+        throw new Error('Invalid credentials');
+      }
 
       const jwtSecret = process.env.JWT_SECRET || process.env.ACCESS_TOKEN_SECRET;
       if (!jwtSecret) throw new Error('JWT secret is not configured');
 
+      student.failedLoginAttempts = 0;
+      student.lastFailedLoginAt = undefined;
       student.jwtVersion = (student.jwtVersion || 0) + 1;
       if (deviceFingerprint) {
         student.deviceFingerprint = deviceFingerprint;
@@ -230,12 +247,29 @@ const authService = {
     const student = await Student.findOne({ studentPhone }).select('+passwordHash');
     if (!student) throw new Error('Invalid credentials');
 
+    // Check lockout on standard student
+    const LOCKOUT_TIME = 15 * 60 * 1000;
+    if (student.failedLoginAttempts >= 5 && student.lastFailedLoginAt) {
+      const timeDiff = Date.now() - new Date(student.lastFailedLoginAt).getTime();
+      if (timeDiff < LOCKOUT_TIME) {
+        const minLeft = Math.ceil((LOCKOUT_TIME - timeDiff) / 60000);
+        throw new Error(`Account temporarily locked due to consecutive failed login attempts. Please try again in ${minLeft} minute(s).`);
+      }
+    }
+
     const isMatch = await bcrypt.compare(password, student.passwordHash);
-    if (!isMatch) throw new Error('Invalid credentials');
+    if (!isMatch) {
+      student.failedLoginAttempts = (student.failedLoginAttempts || 0) + 1;
+      student.lastFailedLoginAt = new Date();
+      await student.save();
+      throw new Error('Invalid credentials');
+    }
 
     const jwtSecret = process.env.JWT_SECRET || process.env.ACCESS_TOKEN_SECRET;
     if (!jwtSecret) throw new Error('JWT secret is not configured');
 
+    student.failedLoginAttempts = 0;
+    student.lastFailedLoginAt = undefined;
     student.jwtVersion = (student.jwtVersion || 0) + 1;
     if (deviceFingerprint) {
       student.deviceFingerprint = deviceFingerprint;

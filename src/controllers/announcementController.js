@@ -2,14 +2,24 @@ const Announcement = require('../models/announcementModel');
 
 const createAnnouncement = async (req, res) => {
   try {
-    const { title, message, targetClass, image } = req.body;
+    const { title, message, targetClass, targetClassIds: bodyClassIds, image } = req.body;
     
     // Simple validation
     if (!title || !message) {
       return res.status(400).json({ success: false, message: 'Title and message are required' });
     }
 
-    const announcement = new Announcement({ title, message, targetClass, image });
+    let targetClassIds = bodyClassIds;
+    if (!targetClassIds) {
+      if (targetClass === 'all' || !targetClass) {
+        targetClassIds = [9, 10, 11, 12, 13];
+      } else {
+        const num = Number(targetClass);
+        targetClassIds = !isNaN(num) ? [num] : [];
+      }
+    }
+
+    const announcement = new Announcement({ title, message, targetClassIds, image });
     await announcement.save();
 
     res.status(201).json({ success: true, data: announcement });

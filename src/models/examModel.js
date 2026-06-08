@@ -119,10 +119,15 @@ examSchema.pre('validate', async function (next) {
       const resolved = await resolveChapterIds(this.classNo || 10, this._tempChapters);
       this.chapterIds = resolved;
     } catch (err) {
-      return next(err);
+      if (typeof next === 'function') {
+        return next(err);
+      }
+      throw err;
     }
   }
-  next();
+  if (typeof next === 'function') {
+    next();
+  }
 });
 
 // Pre-find hook to automatically filter out soft-deleted exams

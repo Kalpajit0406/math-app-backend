@@ -133,10 +133,13 @@ class VerificationQueueManager {
       }
     }
 
+    const VerificationSessionItem = require('../models/verificationSessionItemModel');
+    const itemsWithSessionId = items.map(item => ({ ...item, sessionId, expiresAt }));
+    await VerificationSessionItem.insertMany(itemsWithSessionId);
+
     const session = await VerificationSession.create({
       sessionId,
       userId,
-      items,
       currentIndex: 0,
       expiresAt,
       scannedImageUrl,
@@ -161,7 +164,7 @@ class VerificationQueueManager {
       }
     }
 
-    return session;
+    return await session.populate('items');
   }
 
   /** Update session items, status, and progress. */
@@ -264,7 +267,15 @@ class VerificationQueueManager {
           });
         }
       }
-      updates.items = formattedItems;
+      const VerificationSessionItem = require('../models/verificationSessionItemModel');
+      const sessionDoc = await VerificationSession.findOne({ sessionId });
+      const expiresAt = sessionDoc ? sessionDoc.expiresAt : new Date(Date.now() + 86400 * 1000);
+
+      await VerificationSessionItem.deleteMany({ sessionId });
+      const itemsWithSessionId = formattedItems.map(item => ({ ...item, sessionId, expiresAt }));
+      await VerificationSessionItem.insertMany(itemsWithSessionId);
+
+      delete updates.items;
 
       if (archiveDocs.length > 0) {
         try {
@@ -277,12 +288,16 @@ class VerificationQueueManager {
       }
     }
 
-    return VerificationSession.findOneAndUpdate({ sessionId }, { $set: updates }, { returnDocument: 'after' });
+    const updated = await VerificationSession.findOneAndUpdate({ sessionId }, { $set: updates }, { returnDocument: 'after' });
+    if (updated) {
+      await updated.populate('items');
+    }
+    return updated;
   }
 
   /** Retrieve session by ID. */
   static async getSession(sessionId, dbSession = null) {
-    const query = VerificationSession.findOne({ sessionId });
+    const query = VerificationSession.findOne({ sessionId }).populate('items');
     if (dbSession) query.session(dbSession);
     return await query;
   }
@@ -377,6 +392,7 @@ class VerificationQueueManager {
       session.currentIndex = next !== -1 ? next : 0;
     }
 
+    await session.items[index].save();
     await session.save();
     return true;
   }
@@ -445,6 +461,8 @@ class VerificationQueueManager {
   /** Clear / delete the entire session. */
   static async clearSession(sessionId) {
     await VerificationSession.deleteOne({ sessionId });
+    const VerificationSessionItem = require('../models/verificationSessionItemModel');
+    await VerificationSessionItem.deleteMany({ sessionId });
   }
 
   /** Map filtered client index → raw MongoDB array index. */

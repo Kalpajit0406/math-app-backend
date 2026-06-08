@@ -22,8 +22,11 @@ const studentSchema = new mongoose.Schema({
   motherName: { type: String, trim: true },
   studentPhone: { type: String, required: true, unique: true, trim: true },
   guardianPhone: { type: String, required: true, trim: true },
-  passwordHash: { type: String, required: true, select: false },
+  passwordHash: { type: String, required: true, select: false, minlength: [40, 'Password hash is too short'] },
   passwordChangedAt: { type: Date },
+  passwordAlgorithm: { type: String, default: 'bcrypt' },
+  failedLoginAttempts: { type: Number, default: 0 },
+  lastFailedLoginAt: { type: Date },
   classChangeHistory: [{ type: Date }],
   pendingProfileEdit: {
     classNo: { type: Number, enum: [9, 10, 11, 12] },
@@ -136,7 +139,14 @@ const DEFAULT_PERMISSIONS = {
   }
 };
 
-studentSchema.pre('validate', function(next) {
+studentSchema.pre('validate', async function(next) {
+  if (this.isModified('passwordHash') && this.passwordHash) {
+    if (!this.passwordHash.startsWith('$2a$') && !this.passwordHash.startsWith('$2b$') && !this.passwordHash.startsWith('$2y$')) {
+      const bcrypt = require('bcrypt');
+      this.passwordHash = await bcrypt.hash(this.passwordHash, 10);
+      this.passwordChangedAt = new Date();
+    }
+  }
   if (this.isModified('accountType') || !this.permissions || Object.keys(this.permissions).length === 0) {
     const type = this.accountType || 'NORMAL';
     const defaults = DEFAULT_PERMISSIONS[type] || DEFAULT_PERMISSIONS.NORMAL;
@@ -212,15 +222,12 @@ studentSchema.virtual('password')
     this.passwordHash = val;
   });
 
-// Pre-save hook to enforce secure bcrypt password hashing and track passwordChangedAt
-studentSchema.pre('save', async function(next) {
+// Pre-save hook to track passwordChangedAt if modified
+studentSchema.pre('save', function(next) {
   if (this.isModified('passwordHash') && this.passwordHash) {
-    // Only hash if it's not already a bcrypt hash
-    if (!this.passwordHash.startsWith('$2a$') && !this.passwordHash.startsWith('$2b$') && !this.passwordHash.startsWith('$2y$')) {
-      const bcrypt = require('bcrypt');
-      this.passwordHash = await bcrypt.hash(this.passwordHash, 10);
+    if (!this.passwordChangedAt) {
+      this.passwordChangedAt = new Date();
     }
-    this.passwordChangedAt = new Date();
   }
   if (typeof next === 'function') {
     next();
