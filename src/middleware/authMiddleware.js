@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const Student = require('../models/studentModel');
 
 const getTokenFromHeader = (authHeader) => {
   if (!authHeader || typeof authHeader !== 'string') {
@@ -25,7 +26,7 @@ const authFail = (res, message, code = 'auth_failed') => {
   });
 };
 
-const authMiddleware = (req, res, next) => {
+const authMiddleware = async (req, res, next) => {
   const authHeader = req.header('Authorization');
   const { token, reason } = getTokenFromHeader(authHeader);
 
@@ -50,6 +51,15 @@ const authMiddleware = (req, res, next) => {
   try {
     const decoded = jwt.verify(token, jwtSecret);
     req.user = decoded;
+
+    // Verify session version to force logout of older device sessions
+    if (decoded.jwtVersion !== undefined) {
+      const student = await Student.findById(decoded.id).select('jwtVersion');
+      if (student && student.jwtVersion !== decoded.jwtVersion) {
+        return authFail(res, 'Session invalidated. Logged in from another device.', 'session_invalidated');
+      }
+    }
+
     next();
   } catch (err) {
     console.error('[authMiddleware] JWT verification failed:', err.message, err.stack);

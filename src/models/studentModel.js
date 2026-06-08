@@ -30,7 +30,8 @@ const studentSchema = new mongoose.Schema({
   },
   trialApproved: { type: Boolean, default: false },
   requestAttempts: { type: Number, default: 0 },
-  deviceFingerprint: { type: String, trim: true }
+  deviceFingerprint: { type: String, trim: true },
+  jwtVersion: { type: Number, default: 0 }
 }, { 
   timestamps: true,
   toJSON: {

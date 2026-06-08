@@ -165,8 +165,11 @@ const authService = {
       const jwtSecret = process.env.JWT_SECRET || process.env.ACCESS_TOKEN_SECRET;
       if (!jwtSecret) throw new Error('JWT secret is not configured');
 
+      student.jwtVersion = (student.jwtVersion || 0) + 1;
+      await student.save();
+
       const accessToken = jwt.sign(
-        { id: student._id, phone: student.studentPhone, role: student.role },
+        { id: student._id, phone: student.studentPhone, role: student.role, jwtVersion: student.jwtVersion },
         jwtSecret,
         { expiresIn: '24h' }
       );
@@ -188,8 +191,11 @@ const authService = {
     const jwtSecret = process.env.JWT_SECRET || process.env.ACCESS_TOKEN_SECRET;
     if (!jwtSecret) throw new Error('JWT secret is not configured');
 
+    student.jwtVersion = (student.jwtVersion || 0) + 1;
+    await student.save();
+
     const accessToken = jwt.sign(
-      { id: student._id, phone: student.studentPhone, role: student.role },
+      { id: student._id, phone: student.studentPhone, role: student.role, jwtVersion: student.jwtVersion },
       jwtSecret,
       { expiresIn: '24h' }
     );
