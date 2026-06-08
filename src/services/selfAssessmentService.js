@@ -309,15 +309,16 @@ class SelfAssessmentService {
     const { questionPool } = session;
     let correctCount = 0;
     const weakTopics = [];
+    const gradedQuestions = [];
 
     // Evaluate all questions
     for (const qId of questionPool) {
       const question = await Question.findById(qId);
       if (question) {
         const studentAnswer = answers[String(qId)];
+        const isCorrect = studentAnswer !== undefined && String(studentAnswer).trim() === String(question.correctAnswer).trim();
         if (studentAnswer !== undefined) {
           session.answersSubmitted.set(String(qId), studentAnswer);
-          const isCorrect = String(studentAnswer).trim() === String(question.correctAnswer).trim();
           if (isCorrect) {
             correctCount++;
           } else {
@@ -326,6 +327,15 @@ class SelfAssessmentService {
         } else {
           weakTopics.push(question.chapter); // Unanswered counted as weak topic
         }
+        gradedQuestions.push({
+          id: question._id.toString(),
+          questionText: question.questionText,
+          options: question.options,
+          correctAnswer: question.correctAnswer,
+          diagram: question.diagram,
+          userAnswer: studentAnswer || null,
+          isCorrect: isCorrect
+        });
       }
     }
 
@@ -359,7 +369,8 @@ class SelfAssessmentService {
         percentage: (session.correctAnswersCount / questionPool.length) * 100,
         analytics: {
           weakTopics: [...new Set(weakTopics)] // unique topics
-        }
+        },
+        questions: gradedQuestions
       }
     };
   }
