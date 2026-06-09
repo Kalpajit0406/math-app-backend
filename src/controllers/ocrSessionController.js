@@ -380,10 +380,29 @@ const verifyItem = async (req, res) => {
       const { normalizeQuestion, generateHash } = require('../services/questionDuplicateDetector');
       const hash = generateHash(normalizeQuestion(finalQuestion));
 
+      const { getClassIdFromNo } = require('../utils/classCache');
+      const classId = getClassIdFromNo(classNo);
+
+      let chapterId;
+      if (classId && chapter) {
+        const Chapter = require('../models/chapterModel');
+        const { normalizeChapterName } = require('../utils/chapterNormalization');
+        const normalized = normalizeChapterName(chapter);
+        let chap = await Chapter.findOne({ classId, normalizedChapterName: normalized });
+        if (!chap) {
+          const newChaps = await Chapter.create([{
+            classId,
+            chapterName: chapter,
+          }], opts);
+          chap = newChaps[0];
+        }
+        chapterId = chap._id;
+      }
+
       finalQuestionObj = await Question.findByIdAndUpdate(replaceQuestionId, {
         language,
-        chapter,
-        classNo: parseInt(classNo),
+        chapterId,
+        classId,
         correctAnswer,
         options: finalOptions,
         question: finalQuestion,

@@ -22,9 +22,15 @@ const OCRJobSchema = new mongoose.Schema({
   attempts: { type: Number, default: 0 },
   expiresAt: { 
     type: Date, 
-    default: () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Expirable in 7 days
-    index: true
-  }
+    default: () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // Expirable in 7 days
+  },
+  lockedBy: { type: String, default: null },
+  lockAcquiredAt: { type: Date, default: null },
+  lockExpiresAt: { type: Date, default: null },
+  retryCount: { type: Number, default: 0 },
+  maxRetries: { type: Number, default: 3 },
+  processingNode: { type: String, default: null },
+  queuePriority: { type: Number, default: 0 }
 }, { timestamps: true, minimize: false });
 
 // TTL index to automatically clean up old OCR jobs after expiresAt

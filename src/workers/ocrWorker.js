@@ -28,24 +28,30 @@ async function runWorkerLoop() {
       }
 
       for (const job of pending) {
-        console.log(`[ocrWorker] Processing job ${job._id}`);
         try {
-          const processingJob = await OCRQueueService.markProcessing(job._id);
+          const workerId = `ocr-worker-${process.pid}-${Math.random().toString(36).substring(7)}`;
+          const processingJob = await OCRQueueService.acquireJobLock(job._id, workerId, 'ocr-node-1');
+          if (!processingJob) {
+            // Lock already acquired by another worker node
+            continue;
+          }
+          console.log(`[ocrWorker] Atomically acquired lock on job ${processingJob._id}`);
           const fs = require('fs');
-          let fileBuffer = job.buffer;
-          if (!fileBuffer && job.filePath && fs.existsSync(job.filePath)) {
-            fileBuffer = fs.readFileSync(job.filePath);
+          let fileBuffer = processingJob.buffer;
+          if (!fileBuffer && processingJob.filePath && fs.existsSync(processingJob.filePath)) {
+            fileBuffer = fs.readFileSync(processingJob.filePath);
           }
           if (!fileBuffer) {
             throw new Error('No image buffer or file path available for job.');
           }
-          const res = await OCRPipeline.runFromBuffer(fileBuffer, job.mimetype || 'image/jpeg', job.filename || 'image.jpg');
-          await OCRQueueService.markDone(processingJob._id, res);
-          console.log(`[ocrWorker] Job ${job._id} done`);
+          const res = await OCRPipeline.runFromBuffer(fileBuffer, processingJob.mimetype || 'image/jpeg', processingJob.filename || 'image.jpg');
+          await OCRQueueService.markDone(processingJob._id, res, workerId);
+          console.log(`[ocrWorker] Job ${processingJob._id} done`);
         } catch (err) {
           console.error(`[ocrWorker] Job ${job._id} failed: ${err.message}`);
           const latest = await OCRQueueService.getJob(job._id);
-          await OCRQueueService.markRetryOrFailed(latest || job, err.message || String(err));
+          const workerId = `ocr-worker-${process.pid}`;
+          await OCRQueueService.markRetryOrFailed(latest || job, err.message || String(err), workerId);
         }
       }
     } catch (err) {

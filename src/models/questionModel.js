@@ -11,8 +11,9 @@ const questionSchema = new mongoose.Schema({
     ref: 'Chapter',
     required: true,
   },
-  classNo: {
-    type: Number,
+  classId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Class',
     required: true,
   },
   correctAnswer: {
@@ -46,6 +47,13 @@ const questionSchema = new mongoose.Schema({
   },
   questionHash: {
     type: String,
+    unique: true,
+    sparse: true,
+    index: true,
+  },
+  formulaKeywords: {
+    type: [String],
+    default: [],
     index: true,
   },
   isDeleted: { type: Boolean, default: false, index: true },
@@ -57,6 +65,10 @@ const questionSchema = new mongoose.Schema({
     virtuals: true,
     transform: (doc, ret) => {
       ret.id = ret._id;
+      const { getClassNoFromId } = require('../utils/classCache');
+      if (doc.classId) {
+        ret.classNo = getClassNoFromId(doc.classId) || doc._tempClassNo;
+      }
       delete ret.__v;
       return ret;
     }
@@ -93,18 +105,42 @@ questionSchema.virtual('type')
     return (this.options && this.options.length > 0) ? 'mcq' : 'numeric';
   });
 
+questionSchema.virtual('classNo')
+  .get(function() {
+    const { getClassNoFromId } = require('../utils/classCache');
+    return getClassNoFromId(this.classId) || this._tempClassNo;
+  })
+  .set(function(val) {
+    const { getClassIdFromNo } = require('../utils/classCache');
+    this._tempClassNo = Number(val);
+    const resolved = getClassIdFromNo(val);
+    if (resolved) {
+      this.classId = resolved;
+    }
+  });
+
 questionSchema.pre('validate', async function (next) {
+  const { getClassIdFromNo } = require('../utils/classCache');
+  
+  const classVal = this._tempClassNo || this.classNo;
+  if (classVal !== undefined && !this.classId) {
+    const resolved = getClassIdFromNo(classVal);
+    if (resolved) {
+      this.classId = resolved;
+    }
+  }
+
   const chapterName = this.chapter;
-  if (chapterName && this.classNo && !this.chapterId) {
+  if (chapterName && this.classId && !this.chapterId) {
     try {
       const Chapter = mongoose.model('Chapter');
       const { normalizeChapterName } = require('../utils/chapterNormalization');
       const normalized = normalizeChapterName(chapterName);
       
-      let chap = await Chapter.findOne({ classId: this.classNo, normalizedChapterName: normalized });
+      let chap = await Chapter.findOne({ classId: this.classId, normalizedChapterName: normalized });
       if (!chap) {
         chap = await Chapter.create({
-          classId: this.classNo,
+          classId: this.classId,
           chapterName: chapterName,
         });
       }
@@ -147,7 +183,8 @@ questionSchema.pre('findOne', function() {
 });
 
 // Indexes for fast querying
-questionSchema.index({ classNo: 1, language: 1 });
+questionSchema.index({ classId: 1, language: 1 });
 questionSchema.index({ chapterId: 1 });
+questionSchema.index({ question: 'text', formulaKeywords: 'text' }, { weights: { question: 10, formulaKeywords: 5 }, name: 'QuestionTextSearchIndex' });
 
 module.exports = mongoose.model('Question', questionSchema);

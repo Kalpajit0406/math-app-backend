@@ -461,8 +461,9 @@ const submitProfileEditRequest = async (req, res) => {
       }
     }
 
+    const { getClassIdFromNo } = require('../utils/classCache');
     student.pendingProfileEdit = {
-      classNo: classNo !== undefined ? Number(classNo) : student.classNo,
+      classId: classNo !== undefined ? getClassIdFromNo(classNo) : student.classId,
       language: language !== undefined ? language : student.language,
       isJoint: targetIsJoint,
       requestedAt: new Date()
@@ -477,7 +478,7 @@ const submitProfileEditRequest = async (req, res) => {
 
 const getPendingProfileEdits = async (req, res) => {
   try {
-    const students = await Student.find({ 'pendingProfileEdit.classNo': { $exists: true } });
+    const students = await Student.find({ 'pendingProfileEdit.classId': { $exists: true } });
     res.json({ success: true, data: students });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -496,15 +497,16 @@ const approveProfileEdit = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
-    if (!student.pendingProfileEdit || student.pendingProfileEdit.classNo === undefined) {
+    if (!student.pendingProfileEdit || !student.pendingProfileEdit.classId) {
       return res.status(400).json({ success: false, message: 'No pending edit request found' });
     }
 
     if (approve === true || approve === 'true') {
+      const { getClassNoFromId } = require('../utils/classCache');
       const oldClass = student.classNo;
-      const newClass = student.pendingProfileEdit.classNo;
+      const newClass = getClassNoFromId(student.pendingProfileEdit.classId);
 
-      student.classNo = newClass;
+      student.classId = student.pendingProfileEdit.classId;
       student.language = student.pendingProfileEdit.language;
       if (student.pendingProfileEdit.isJoint !== undefined) {
         student.isJoint = student.pendingProfileEdit.isJoint;
@@ -525,6 +527,38 @@ const approveProfileEdit = async (req, res) => {
       await student.save();
       res.json({ success: true, message: 'Profile edit rejected/cleared' });
     }
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const refreshSession = async (req, res) => {
+  try {
+    const { refreshToken, deviceBlueprint } = req.body;
+    if (!refreshToken) {
+      return res.status(400).json({ success: false, message: 'Refresh token is required' });
+    }
+    const data = await authService.refreshSession(refreshToken, deviceBlueprint);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(401).json({ success: false, message: error.message });
+  }
+};
+
+const logout = async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+    await authService.logout(refreshToken);
+    res.json({ success: true, message: 'Logged out successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const logoutAll = async (req, res) => {
+  try {
+    await authService.logoutAll(req.user.id);
+    res.json({ success: true, message: 'All sessions logged out successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -564,4 +598,7 @@ module.exports = {
   getPhoneStatus,
   blacklistStudent,
   updateAccountStatus,
+  refreshSession,
+  logout,
+  logoutAll,
 };

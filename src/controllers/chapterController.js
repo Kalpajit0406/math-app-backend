@@ -25,7 +25,13 @@ const getChapters = async (req, res) => {
     const { classId } = req.query;
     const filter = {};
     if (classId) {
-      filter.classId = parseInt(classId, 10);
+      const { getClassIdFromNo } = require('../utils/classCache');
+      const classObjId = mongoose.Types.ObjectId.isValid(classId) ? classId : getClassIdFromNo(classId);
+      if (classObjId) {
+        filter.classId = classObjId;
+      } else {
+        filter.classId = new mongoose.Types.ObjectId(); // force empty match
+      }
     }
 
     const chapters = await Chapter.find(filter).sort({ classId: 1, chapterName: 1 });
@@ -47,7 +53,13 @@ const addChapter = async (req, res) => {
     }
 
     let finalChapterName = chapterName.trim();
-    const numericClassId = parseInt(classId, 10);
+    const { getClassIdFromNo, getClassNoFromId } = require('../utils/classCache');
+    const classObjectId = mongoose.Types.ObjectId.isValid(classId) ? classId : getClassIdFromNo(classId);
+    const numericClassId = mongoose.Types.ObjectId.isValid(classId) ? getClassNoFromId(classId) : parseInt(classId, 10);
+
+    if (!classObjectId) {
+      return res.status(400).json({ success: false, message: 'Invalid classId.' });
+    }
 
     if (numericClassId === 13) {
       const { parentChapter } = req.body;
@@ -59,13 +71,13 @@ const addChapter = async (req, res) => {
     }
 
     const normalized = normalizeChapterName(finalChapterName);
-    const existing = await Chapter.findOne({ classId: numericClassId, normalizedChapterName: normalized });
+    const existing = await Chapter.findOne({ classId: classObjectId, normalizedChapterName: normalized });
     if (existing) {
       return res.status(400).json({ success: false, message: 'Chapter name already exists for this class.' });
     }
 
     const newChapter = await Chapter.create({
-      classId: numericClassId,
+      classId: classObjectId,
       chapterName: finalChapterName
     });
 

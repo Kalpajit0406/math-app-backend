@@ -16,7 +16,7 @@ const studentSchema = new mongoose.Schema({
   lastName: { type: String, required: true, trim: true },
   dateOfBirth: { type: String, trim: true },
   gender: { type: String, enum: ['Male', 'Female', 'Other'] },
-  classNo: { type: Number, enum: [9, 10, 11, 12], required: true },
+  classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', required: true },
   language: { type: String, enum: ['Bengali', 'English', 'Both'], required: true },
   fatherName: { type: String, trim: true },
   motherName: { type: String, trim: true },
@@ -29,7 +29,7 @@ const studentSchema = new mongoose.Schema({
   lastFailedLoginAt: { type: Date },
   classChangeHistory: [{ type: Date }],
   pendingProfileEdit: {
-    classNo: { type: Number, enum: [9, 10, 11, 12] },
+    classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class' },
     language: { type: String, enum: ['Bengali', 'English', 'Both'] },
     isJoint: { type: Boolean },
     requestedAt: { type: Date }
@@ -61,6 +61,15 @@ const studentSchema = new mongoose.Schema({
       ret.id = ret._id;
       ret.fullName = `${ret.firstName} ${ret.lastName}`;
       ret.studentMobile = ret.studentPhone;
+      
+      const { getClassNoFromId } = require('../utils/classCache');
+      if (doc.classId) {
+        ret.classNo = getClassNoFromId(doc.classId) || doc._tempClassNo;
+      }
+      if (doc.pendingProfileEdit && doc.pendingProfileEdit.classId) {
+        ret.pendingProfileEdit.classNo = getClassNoFromId(doc.pendingProfileEdit.classId);
+      }
+      
       delete ret._id;
       delete ret.__v;
       delete ret.password;
@@ -140,6 +149,24 @@ const DEFAULT_PERMISSIONS = {
 };
 
 studentSchema.pre('validate', async function(next) {
+  const { getClassIdFromNo } = require('../utils/classCache');
+  
+  const classVal = this._tempClassNo || this.classNo;
+  const resolved = getClassIdFromNo(classVal);
+  console.log(`[Student pre-validate] classVal: ${classVal}, classId: ${this.classId}, resolved: ${resolved}, tempClassNo: ${this._tempClassNo}`);
+  if (classVal !== undefined && !this.classId) {
+    if (resolved) {
+      this.classId = resolved;
+    }
+  }
+  
+  if (this.pendingProfileEdit && this.pendingProfileEdit.classNo && !this.pendingProfileEdit.classId) {
+    const resolved = getClassIdFromNo(this.pendingProfileEdit.classNo);
+    if (resolved) {
+      this.pendingProfileEdit.classId = resolved;
+    }
+  }
+
   if (this.isModified('passwordHash') && this.passwordHash) {
     if (!this.passwordHash.startsWith('$2a$') && !this.passwordHash.startsWith('$2b$') && !this.passwordHash.startsWith('$2y$')) {
       const bcrypt = require('bcrypt');
@@ -210,6 +237,20 @@ studentSchema.virtual('isJoint')
       this.accountType = 'JOINT';
     } else if (this.accountType === 'JOINT' || this.accountType === 'JOINT_ENTRANCE') {
       this.accountType = 'NORMAL';
+    }
+  });
+
+studentSchema.virtual('classNo')
+  .get(function() {
+    const { getClassNoFromId } = require('../utils/classCache');
+    return getClassNoFromId(this.classId) || this._tempClassNo;
+  })
+  .set(function(val) {
+    const { getClassIdFromNo } = require('../utils/classCache');
+    this._tempClassNo = Number(val);
+    const resolved = getClassIdFromNo(val);
+    if (resolved) {
+      this.classId = resolved;
     }
   });
 

@@ -236,7 +236,22 @@ const authService = {
         { expiresIn: '24h' }
       );
 
-      return { student, accessToken };
+      const refreshToken = crypto.randomBytes(40).toString('hex');
+      const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+      
+      const AuthSession = require('../models/authSessionModel');
+      await AuthSession.create({
+        userId: student._id,
+        refreshTokenHash,
+        deviceFingerprint: deviceFingerprint || 'unknown_fingerprint',
+        deviceName: deviceName || 'Unknown Device',
+        platform: deviceBlueprint?.platform || 'unknown',
+        ipAddress: deviceBlueprint?.ipAddress || '0.0.0.0',
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        lastActivityAt: new Date()
+      });
+
+      return { student, accessToken, refreshToken };
     }
 
     // 2. Standard Login Flow
@@ -288,7 +303,111 @@ const authService = {
       { expiresIn: '24h' }
     );
 
-    return { student, accessToken };
+    const refreshToken = crypto.randomBytes(40).toString('hex');
+    const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+
+    const AuthSession = require('../models/authSessionModel');
+    await AuthSession.create({
+      userId: student._id,
+      refreshTokenHash,
+      deviceFingerprint: deviceFingerprint || 'unknown_fingerprint',
+      deviceName: deviceName || 'Unknown Device',
+      platform: deviceBlueprint?.platform || 'unknown',
+      ipAddress: deviceBlueprint?.ipAddress || '0.0.0.0',
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      lastActivityAt: new Date()
+    });
+
+    return { student, accessToken, refreshToken };
+  },
+
+  refreshSession: async (refreshToken, deviceBlueprint = null) => {
+    if (!refreshToken) throw new Error('Refresh token is required');
+    const crypto = require('crypto');
+    const hash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+
+    const AuthSession = require('../models/authSessionModel');
+    const session = await AuthSession.findOne({ refreshTokenHash: hash });
+
+    if (!session) {
+      throw new Error('Invalid refresh token');
+    }
+
+    if (session.revoked) {
+      // Replay attack / compromise detection: revoke all sessions for this user!
+      await AuthSession.updateMany({ userId: session.userId }, { $set: { revoked: true, revokedAt: new Date() } });
+      throw new Error('Compromised session detected. All sessions revoked.');
+    }
+
+    if (session.expiresAt < new Date()) {
+      throw new Error('Refresh token has expired');
+    }
+
+    // Device verification / Anti-cheat fingerprint monitoring
+    if (deviceBlueprint) {
+      let deviceFingerprint = null;
+      const { androidId, model, manufacturer, appInstallId } = deviceBlueprint;
+      const rawString = `${androidId || ''}_${model || ''}_${manufacturer || ''}_${appInstallId || ''}`;
+      deviceFingerprint = crypto.createHash('sha256').update(rawString).digest('hex');
+      if (session.deviceFingerprint !== 'unknown_fingerprint' && session.deviceFingerprint !== deviceFingerprint) {
+        throw new Error('Device fingerprint mismatch. Session hijacked.');
+      }
+    }
+
+    // Rotate token: revoke old one, create new one
+    session.revoked = true;
+    session.revokedAt = new Date();
+    await session.save();
+
+    const Student = require('../models/studentModel');
+    const student = await Student.findById(session.userId);
+    if (!student) throw new Error('User not found');
+
+    student.jwtVersion = (student.jwtVersion || 0) + 1;
+    await student.save();
+
+    const jwtSecret = process.env.JWT_SECRET || process.env.ACCESS_TOKEN_SECRET;
+    const accessToken = jwt.sign(
+      { id: student._id, phone: student.studentPhone, role: student.role, jwtVersion: student.jwtVersion },
+      jwtSecret,
+      { expiresIn: '24h' }
+    );
+
+    const newRefreshToken = crypto.randomBytes(40).toString('hex');
+    const newHash = crypto.createHash('sha256').update(newRefreshToken).digest('hex');
+
+    await AuthSession.create({
+      userId: student._id,
+      refreshTokenHash: newHash,
+      deviceFingerprint: session.deviceFingerprint,
+      deviceName: session.deviceName,
+      platform: session.platform,
+      ipAddress: deviceBlueprint?.ipAddress || session.ipAddress,
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      lastActivityAt: new Date()
+    });
+
+    return { accessToken, refreshToken: newRefreshToken };
+  },
+
+  logout: async (refreshToken) => {
+    if (!refreshToken) return;
+    const crypto = require('crypto');
+    const hash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+
+    const AuthSession = require('../models/authSessionModel');
+    await AuthSession.findOneAndUpdate(
+      { refreshTokenHash: hash },
+      { $set: { revoked: true, revokedAt: new Date() } }
+    );
+  },
+
+  logoutAll: async (userId) => {
+    const AuthSession = require('../models/authSessionModel');
+    await AuthSession.updateMany(
+      { userId },
+      { $set: { revoked: true, revokedAt: new Date() } }
+    );
   }
 };
 

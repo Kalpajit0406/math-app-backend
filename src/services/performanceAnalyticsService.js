@@ -174,7 +174,9 @@ class PerformanceAnalytics {
   // Get class/batch analytics for teachers
   static async getClassPerformance(classNo, language = null) {
     try {
-      let query = { classNo };
+      const { getClassIdFromNo } = require('../utils/classCache');
+      const classId = getClassIdFromNo(classNo);
+      let query = { classId };
       if (language) query.language = language;
 
       const students = await require('../models/studentModel').find(query).lean();

@@ -12,6 +12,9 @@ const loginLimiter = createRateLimiter('login', 10, 300, 'Too many login attempt
 
 router.post('/register', registerLimiter, validationRules.registerValidation, authController.register);
 router.post('/login', loginLimiter, validationRules.loginValidation, authController.login);
+router.post('/refresh-token', authController.refreshSession);
+router.post('/logout', authController.logout);
+router.post('/logout-all', authMiddleware, authController.logoutAll);
 router.get('/me', authMiddleware, authController.me);
 router.post('/profile-edit-request', authMiddleware, authController.submitProfileEditRequest);
 router.get('/pending-profile-edits', authMiddleware, authorizeRoles('admin', 'teacher'), authController.getPendingProfileEdits);

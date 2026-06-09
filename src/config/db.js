@@ -81,6 +81,9 @@ const connectDB = async () => {
         const seedChapters = require('../scripts/seedChapters');
         await seedChapters();
         
+        const { initCache } = require('../utils/classCache');
+        await initCache();
+        
         return conn;
       } catch (error) {
         const isLastUri = i === uris.length - 1;

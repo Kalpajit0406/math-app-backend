@@ -10,10 +10,10 @@ const testConfigSchema = new mongoose.Schema(
       type: String,
       required: [true, "Time is required"],
     },
-    classNo: {
-      type: Number,
-      enum: [9, 10, 11, 12],
-      required: [true, "Class number must be 9, 10, 11 or 12"],
+    classId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Class',
+      required: [true, "Class is required"],
     },
     language: {
       type: String,
@@ -54,6 +54,10 @@ const testConfigSchema = new mongoose.Schema(
       virtuals: true,
       transform: (doc, ret) => {
         ret.id = ret._id;
+        const { getClassNoFromId } = require('../utils/classCache');
+        if (doc.classId) {
+          ret.classNo = getClassNoFromId(doc.classId) || doc._tempClassNo;
+        }
         delete ret.__v;
         if (ret.chapterIds) {
           ret.chapters = ret.chapterIds.map(ch => {
@@ -91,8 +95,32 @@ testConfigSchema.virtual('chapters')
     this._tempChapters = val;
   });
 
+testConfigSchema.virtual('classNo')
+  .get(function() {
+    const { getClassNoFromId } = require('../utils/classCache');
+    return getClassNoFromId(this.classId) || this._tempClassNo;
+  })
+  .set(function(val) {
+    const { getClassIdFromNo } = require('../utils/classCache');
+    this._tempClassNo = Number(val);
+    const resolved = getClassIdFromNo(val);
+    if (resolved) {
+      this.classId = resolved;
+    }
+  });
+
 // Pre-validate hook to resolve chapters array of strings to chapterIds
 testConfigSchema.pre('validate', async function (next) {
+  const { getClassIdFromNo } = require('../utils/classCache');
+  
+  const classVal = this._tempClassNo || this.classNo;
+  if (classVal !== undefined && !this.classId) {
+    const resolved = getClassIdFromNo(classVal);
+    if (resolved) {
+      this.classId = resolved;
+    }
+  }
+
   if (this._tempChapters && Array.isArray(this._tempChapters) && this._tempChapters.length > 0) {
     try {
       const { resolveChapterIds } = require('../utils/chapterNormalization');

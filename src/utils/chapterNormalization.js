@@ -14,9 +14,19 @@ const normalizeChapterName = (name) => {
     .trim();                             // Trim start and end whitespace
 };
 
-const resolveChapterIds = async (classId, chapterNames) => {
+const resolveChapterIds = async (classIdInput, chapterNames) => {
   const mongoose = require('mongoose');
   const Chapter = mongoose.model('Chapter');
+  const { getClassIdFromNo, getClassNoFromId } = require('./classCache');
+
+  let classObjectId = classIdInput;
+  let numericClass = Number(classIdInput);
+  
+  if (mongoose.Types.ObjectId.isValid(classIdInput)) {
+    numericClass = getClassNoFromId(classIdInput);
+  } else {
+    classObjectId = getClassIdFromNo(classIdInput);
+  }
 
   if (!Array.isArray(chapterNames) || chapterNames.length === 0) {
     return [];
@@ -29,7 +39,7 @@ const resolveChapterIds = async (classId, chapterNames) => {
     const normalized = normalizeChapterName(name);
     if (!normalized) continue;
 
-    if (Number(classId) === 13 && parentChapters.includes(normalized)) {
+    if (numericClass === 13 && parentChapters.includes(normalized)) {
       // It's a parent chapter in Class 13. Match the parent itself OR any subchapter starting with "parent "
       queryOrConditions.push({ normalizedChapterName: normalized });
       queryOrConditions.push({ normalizedChapterName: new RegExp(`^${normalized}\\s`) });
@@ -42,7 +52,7 @@ const resolveChapterIds = async (classId, chapterNames) => {
   if (queryOrConditions.length === 0) return [];
 
   const chapters = await Chapter.find({
-    classId: Number(classId),
+    classId: classObjectId,
     $or: queryOrConditions
   }).select('_id');
 

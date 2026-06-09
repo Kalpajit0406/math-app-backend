@@ -56,7 +56,9 @@ class SelfAssessmentService {
     }
 
     // 3. Select questions randomly matching class level and chapter(s) using memory-safe MongoDB $sample
-    const matchCriteria = { classNo: Number(classNo) };
+    const { getClassIdFromNo } = require('../utils/classCache');
+    const classId = getClassIdFromNo(classNo);
+    const matchCriteria = { classId: classId };
     if (chapters && chapters.length > 0) {
       const { resolveChapterIds } = require('../utils/chapterNormalization');
       const resolvedChapterIds = await resolveChapterIds(classNo, chapters);
@@ -78,7 +80,7 @@ class SelfAssessmentService {
     if ((!questions || questions.length === 0) && allowedQuestionIds) {
       // Relax chapter criteria, select from any seen questions for this class
       const fallbackCriteria = { 
-        classNo: Number(classNo), 
+        classId: classId, 
         _id: { $in: allowedQuestionIds } 
       };
       questions = await Question.aggregate([

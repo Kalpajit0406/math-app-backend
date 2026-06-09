@@ -44,20 +44,66 @@ class OCRQueueService {
   }
 
   static async getPending(limit = 10) {
-    return OCRJob.find({ status: 'pending', availableAt: { $lte: new Date() } }).sort({ createdAt: 1 }).limit(limit).exec();
+    return OCRJob.find({ 
+      $or: [
+        { status: 'pending', availableAt: { $lte: new Date() } },
+        { status: 'processing', lockExpiresAt: { $lt: new Date() } }
+      ]
+    }).sort({ queuePriority: -1, createdAt: 1 }).limit(limit).exec();
+  }
+
+  static async acquireJobLock(jobId, workerId, nodeName = 'default-node', lockDurationMs = 300000) {
+    const now = new Date();
+    const query = {
+      _id: jobId,
+      $or: [
+        { status: 'pending', availableAt: { $lte: now } },
+        { status: 'processing', lockExpiresAt: { $lt: now } }
+      ]
+    };
+    const update = {
+      $set: {
+        status: 'processing',
+        lockedBy: workerId,
+        processingNode: nodeName,
+        lockAcquiredAt: now,
+        lockExpiresAt: new Date(Date.now() + lockDurationMs),
+        updatedAt: now
+      },
+      $inc: { retryCount: 1, attempts: 1 }
+    };
+    return OCRJob.findOneAndUpdate(query, update, { new: true }).exec();
+  }
+
+  static async renewJobLock(jobId, workerId, lockDurationMs = 300000) {
+    const now = new Date();
+    const query = {
+      _id: jobId,
+      status: 'processing',
+      lockedBy: workerId
+    };
+    const update = {
+      $set: {
+        lockExpiresAt: new Date(Date.now() + lockDurationMs),
+        updatedAt: now
+      }
+    };
+    return OCRJob.findOneAndUpdate(query, update, { new: true }).exec();
   }
 
   static async markProcessing(jobId) {
-    return OCRJob.findByIdAndUpdate(
-      jobId,
-      { $set: { status: 'processing', lockedAt: new Date(), updatedAt: Date.now() }, $inc: { attempts: 1 } },
-      { returnDocument: 'after' }
-    ).exec();
+    // Legacy support method: acquires a default lock
+    const workerId = `legacy-worker-${process.pid}`;
+    return this.acquireJobLock(jobId, workerId);
   }
 
-  static async markDone(jobId, result) {
-    return OCRJob.findByIdAndUpdate(
-      jobId,
+  static async markDone(jobId, result, workerId = null) {
+    const query = { _id: jobId };
+    if (workerId) {
+      query.lockedBy = workerId;
+    }
+    return OCRJob.findOneAndUpdate(
+      query,
       {
         $set: {
           status: 'done',
@@ -65,43 +111,72 @@ class OCRQueueService {
           rawText: result?.rawText || '',
           latex: result?.latex || '',
           updatedAt: Date.now(),
-          lockedAt: null,
+          lockedBy: null,
+          lockAcquiredAt: null,
+          lockExpiresAt: null,
+          processingNode: null,
           availableAt: new Date(),
           error: null,
         }
-      }
+      },
+      { new: true }
     ).exec();
   }
 
-  static async markFailed(jobId, error) {
-    return OCRJob.findByIdAndUpdate(
-      jobId,
-      { $set: { status: 'failed', error: String(error), updatedAt: Date.now(), lockedAt: null } }
+  static async markFailed(jobId, error, workerId = null) {
+    const query = { _id: jobId };
+    if (workerId) {
+      query.lockedBy = workerId;
+    }
+    return OCRJob.findOneAndUpdate(
+      query,
+      { 
+        $set: { 
+          status: 'failed', 
+          error: String(error), 
+          updatedAt: Date.now(), 
+          lockedBy: null,
+          lockAcquiredAt: null,
+          lockExpiresAt: null,
+          processingNode: null
+        } 
+      },
+      { new: true }
     ).exec();
   }
 
-  static async markRetryOrFailed(job, error) {
-    const attempts = job?.attempts || 0;
-    const reachedCap = attempts >= this.maxAttempts;
+  static async markRetryOrFailed(job, error, workerId = null) {
+    const attempts = job?.retryCount ?? job?.attempts ?? 0;
+    const maxRetries = job?.maxRetries ?? this.maxAttempts;
+    const reachedCap = attempts >= maxRetries;
 
     if (reachedCap) {
-      return this.markFailed(job._id, `[final] ${String(error)}`);
+      return this.markFailed(job._id, `[final] ${String(error)}`, workerId);
     }
 
     const delay = this.retryBaseMs * Math.pow(2, Math.max(0, attempts - 1));
     const nextAt = new Date(Date.now() + delay);
-    return OCRJob.findByIdAndUpdate(
-      job._id,
+    
+    const query = { _id: job._id };
+    if (workerId) {
+      query.lockedBy = workerId;
+    }
+
+    return OCRJob.findOneAndUpdate(
+      query,
       {
         $set: {
           status: 'pending',
           error: String(error),
           updatedAt: Date.now(),
           availableAt: nextAt,
-          lockedAt: null,
+          lockedBy: null,
+          lockAcquiredAt: null,
+          lockExpiresAt: null,
+          processingNode: null
         }
       },
-      { returnDocument: 'after' }
+      { new: true }
     ).exec();
   }
 
@@ -110,13 +185,24 @@ class OCRQueueService {
   }
 
   static async recoverStaleProcessingJobs() {
+    const now = new Date();
+    // A job is stale if locked and lock has expired, OR if status is processing and updatedAt is older than staleProcessingMs
     const staleBefore = new Date(Date.now() - this.staleProcessingMs);
-    const staleJobs = await OCRJob.find({ status: 'processing', updatedAt: { $lte: staleBefore } }).limit(100).exec();
+    const query = {
+      status: 'processing',
+      $or: [
+        { lockExpiresAt: { $lt: now } },
+        { updatedAt: { $lte: staleBefore } }
+      ]
+    };
+    const staleJobs = await OCRJob.find(query).limit(100).exec();
     let recovered = 0;
     let failed = 0;
 
     for (const job of staleJobs) {
-      if ((job.attempts || 0) >= this.maxAttempts) {
+      const attempts = job.retryCount ?? job.attempts ?? 0;
+      const maxRetries = job.maxRetries ?? this.maxAttempts;
+      if (attempts >= maxRetries) {
         await this.markFailed(job._id, '[reaper] stale processing exceeded max attempts');
         failed++;
       } else {
@@ -124,16 +210,18 @@ class OCRQueueService {
           $set: {
             status: 'pending',
             availableAt: new Date(),
-            lockedAt: null,
+            lockedBy: null,
+            lockAcquiredAt: null,
+            lockExpiresAt: null,
+            processingNode: null,
             updatedAt: Date.now(),
-            error: '[reaper] stale processing recovered'
+            error: '[reaper] stale processing lock recovered'
           }
         }).exec();
         recovered++;
       }
     }
 
-    return { recovered, failed, scanned: staleJobs.length };
   }
 
   static async cleanupExpiredJobs() {

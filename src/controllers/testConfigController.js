@@ -99,8 +99,10 @@ const getTestsByClassAndLanguage = asyncHandler(async (req, res) => {
     testLanguageFilter = { $in: [language, "Both"] };
   }
 
+  const { getClassIdFromNo } = require('../utils/classCache');
+  const classId = getClassIdFromNo(classNo);
   const tests = await TestConfig.find({
-    classNo: Number(classNo),
+    classId: classId,
     language: testLanguageFilter,
   }).sort({ createdAt: -1 });
 

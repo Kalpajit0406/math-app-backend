@@ -17,8 +17,9 @@ const examSchema = new mongoose.Schema({
     type: String,
     default: '',
   },
-  classNo: {
-    type: Number,
+  classId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Class',
   },
   language: {
     type: String,
@@ -62,6 +63,10 @@ const examSchema = new mongoose.Schema({
     virtuals: true,
     transform: (doc, ret) => {
       ret.id = ret._id;
+      const { getClassNoFromId } = require('../utils/classCache');
+      if (doc.classId) {
+        ret.classNo = getClassNoFromId(doc.classId) || doc._tempClassNo;
+      }
       delete ret.__v;
       if (ret.chapterIds) {
         ret.chapters = ret.chapterIds.map(ch => {
@@ -111,8 +116,31 @@ examSchema.virtual('chapters')
     this._tempChapters = val;
   });
 
+examSchema.virtual('classNo')
+  .get(function() {
+    const { getClassNoFromId } = require('../utils/classCache');
+    return getClassNoFromId(this.classId) || this._tempClassNo;
+  })
+  .set(function(val) {
+    const { getClassIdFromNo } = require('../utils/classCache');
+    this._tempClassNo = Number(val);
+    const resolved = getClassIdFromNo(val);
+    if (resolved) {
+      this.classId = resolved;
+    }
+  });
+
 // Pre-validate hook to resolve chapters array of strings to chapterIds
 examSchema.pre('validate', async function (next) {
+  const { getClassIdFromNo } = require('../utils/classCache');
+  const classVal = this._tempClassNo || this.classNo;
+  if (classVal !== undefined && !this.classId) {
+    const resolved = getClassIdFromNo(classVal);
+    if (resolved) {
+      this.classId = resolved;
+    }
+  }
+
   if (this._tempChapters && Array.isArray(this._tempChapters) && this._tempChapters.length > 0) {
     try {
       const { resolveChapterIds } = require('../utils/chapterNormalization');

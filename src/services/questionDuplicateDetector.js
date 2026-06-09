@@ -210,7 +210,14 @@ class QuestionDuplicateDetector {
 
     // 2. Fetch candidates from same classNo or all classes (with limit)
     const classNum = parseInt(classNo, 10);
-    const filter = isNaN(classNum) ? {} : { classNo: classNum };
+    let filter = {};
+    if (!isNaN(classNum)) {
+      const { getClassIdFromNo } = require('../utils/classCache');
+      const classId = getClassIdFromNo(classNum);
+      if (classId) {
+        filter = { classId };
+      }
+    }
     const candidates = await Question.find(filter)
       .select('question questionHash chapter options')
       .limit(1000)

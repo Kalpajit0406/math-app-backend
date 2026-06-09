@@ -64,7 +64,16 @@ const getQuestions = async (req, res) => {
     const pagination = new PaginationParams(req);
     
     let filter = {};
-    if (classNo) filter.classNo = parseInt(classNo);
+    if (classNo) {
+      const { getClassIdFromNo } = require('../utils/classCache');
+      const classId = getClassIdFromNo(classNo);
+      if (classId) {
+        filter.classId = classId;
+      } else {
+        const mongoose = require('mongoose');
+        filter.classId = new mongoose.Types.ObjectId();
+      }
+    }
     if (language) {
       if (language.toLowerCase() === 'both') {
         filter.language = { $in: ['Bengali', 'English', 'Both'] };
@@ -74,7 +83,7 @@ const getQuestions = async (req, res) => {
     }
     if (chapter) {
       const { resolveChapterIds } = require('../utils/chapterNormalization');
-      const chapterIds = await resolveChapterIds(filter.classNo || 10, [chapter]);
+      const chapterIds = await resolveChapterIds(classNo || 10, [chapter]);
       if (chapterIds.length > 0) {
         filter.chapterId = { $in: chapterIds };
       } else {
@@ -136,13 +145,41 @@ const updateQuestion = async (req, res) => {
     }
 
     const updateData = {
-      chapter,
-      classNo: classNo ? parseInt(classNo) : undefined,
       correctAnswer,
       options: parsedOptions,
       question,
       language
     };
+
+    if (classNo !== undefined) {
+      const { getClassIdFromNo } = require('../utils/classCache');
+      updateData.classId = getClassIdFromNo(classNo);
+    }
+
+    if (chapter !== undefined) {
+      let finalClassId = updateData.classId;
+      if (!finalClassId) {
+        const existingQuestion = await Question.findById(id);
+        if (existingQuestion) {
+          finalClassId = existingQuestion.classId;
+        }
+      }
+      if (finalClassId) {
+        const Chapter = require('../models/chapterModel');
+        const { normalizeChapterName } = require('../utils/chapterNormalization');
+        const normalized = normalizeChapterName(chapter);
+        let chap = await Chapter.findOne({ classId: finalClassId, normalizedChapterName: normalized });
+        if (!chap && chapter) {
+          chap = await Chapter.create({
+            classId: finalClassId,
+            chapterName: chapter,
+          });
+        }
+        if (chap) {
+          updateData.chapterId = chap._id;
+        }
+      }
+    }
 
     if (question) {
       const { normalizeQuestion, generateHash } = require('../services/questionDuplicateDetector');
@@ -212,7 +249,16 @@ const getFilteredQuestions = async (req, res) => {
   try {
     const { classNo, language } = req.params;
     const filter = {};
-    if (classNo) filter.classNo = parseInt(classNo);
+    if (classNo) {
+      const { getClassIdFromNo } = require('../utils/classCache');
+      const classId = getClassIdFromNo(classNo);
+      if (classId) {
+        filter.classId = classId;
+      } else {
+        const mongoose = require('mongoose');
+        filter.classId = new mongoose.Types.ObjectId();
+      }
+    }
     if (language) {
       if (language.toLowerCase() === 'both') {
         filter.language = { $in: ['Bengali', 'English', 'Both'] };

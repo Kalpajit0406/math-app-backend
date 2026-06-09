@@ -150,14 +150,21 @@ const seedChapters = async () => {
     const { normalizeChapterName } = require('../utils/chapterNormalization');
     for (const [classId, chapters] of Object.entries(initialChapters)) {
       const numericClassId = Number(classId);
+      const classDoc = await Class.findOne({ classId: numericClassId });
+      if (!classDoc) {
+        console.warn(`Class with ID ${numericClassId} not found in database. Skipping chapters.`);
+        continue;
+      }
+      const classObjectId = classDoc._id;
+
       for (const chapterName of chapters) {
         const normalized = normalizeChapterName(chapterName);
 
         try {
           // Use findOneAndUpdate with upsert to prevent E11000 duplicate keys concurrently
           await Chapter.findOneAndUpdate(
-            { classId: numericClassId, normalizedChapterName: normalized },
-            { classId: numericClassId, chapterName: chapterName.trim() },
+            { classId: classObjectId, normalizedChapterName: normalized },
+            { classId: classObjectId, chapterName: chapterName.trim() },
             { upsert: true, returnDocument: 'after', runValidators: true }
           );
         } catch (err) {

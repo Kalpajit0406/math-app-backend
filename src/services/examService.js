@@ -38,8 +38,9 @@ const normalizeExamData = async (examData = {}, session = null) => {
   const isSchedulePayload = !!(examData.date && examData.time && examData.classNo && examData.language);
   if (isSchedulePayload && questionIds.length === 0) {
     const totalQuestions = Number.parseInt(examData.totalQuestions || '10', 10);
+    const { getClassIdFromNo } = require('../utils/classCache');
     const filter = {
-      classNo: Number(examData.classNo)
+      classId: getClassIdFromNo(examData.classNo)
     };
     if (examData.language === 'Both') {
       filter.language = { $in: ['Bengali', 'English', 'Both'] };
@@ -138,23 +139,27 @@ const examService = {
       language: testLanguageFilter,
     };
 
+    const { getClassIdFromNo } = require('../utils/classCache');
+    const classIdObj = getClassIdFromNo(classNo);
+
     if (isJoint && (Number(classNo) === 11 || Number(classNo) === 12)) {
       const Chapter = require('../models/chapterModel');
+      const classId13 = getClassIdFromNo(13);
       const targetParentChapters = await Chapter.find({
-        classId: 13,
+        classId: classId13,
         normalizedChapterName: { $in: [String(classNo).toLowerCase(), 'joint', 'jee'] }
       }).select('_id');
       const parentIds = targetParentChapters.map(c => c._id);
 
       query.$or = [
-        { classNo: Number(classNo) },
+        { classId: classIdObj },
         {
-          classNo: 13,
+          classId: classId13,
           chapterIds: { $in: parentIds }
         }
       ];
     } else {
-      query.classNo = Number(classNo);
+      query.classId = classIdObj;
     }
 
     return await Exam.find(query).sort({ createdAt: -1 });

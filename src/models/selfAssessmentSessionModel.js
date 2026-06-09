@@ -13,8 +13,9 @@ const selfAssessmentSessionSchema = new mongoose.Schema({
     required: true,
     index: true,
   },
-  classNo: {
-    type: Number,
+  classId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Class',
     required: true,
   },
   token: {
@@ -55,7 +56,51 @@ const selfAssessmentSessionSchema = new mongoose.Schema({
     type: Date,
     required: true,
   }
-}, { timestamps: true });
+}, { 
+  timestamps: true,
+  toJSON: {
+    virtuals: true,
+    transform: (doc, ret) => {
+      const { getClassNoFromId } = require('../utils/classCache');
+      if (doc.classId) {
+        ret.classNo = getClassNoFromId(doc.classId) || doc._tempClassNo;
+      }
+      return ret;
+    }
+  },
+  toObject: {
+    virtuals: true
+  }
+});
+
+selfAssessmentSessionSchema.virtual('classNo')
+  .get(function() {
+    const { getClassNoFromId } = require('../utils/classCache');
+    return getClassNoFromId(this.classId) || this._tempClassNo;
+  })
+  .set(function(val) {
+    const { getClassIdFromNo } = require('../utils/classCache');
+    this._tempClassNo = Number(val);
+    const resolved = getClassIdFromNo(val);
+    if (resolved) {
+      this.classId = resolved;
+    }
+  });
+
+selfAssessmentSessionSchema.pre('validate', async function (next) {
+  const { getClassIdFromNo } = require('../utils/classCache');
+  
+  const classVal = this._tempClassNo || this.classNo;
+  if (classVal !== undefined && !this.classId) {
+    const resolved = getClassIdFromNo(classVal);
+    if (resolved) {
+      this.classId = resolved;
+    }
+  }
+  if (typeof next === 'function') {
+    next();
+  }
+});
 
 selfAssessmentSessionSchema.index({ token: 1, status: 1 });
 selfAssessmentSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // Auto-expire from DB

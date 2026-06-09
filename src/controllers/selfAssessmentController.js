@@ -71,7 +71,7 @@ exports.getChapters = async (req, res) => {
     }
 
     const Chapter = require('../models/chapterModel');
-    const chaptersList = await Chapter.find({ classId: Number(classNo), isActive: true }).sort({ chapterName: 1 });
+    const chaptersList = await Chapter.find({ classId: student.classId, isActive: true }).sort({ chapterName: 1 });
     const chapters = chaptersList.map(c => c.chapterName);
 
     return res.json({

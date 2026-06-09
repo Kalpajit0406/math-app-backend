@@ -93,6 +93,10 @@ async function runWorker() {
       await ocrQueue.recoverCrashedWorkers();
       await parserQueue.recoverCrashedWorkers();
       await validationQueue.recoverCrashedWorkers();
+      
+      const { OCRQueueService } = require('../services/ocrQueueService');
+      await OCRQueueService.recoverStaleProcessingJobs();
+      await OCRQueueService.cleanupExpiredJobs();
     } catch (_) {}
   }, 60000);
 
