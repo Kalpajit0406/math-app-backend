@@ -34,13 +34,14 @@ const attemptService = require('../src/services/attemptService');
 const attemptController = require('../src/controllers/attemptController');
 
 test('Multiple Exams with Different Durations Independent Evaluation Tests', async (t) => {
-  // Connect directly without running indexing or seeding scripts
+  // Connect via connectDB to ensure indexes are built, classes/chapters are seeded, and classCache is initialized
+  const connectDB = require('../src/config/db');
   if (mongoose.connection.readyState === 0) {
-    const uri = process.env.MONGODB_URI_DIRECT || process.env.MONGODB_URI;
-    if (!uri) throw new Error('MONGODB_URI is not configured');
-    await mongoose.connect(uri, {
-      dbName: process.env.MONGODB_DB_NAME || 'MathswithSD_DB'
-    });
+    await connectDB();
+  } else {
+    const { initCache } = require('../src/utils/classCache');
+    require('../src/models/classModel');
+    await initCache();
   }
 
   // Create a mock student
@@ -55,8 +56,10 @@ test('Multiple Exams with Different Durations Independent Evaluation Tests', asy
     password: 'password123',
     verified: true
   });
+  console.log('[DEBUG] Saving student...');
   await student.save();
   const userId = student._id.toString();
+  console.log('[DEBUG] Student saved. ID:', userId);
 
   // Create two exams:
   // Exam 1: Ends immediately (started in past, duration 1 minute)
@@ -81,8 +84,9 @@ test('Multiple Exams with Different Durations Independent Evaluation Tests', asy
   };
 
   // Create real questions in the database
+  console.log('[DEBUG] Creating questions...');
   const q1 = await Question.create({
-    question: 'What is 1+1?',
+    question: 'What is 1+1? ' + Date.now(),
     options: ['1', '2', '3', '4'],
     correctAnswer: '2',
     language: 'English',
@@ -91,13 +95,14 @@ test('Multiple Exams with Different Durations Independent Evaluation Tests', asy
   });
 
   const q2 = await Question.create({
-    question: 'What is 2+2?',
+    question: 'What is 2+2? ' + Date.now(),
     options: ['2', '3', '4', '5'],
     correctAnswer: '4',
     language: 'English',
     classNo: 10,
     chapter: 'Arithmetic'
   });
+  console.log('[DEBUG] Questions created.');
 
   const exam1 = new Exam({
     title: '10 Min Test Mock',
@@ -108,6 +113,7 @@ test('Multiple Exams with Different Durations Independent Evaluation Tests', asy
     time: formatTimeStr(pastDate),
     questionIds: [q1._id]
   });
+  console.log('[DEBUG] Saving exam 1...');
   await exam1.save();
   const exam1Id = exam1._id.toString();
 
@@ -120,20 +126,26 @@ test('Multiple Exams with Different Durations Independent Evaluation Tests', asy
     time: formatTimeStr(new Date()),
     questionIds: [q2._id]
   });
+  console.log('[DEBUG] Saving exam 2...');
   await exam2.save();
   const exam2Id = exam2._id.toString();
+  console.log('[DEBUG] Exams saved.');
 
   // Submit attempts for both exams
+  console.log('[DEBUG] Starting attempts...');
   const attempt1 = await attemptService.startAttempt(userId, exam1Id);
   const attempt2 = await attemptService.startAttempt(userId, exam2Id);
+  console.log('[DEBUG] Attempts started. ID1:', attempt1._id, 'ID2:', attempt2._id);
 
   // Submit correct answers for both
+  console.log('[DEBUG] Submitting attempts...');
   const sub1 = await attemptService.submitAttempt(userId, attempt1._id, [
     { questionId: q1._id.toString(), userAnswer: '2' }
   ]);
   const sub2 = await attemptService.submitAttempt(userId, attempt2._id, [
     { questionId: q2._id.toString(), userAnswer: '4' }
   ]);
+  console.log('[DEBUG] Attempts submitted.');
 
   await t.test('1. Verify initial database records', async () => {
     const a1 = await Attempt.findById(attempt1._id);

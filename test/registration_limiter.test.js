@@ -48,7 +48,7 @@ test('Phone Registration Limiter and Blacklisting Integration Tests', async (t) 
 
   await t.test('2. Rejecting the student deletes or sets isRejected flag', async () => {
     // We mock/use controller rejectStudent logic directly
-    const req = { body: { id: studentId } };
+    const req = { body: { id: studentId }, user: { id: new mongoose.Types.ObjectId().toString() } };
     let jsonResponse = null;
     const res = {
       status: function(code) { this.statusCode = code; return this; },
@@ -105,7 +105,7 @@ test('Phone Registration Limiter and Blacklisting Integration Tests', async (t) 
   });
 
   await t.test('5. Rejecting 5th attempt blacklists the phone number', async () => {
-    const req = { body: { id: studentId } };
+    const req = { body: { id: studentId }, user: { id: new mongoose.Types.ObjectId().toString() } };
     let jsonResponse = null;
     const res = {
       status: function(code) { this.statusCode = code; return this; },

@@ -120,6 +120,13 @@ questionSchema.virtual('classNo')
   });
 
 questionSchema.pre('validate', async function (next) {
+  if (this.language && typeof this.language === 'string') {
+    const trimmed = this.language.trim().toLowerCase();
+    if (trimmed === 'english') this.language = 'English';
+    else if (trimmed === 'bengali') this.language = 'Bengali';
+    else if (trimmed === 'both') this.language = 'Both';
+  }
+
   const { getClassIdFromNo } = require('../utils/classCache');
   
   const classVal = this._tempClassNo || this.classNo;

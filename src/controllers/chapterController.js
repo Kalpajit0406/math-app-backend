@@ -47,6 +47,7 @@ const getChapters = async (req, res) => {
 // 2. Add Chapter
 const addChapter = async (req, res) => {
   try {
+    console.log('[DEBUG addChapter] req.body:', JSON.stringify(req.body));
     const { classId, chapterName } = req.body;
     if (!classId || !chapterName) {
       return res.status(400).json({ success: false, message: 'classId and chapterName are required.' });
@@ -54,15 +55,41 @@ const addChapter = async (req, res) => {
 
     let finalChapterName = chapterName.trim();
     const { getClassIdFromNo, getClassNoFromId } = require('../utils/classCache');
-    const classObjectId = mongoose.Types.ObjectId.isValid(classId) ? classId : getClassIdFromNo(classId);
-    const numericClassId = mongoose.Types.ObjectId.isValid(classId) ? getClassNoFromId(classId) : parseInt(classId, 10);
+    
+    let classObjectId = mongoose.Types.ObjectId.isValid(classId) ? classId : getClassIdFromNo(classId);
+    let numericClassId = mongoose.Types.ObjectId.isValid(classId) ? getClassNoFromId(classId) : parseInt(classId, 10);
+
+    const Class = mongoose.model('Class');
+    // Fallback: If cache lookup failed, query the database directly
+    if (mongoose.Types.ObjectId.isValid(classId)) {
+      if (!numericClassId) {
+        const classDoc = await Class.findById(classId);
+        if (classDoc) {
+          numericClassId = Number(classDoc.classId);
+        }
+      }
+    } else {
+      if (!classObjectId) {
+        const classDoc = await Class.findOne({ classId: parseInt(classId, 10) });
+        if (classDoc) {
+          classObjectId = classDoc._id;
+        }
+      }
+    }
 
     if (!classObjectId) {
       return res.status(400).json({ success: false, message: 'Invalid classId.' });
     }
 
     if (numericClassId === 13) {
-      const { parentChapter } = req.body;
+      let { parentChapter } = req.body;
+      // Extract parentChapter from chapterName if not provided (e.g., "12: Probability" -> parentChapter = "12")
+      if (!parentChapter && typeof chapterName === 'string') {
+        const match = chapterName.trim().match(/^(11|12|JEE):\s*(.*)/i);
+        if (match) {
+          parentChapter = match[1].toUpperCase();
+        }
+      }
       if (!parentChapter || !['11', '12', 'JEE'].includes(parentChapter)) {
         return res.status(400).json({ success: false, message: 'parentChapter ("11", "12", or "JEE") is required for class 13.' });
       }

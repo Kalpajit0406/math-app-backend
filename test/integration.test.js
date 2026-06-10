@@ -107,7 +107,7 @@ async function runTests() {
       'POST',
       '/api/v1/question/addQuestion',
       {
-        question: 'What is 7 + 3?',
+        question: `What is 7 + 3? (${Date.now()})`,
         options: ['9', '10', '11', '12'],
         correctAnswer: '10',
         language: 'English',
@@ -171,7 +171,7 @@ async function runTests() {
       'POST',
       '/api/v1/question/addQuestion',
       {
-        question: 'Normalized language test',
+        question: `Normalized language test (${Date.now()})`,
         options: ['a', 'b', 'c', 'd'],
         correctAnswer: 'a',
         language: 'english',
@@ -209,7 +209,7 @@ async function runTests() {
       'POST',
       '/api/v1/question/addQuestion',
       {
-        question: 'What is 2+2 in Joint Entrance?',
+        question: `What is 2+2 in Joint Entrance? (${Date.now()})`,
         options: ['1', '2', '3', '4'],
         correctAnswer: '4',
         language: 'English',
