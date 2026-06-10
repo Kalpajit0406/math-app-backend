@@ -114,7 +114,20 @@ const getTestsByClassAndLanguage = asyncHandler(async (req, res) => {
 // @access  Public
 const deleteTestConfig = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const deletedTest = await TestConfig.findByIdAndDelete(id);
+  const Exam = require('../models/examModel');
+
+  let deletedTest = await TestConfig.findByIdAndDelete(id);
+  let isExam = false;
+  
+  if (!deletedTest) {
+    deletedTest = await Exam.findByIdAndDelete(id);
+    if (deletedTest) {
+      isExam = true;
+      const Attempt = require('../models/attemptModel');
+      await Attempt.deleteMany({ examId: id });
+    }
+  }
+
   if (!deletedTest) {
     throw new ApiError(404, "Test configuration not found");
   }
@@ -122,8 +135,8 @@ const deleteTestConfig = asyncHandler(async (req, res) => {
   const auditLogService = require('../services/auditLogService');
   await auditLogService.log({
     actorId: req.user?.id,
-    action: 'test_config_delete',
-    targetType: 'TestConfig',
+    action: isExam ? 'exam_delete' : 'test_config_delete',
+    targetType: isExam ? 'Exam' : 'TestConfig',
     targetId: deletedTest._id,
     metadata: {
       date: deletedTest.date,
@@ -135,7 +148,7 @@ const deleteTestConfig = asyncHandler(async (req, res) => {
 
   return res.status(200).json({
     success: true,
-    message: "Test configuration deleted",
+    message: isExam ? "Exam deleted successfully" : "Test configuration deleted",
     test: deletedTest
   });
 });
