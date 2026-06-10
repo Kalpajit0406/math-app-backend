@@ -185,6 +185,6 @@ questionSchema.pre('findOne', function() {
 // Indexes for fast querying
 questionSchema.index({ classId: 1, language: 1 });
 questionSchema.index({ chapterId: 1 });
-questionSchema.index({ question: 'text', formulaKeywords: 'text' }, { weights: { question: 10, formulaKeywords: 5 }, name: 'QuestionTextSearchIndex' });
+questionSchema.index({ question: 'text', formulaKeywords: 'text' }, { weights: { question: 10, formulaKeywords: 5 }, name: 'QuestionTextSearchIndex', language_override: 'none' });
 
 module.exports = mongoose.model('Question', questionSchema);

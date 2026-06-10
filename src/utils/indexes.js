@@ -55,13 +55,21 @@ async function ensureIndexes(mongoose) {
     console.log('✓ Student indexes created');
 
     // Question indexes
+    try {
+      await Question.collection.dropIndex('questionHash_1');
+      console.log('✓ Dropped legacy/conflicting questionHash_1 index from questions');
+    } catch (err) {}
     await safeCreateIndex(Question.collection, { questionHash: 1 }, { unique: true, sparse: true });
     await safeCreateIndex(Question.collection, { chapterId: 1 });
     await safeCreateIndex(Question.collection, { classId: 1 });
     await safeCreateIndex(Question.collection, { language: 1 });
     await safeCreateIndex(Question.collection, { classId: 1, language: 1 });
     await safeCreateIndex(Question.collection, { isDeleted: 1 });
-    await safeCreateIndex(Question.collection, { question: 'text', formulaKeywords: 'text' }, { weights: { question: 10, formulaKeywords: 5 }, name: 'QuestionTextSearchIndex' });
+    try {
+      await Question.collection.dropIndex('QuestionTextSearchIndex');
+      console.log('✓ Dropped legacy QuestionTextSearchIndex from questions');
+    } catch (err) {}
+    await safeCreateIndex(Question.collection, { question: 'text', formulaKeywords: 'text' }, { weights: { question: 10, formulaKeywords: 5 }, name: 'QuestionTextSearchIndex', language_override: 'none' });
     console.log('✓ Question indexes created');
 
     // Class indexes
@@ -157,11 +165,19 @@ async function ensureIndexes(mongoose) {
     await safeCreateIndex(AuthSession.collection, { userId: 1 });
     await safeCreateIndex(AuthSession.collection, { refreshTokenHash: 1 }, { unique: true });
     await safeCreateIndex(AuthSession.collection, { deviceFingerprint: 1 });
+    try {
+      await AuthSession.collection.dropIndex('expiresAt_1');
+      console.log('✓ Dropped legacy expiresAt_1 index from authsessions');
+    } catch (err) {}
     await safeCreateIndex(AuthSession.collection, { expiresAt: 1 }, { expireAfterSeconds: 0 });
     console.log('✓ AuthSession indexes created');
 
     // SystemMetrics indexes
     await safeCreateIndex(SystemMetrics.collection, { metricType: 1 });
+    try {
+      await SystemMetrics.collection.dropIndex('timestamp_1');
+      console.log('✓ Dropped legacy timestamp_1 index from systemmetrics');
+    } catch (err) {}
     await safeCreateIndex(SystemMetrics.collection, { timestamp: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });
     console.log('✓ SystemMetrics indexes created');
 

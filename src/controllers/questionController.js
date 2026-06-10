@@ -55,6 +55,12 @@ const addQuestion = async (req, res) => {
       data: newQuestion
     });
   } catch (error) {
+    if (error.code === 11000) {
+      return res.status(400).json({ success: false, message: "Duplicate question detected. This question already exists in the database." });
+    }
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ success: false, message: error.message });
+    }
     res.status(500).json({ success: false, message: error.message });
   }
 };

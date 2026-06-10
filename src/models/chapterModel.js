@@ -30,6 +30,10 @@ const chapterSchema = new mongoose.Schema({
   toJSON: {
     transform: (doc, ret) => {
       ret.id = ret._id;
+      const { getClassNoFromId } = require('../utils/classCache');
+      if (doc.classId) {
+        ret.classId = getClassNoFromId(doc.classId) || doc.classId;
+      }
       delete ret.__v;
       return ret;
     }

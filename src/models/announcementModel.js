@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const announcementSchema = new mongoose.Schema({
   title: { type: String, required: true, trim: true },
   message: { type: String, required: true },
-  targetClassIds: { type: [Number], default: [] },
+  targetClassIds: { type: [Number], default: [], index: true },
   image: { type: String }, // optional image URL
   isDeleted: { type: Boolean, default: false, index: true },
   deletedAt: { type: Date },

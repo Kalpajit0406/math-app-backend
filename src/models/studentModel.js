@@ -151,7 +151,7 @@ const DEFAULT_PERMISSIONS = {
 studentSchema.pre('validate', async function(next) {
   const { getClassIdFromNo } = require('../utils/classCache');
   
-  const classVal = this._tempClassNo || this.classNo;
+  const classVal = this._tempClassNo || this.classNo || this._doc?.classNo || (typeof this.get === 'function' ? this.get('classNo') : undefined);
   const resolved = getClassIdFromNo(classVal);
   console.log(`[Student pre-validate] classVal: ${classVal}, classId: ${this.classId}, resolved: ${resolved}, tempClassNo: ${this._tempClassNo}`);
   if (classVal !== undefined && !this.classId) {

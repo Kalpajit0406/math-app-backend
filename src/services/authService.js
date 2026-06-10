@@ -174,14 +174,38 @@ const authService = {
     // 1. Explicitly opt-in for local/dev environments only.
     if (isTeacherBypassEnabled() && teacherBypassPhone && studentPhone === teacherBypassPhone) {
       let student = await Student.findOne({ studentPhone }).select('+passwordHash');
+      if (student && !student.classId) {
+        const { getClassIdFromNo } = require('../utils/classCache');
+        let classId = getClassIdFromNo(10);
+        if (!classId) {
+          const mongoose = require('mongoose');
+          const Class = mongoose.model('Class');
+          const classDoc = await Class.findOne({ classId: 10 });
+          if (classDoc) {
+            classId = classDoc._id;
+          }
+        }
+        student.classId = classId;
+      }
       if (!student || !student.passwordHash) {
         const bypassPasswordSeed = process.env.TEACHER_BYPASS_PASSWORD || `teacher-bypass:${teacherBypassPhone}`;
         const hashedPassword = await bcrypt.hash(bypassPasswordSeed, 10);
         if (!student) {
+          const mongoose = require('mongoose');
+          const { getClassIdFromNo } = require('../utils/classCache');
+          let classId = getClassIdFromNo(10);
+          if (!classId) {
+            const Class = mongoose.model('Class');
+            const classDoc = await Class.findOne({ classId: 10 });
+            if (classDoc) {
+              classId = classDoc._id;
+            }
+          }
           student = new Student({
             firstName: 'Teacher',
             lastName: 'Admin',
             classNo: 10,
+            classId: classId,
             language: 'English',
             studentPhone: teacherBypassPhone,
             guardianPhone: teacherBypassPhone,

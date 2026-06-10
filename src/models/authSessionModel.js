@@ -32,8 +32,7 @@ const authSessionSchema = new mongoose.Schema({
   },
   expiresAt: {
     type: Date,
-    required: true,
-    index: true
+    required: true
   },
   revoked: {
     type: Boolean,

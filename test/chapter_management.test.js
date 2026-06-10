@@ -118,7 +118,7 @@ test('Chapter Management & Centralized Schema Synchronization', async (t) => {
     const res = await request('POST', '/api/v1/question/addQuestion', {
       classNo: 10,
       chapter: 'Test Integration Chapter', // Will auto-resolve chapterId via pre-validate hook
-      question: 'What is 2 + 2?',
+      question: 'What is 2 + 2? (Integration ' + Date.now() + ')',
       options: ['3', '4', '5', '6'],
       correctAnswer: '4',
       language: 'English'
