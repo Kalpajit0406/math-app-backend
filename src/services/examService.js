@@ -16,13 +16,27 @@ const normalizeExamData = async (examData = {}, session = null) => {
   // 1. If inline questions are provided, save them first
   if (Array.isArray(examData.questions) && examData.questions.length > 0) {
     const createdIds = [];
+    const { normalizeQuestion, generateHash } = require('./questionDuplicateDetector');
     for (const q of examData.questions) {
       if (q._id || q.id) {
         createdIds.push(q._id || q.id);
         continue;
       }
+      const questionText = q.question || q.questionText || '';
+      const normalized = normalizeQuestion(questionText);
+      const hash = generateHash(normalized);
+
+      const existingQ = session
+        ? await Question.findOne({ questionHash: hash }).session(session)
+        : await Question.findOne({ questionHash: hash });
+
+      if (existingQ) {
+        createdIds.push(existingQ._id);
+        continue;
+      }
+
       const newQ = await Question.create([{
-        question: q.question || q.questionText || '',
+        question: questionText,
         options: q.options || [],
         correctAnswer: q.correctAnswer || '',
         language: q.language || examData.language || 'English',
