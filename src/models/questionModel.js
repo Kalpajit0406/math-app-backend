@@ -175,6 +175,43 @@ questionSchema.pre('save', function (next) {
   }
 });
 
+// Automatically delete/remove question from the database if isDeleted is set to true
+questionSchema.pre('save', async function (next) {
+  if (this.isDeleted) {
+    try {
+      await this.constructor.deleteOne({ _id: this._id });
+    } catch (err) {
+      if (typeof next === 'function') return next(err);
+      throw err;
+    }
+  }
+  if (next && typeof next === 'function') {
+    next();
+  }
+});
+
+questionSchema.pre(['updateOne', 'findOneAndUpdate', 'updateMany'], async function (next) {
+  const update = this.getUpdate();
+  if (update) {
+    const isSettingDeleted = 
+      update.isDeleted === true || 
+      (update.$set && update.$set.isDeleted === true);
+      
+    if (isSettingDeleted) {
+      const query = this.getQuery();
+      try {
+        await this.model.deleteMany(query);
+      } catch (err) {
+        if (typeof next === 'function') return next(err);
+        throw err;
+      }
+    }
+  }
+  if (next && typeof next === 'function') {
+    next();
+  }
+});
+
 // Pre-find hook to automatically filter out soft-deleted questions
 questionSchema.pre(/^find/, function() {
   this.where({ isDeleted: { $ne: true } });
