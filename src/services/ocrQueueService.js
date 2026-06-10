@@ -72,7 +72,7 @@ class OCRQueueService {
       },
       $inc: { retryCount: 1, attempts: 1 }
     };
-    return OCRJob.findOneAndUpdate(query, update, { new: true }).exec();
+    return OCRJob.findOneAndUpdate(query, update, { returnDocument: 'after' }).exec();
   }
 
   static async renewJobLock(jobId, workerId, lockDurationMs = 300000) {
@@ -88,7 +88,7 @@ class OCRQueueService {
         updatedAt: now
       }
     };
-    return OCRJob.findOneAndUpdate(query, update, { new: true }).exec();
+    return OCRJob.findOneAndUpdate(query, update, { returnDocument: 'after' }).exec();
   }
 
   static async markProcessing(jobId) {
@@ -119,7 +119,7 @@ class OCRQueueService {
           error: null,
         }
       },
-      { new: true }
+      { returnDocument: 'after' }
     ).exec();
   }
 
@@ -141,7 +141,7 @@ class OCRQueueService {
           processingNode: null
         } 
       },
-      { new: true }
+      { returnDocument: 'after' }
     ).exec();
   }
 
@@ -176,7 +176,7 @@ class OCRQueueService {
           processingNode: null
         }
       },
-      { new: true }
+      { returnDocument: 'after' }
     ).exec();
   }
 
