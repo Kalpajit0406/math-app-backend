@@ -64,7 +64,7 @@ test('Exam Security Telemetry and Anti-Cheat API Verification', async (t) => {
         marksPerQuestion: 4,
         questions: [
           {
-            question: 'DUMMY SECURE QUESTION?',
+            question: 'DUMMY SECURE QUESTION ' + Date.now() + '?',
             options: ['A', 'B', 'C', 'D'],
             correctAnswer: 'A',
             language: 'English',
@@ -191,7 +191,7 @@ test('Exam Security Telemetry and Anti-Cheat API Verification', async (t) => {
         marksPerQuestion: 4,
         questions: [
           {
-            question: 'Timer test?',
+            question: 'Timer test ' + Date.now() + '?',
             options: ['A', 'B', 'C', 'D'],
             correctAnswer: 'A',
             language: 'English',
@@ -270,7 +270,7 @@ test('Exam Security Telemetry and Anti-Cheat API Verification', async (t) => {
         questions: [
           {
             type: 'mcq',
-            questionText: 'What is 1 + 1?',
+            questionText: 'What is 1 + 1? ' + Date.now(),
             options: ['1', '2', '3', '4'],
             correctAnswer: 'B' // Correct answer is B, which corresponds to '2'
           }
