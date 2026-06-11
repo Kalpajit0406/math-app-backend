@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const http = require('http');
 const sharp = require('sharp');
 
-const BASE_URL = 'http://localhost:5000';
+const BASE_URL = 'http://127.0.0.1:5000';
 const STUDENT_PHONE = '6289855545'; // bypass teacher phone triggers student login details in bypass mode
 
 async function request(method, path, body = null, headers = {}) {
