@@ -65,6 +65,39 @@ const attemptService = {
       return attemptObj;
     }
 
+    // Check if there are other exams active/scheduled for this class at the same time
+    const { getExamStartTime, getExamEndTime } = require('../utils/examUtils');
+    const examStart = getExamStartTime(exam);
+    const examEnd = getExamEndTime(exam);
+
+    if (examStart && examEnd) {
+      // Find all attempts of this student
+      const userAttempts = await Attempt.find({ userId }).populate('examId');
+      
+      for (const att of userAttempts) {
+        if (!att.examId || att.examId.isDeleted) {
+          continue;
+        }
+        
+        // Skip current exam
+        if (String(att.examId._id) === String(examId)) {
+          continue;
+        }
+        
+        const otherExam = att.examId;
+        const otherStart = getExamStartTime(otherExam);
+        const otherEnd = getExamEndTime(otherExam);
+        
+        if (otherStart && otherEnd) {
+          // Check if the scheduled time windows overlap
+          const overlaps = (examStart < otherEnd) && (examEnd > otherStart);
+          if (overlaps) {
+            throw new Error('You have already attended another exam scheduled at the same time. You can only attend one exam per scheduled slot.');
+          }
+        }
+      }
+    }
+
     attempt = new Attempt({ userId, examId });
     const savedAttempt = await attempt.save();
     const attemptObj = savedAttempt.toObject();
@@ -139,33 +172,23 @@ const attemptService = {
       
       const savedAttempt = await attempt.save();
 
-      try {
-        const Student = require('../models/studentModel');
-        const student = await Student.findById(userId);
-        if (student && student.studentPhone) {
-          const totalQ = exam ? exam.questions.length : attempt.responses.length;
-          let actualScore = score;
-          if (!isExamEnded && responses && responses.length > 0) {
-            let tempScore = 0;
-            for (const res of responses) {
-              const question = exam.questions.id(res.questionId);
-              if (question) {
-                const userAnswer = res.userAnswer !== undefined ? res.userAnswer : res.selectedAnswer;
-                if (evaluateQuestionCorrectness(question, userAnswer)) tempScore++;
-              }
-            }
-            actualScore = tempScore;
+      if (isExamEnded) {
+        try {
+          const Student = require('../models/studentModel');
+          const student = await Student.findById(userId);
+          if (student && student.studentPhone) {
+            const totalQ = exam ? exam.questions.length : attempt.responses.length;
+            await PerformanceAnalytics.savePerformance(
+              student.studentPhone,
+              attempt._id.toString(),
+              'exam',
+              score,
+              totalQ
+            );
           }
-          await PerformanceAnalytics.savePerformance(
-            student.studentPhone,
-            attempt._id.toString(),
-            'exam',
-            actualScore,
-            totalQ
-          );
+        } catch (err) {
+          console.error('Error saving performance for attempt:', err.message);
         }
-      } catch (err) {
-        console.error('Error saving performance for attempt:', err.message);
       }
 
       return savedAttempt;
@@ -300,31 +323,21 @@ const attemptService = {
         savedAttempt = await attempt.save();
       }
 
-      try {
-        if (student && student.studentPhone) {
-          const totalQ = exam ? exam.questions.length : savedAttempt.responses.length;
-          let actualScore = score;
-          if (!isExamEnded && responses && responses.length > 0) {
-            let tempScore = 0;
-            for (const res of responses) {
-              const question = exam.questions.id(res.questionId);
-              if (question) {
-                const userAnswer = res.selectedAnswer !== undefined ? res.selectedAnswer : res.userAnswer;
-                if (evaluateQuestionCorrectness(question, userAnswer)) tempScore++;
-              }
-            }
-            actualScore = tempScore;
+      if (isExamEnded) {
+        try {
+          if (student && student.studentPhone) {
+            const totalQ = exam ? exam.questions.length : savedAttempt.responses.length;
+            await PerformanceAnalytics.savePerformance(
+              student.studentPhone,
+              savedAttempt._id.toString(),
+              'exam',
+              score,
+              totalQ
+            );
           }
-          await PerformanceAnalytics.savePerformance(
-            student.studentPhone,
-            savedAttempt._id.toString(),
-            'exam',
-            actualScore,
-            totalQ
-          );
+        } catch (err) {
+          console.error('Error saving performance for offline attempt:', err.message);
         }
-      } catch (err) {
-        console.error('Error saving performance for offline attempt:', err.message);
       }
 
       return savedAttempt;

@@ -184,7 +184,7 @@ test('Exam Security Telemetry and Anti-Cheat API Verification', async (t) => {
       {
         classNo: '10',
         language: 'English',
-        date: '2026-05-27',
+        date: '2026-05-28',
         time: '12:00 PM',
         totalQuestions: 1,
         totalTime: 30, // 30 minutes = 1800 seconds

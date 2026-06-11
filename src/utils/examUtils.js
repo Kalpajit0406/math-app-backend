@@ -68,12 +68,64 @@ function getExamEndTime(exam) {
       }
     }
 
-    // Convert IST start numbers to UTC date
     const localUTC = Date.UTC(year, month, day, hour, minute);
     const startTime = new Date(localUTC - (5.5 * 60 * 60 * 1000));
     return new Date(startTime.getTime() + (exam.duration || 0) * 60 * 1000);
   } catch (e) {
     console.error('Error calculating exam end time:', e);
+    return null;
+  }
+}
+
+function getExamStartTime(exam) {
+  try {
+    if (!exam || !exam.date || !exam.time) return null;
+    let cleanDate = exam.date.trim();
+    let cleanTime = exam.time.trim();
+    if (!cleanDate || !cleanTime) return null;
+
+    let year = 0, month = 0, day = 0;
+    if (cleanDate.includes('/')) {
+      const parts = cleanDate.split('/');
+      if (parts.length === 3) {
+        day = parseInt(parts[0], 10);
+        month = parseInt(parts[1], 10) - 1; // JS months are 0-indexed
+        year = parseInt(parts[2], 10);
+      }
+    } else if (cleanDate.includes('-')) {
+      const parts = cleanDate.split('-');
+      if (parts.length === 3) {
+        year = parseInt(parts[0], 10);
+        month = parseInt(parts[1], 10) - 1; // JS months are 0-indexed
+        day = parseInt(parts[2], 10);
+      }
+    } else {
+      const parsed = new Date(cleanDate);
+      if (isNaN(parsed.getTime())) return null;
+      return parsed;
+    }
+
+    let hour = 0, minute = 0;
+    const timeParts = cleanTime.split(':');
+    if (timeParts.length >= 2) {
+      hour = parseInt(timeParts[0], 10);
+      const minPart = timeParts[1].replace(/[^0-9]/g, '');
+      minute = parseInt(minPart, 10);
+
+      const isPm = cleanTime.toLowerCase().includes('pm');
+      const isAm = cleanTime.toLowerCase().includes('am');
+      if (isPm && hour < 12) {
+        hour += 12;
+      } else if (isAm && hour === 12) {
+        hour = 0;
+      }
+    }
+
+    // Convert IST start numbers to UTC date
+    const localUTC = Date.UTC(year, month, day, hour, minute);
+    return new Date(localUTC - (5.5 * 60 * 60 * 1000));
+  } catch (e) {
+    console.error('Error calculating exam start time:', e);
     return null;
   }
 }
@@ -109,12 +161,32 @@ async function evaluateAttemptIfNeeded(attempt, exam) {
     attempt.score = score;
     attempt.markModified('responses');
     await attempt.save();
+
+    // Save performance analytics after the exam has ended
+    try {
+      const Student = require('../models/studentModel');
+      const student = await Student.findById(attempt.userId);
+      if (student && student.studentPhone) {
+        const PerformanceAnalytics = require('../services/performanceAnalyticsService');
+        const totalQ = exam.questions ? exam.questions.length : attempt.responses.length;
+        await PerformanceAnalytics.savePerformance(
+          student.studentPhone,
+          attempt._id.toString(),
+          'exam',
+          score,
+          totalQ
+        );
+      }
+    } catch (err) {
+      console.error('Error saving performance on evaluation:', err.message);
+    }
   }
   return attempt;
 }
 
 module.exports = {
   evaluateQuestionCorrectness,
+  getExamStartTime,
   getExamEndTime,
   evaluateAttemptIfNeeded,
 };
