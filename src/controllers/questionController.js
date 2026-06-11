@@ -68,10 +68,10 @@ const getQuestions = async (req, res) => {
   try {
     const { classNo, language, chapter, search } = req.query;
     const pagination = new PaginationParams(req);
+    const { getClassIdFromNo, getClassNoFromId } = require('../utils/classCache');
     
     let filter = {};
     if (classNo) {
-      const { getClassIdFromNo } = require('../utils/classCache');
       const classId = getClassIdFromNo(classNo);
       if (classId) {
         filter.classId = classId;
@@ -107,6 +107,8 @@ const getQuestions = async (req, res) => {
       pagination
     );
 
+    // paginate() uses .lean() which skips Mongoose virtuals, so classNo is absent.
+    // Explicitly resolve it from classId using the classCache.
     const sanitizedData = result.data.map(q => {
       const qObj = { ...q };
       qObj.id = qObj._id;
@@ -117,6 +119,10 @@ const getQuestions = async (req, res) => {
       }
       qObj.questionText = qObj.questionText || qObj.question || '';
       qObj.type = qObj.type || ((qObj.options && qObj.options.length > 0) ? 'mcq' : 'numeric');
+      // Inject classNo — lean() returns classId (ObjectId) but no virtual classNo
+      if (qObj.classId) {
+        qObj.classNo = getClassNoFromId(qObj.classId);
+      }
       return qObj;
     });
 
@@ -254,9 +260,9 @@ const deleteQuestion = async (req, res) => {
 const getFilteredQuestions = async (req, res) => {
   try {
     const { classNo, language } = req.params;
+    const { getClassIdFromNo, getClassNoFromId } = require('../utils/classCache');
     const filter = {};
     if (classNo) {
-      const { getClassIdFromNo } = require('../utils/classCache');
       const classId = getClassIdFromNo(classNo);
       if (classId) {
         filter.classId = classId;
@@ -273,11 +279,16 @@ const getFilteredQuestions = async (req, res) => {
       }
     }
     
+    // .lean() skips virtuals — explicitly inject classNo from classId
     const questions = await Question.find(filter).lean();
+    const enriched = questions.map(q => ({
+      ...q,
+      classNo: q.classId ? getClassNoFromId(q.classId) : null,
+    }));
     res.status(200).json({
       success: true,
-      count: questions.length,
-      data: questions,
+      count: enriched.length,
+      data: enriched,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
