@@ -106,7 +106,8 @@ function generateQAReport({
   footerPollutionDetected = false,
   chapterHeadingsRemoved = 0,
   duplicatesPrevented = 0,
-  quarantinedQuestions = 0
+  quarantinedQuestions = 0,
+  failedPages = []
 }) {
   const missingQuestions = Math.max(0, expectedQuestions - extractedQuestions);
   
@@ -130,6 +131,7 @@ function generateQAReport({
   if (footerPollutionDetected) {
     score -= 5;
   }
+  score -= failedPages.length * 20; // Penalize 20 points per failed page
 
   score += Math.min(10, duplicatesPrevented * 2);
   score += Math.min(5, chapterHeadingsRemoved * 1);
@@ -147,7 +149,8 @@ function generateQAReport({
     quarantinedQuestions,
     overallQualityScore,
     completenessStatus,
-    warningMessage
+    warningMessage,
+    failedPages
   };
 }
 
@@ -410,11 +413,12 @@ class PdfController {
 
       console.log(`[PdfController] Starting synchronous extraction: ${totalPages} pages`);
 
-      const OCRProviderAdapter = require('../services/ocrProviderAdapter');
+      const { OCRProviderAdapter } = require('../services/ocrProviderAdapter');
       const { PageClassificationEngine } = require('../services/pageClassificationEngine');
 
       const rawPageTexts = [];
       const ocrResults = [];
+      const failedPages = [];
 
       // Loop over pages and run OCR Provider
       for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
@@ -422,10 +426,16 @@ class PdfController {
         try {
           const pageBuffer = await extractPageAsBuffer(pdfPath, pageNum);
           const ocrResult = await OCRProviderAdapter.processImage(pageBuffer, 'image/jpeg', `page_${pageNum}.jpg`);
+          console.log(`[PdfController] OCR completed for page ${pageNum}/${totalPages}`);
           ocrResults.push(ocrResult);
           rawPageTexts.push(ocrResult.latex || ocrResult.rawText || '');
         } catch (pageErr) {
-          console.error(`[PdfController] Page ${pageNum} failed (skipping):`, pageErr.message);
+          console.error(`[PdfController] Page ${pageNum} failed:`, pageErr.message);
+          failedPages.push({
+            page: pageNum,
+            status: "FAILED",
+            reason: pageErr.message
+          });
         }
       }
 
@@ -534,7 +544,8 @@ class PdfController {
           chapterHeadingsRemoved: rawPageTexts.reduce((acc, text) => {
             const matches = text.match(/\b(?:chapter|exercise|ch\.)\s*\d/gi);
             return acc + (matches ? matches.length : 0);
-          }, 0)
+          }, 0),
+          failedPages
         },
         'completed',
         100

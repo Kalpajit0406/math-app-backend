@@ -175,6 +175,8 @@ class VerificationQueueManager {
       }
     }
 
+    const failedPages = pipelineMeta.failedPages || [];
+
     let score = 100;
     score -= quarantinedQuestions * 5;
     score -= missingQuestions * 10;
@@ -185,6 +187,7 @@ class VerificationQueueManager {
     if (footerPollutionDetected) {
       score -= 5;
     }
+    score -= failedPages.length * 20; // Penalize 20 points per failed page
     score += Math.min(10, duplicatesPrevented * 2);
     score += Math.min(5, chapterHeadingsRemoved * 1);
     const overallQualityScore = Math.max(0, Math.min(100, Math.round(score)));
@@ -200,7 +203,8 @@ class VerificationQueueManager {
       quarantinedQuestions,
       overallQualityScore,
       completenessStatus,
-      warningMessage
+      warningMessage,
+      failedPages
     };
 
     const session = await VerificationSession.create({

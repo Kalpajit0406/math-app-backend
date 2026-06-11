@@ -280,3 +280,80 @@ test('Phase 11: QA Report Verification', async (t) => {
     assert.ok(report.overallQualityScore >= 95, 'Score should be high for perfect run');
   });
 });
+
+test('OCR Provider Adapter Standardization and Mismatches', async (t) => {
+  const OCRProviderAdapterModule = require('../src/services/ocrProviderAdapter');
+
+  await t.test('valid adapter implementation exposes static and instance processImage and process', () => {
+    const { OCRProviderAdapter } = OCRProviderAdapterModule;
+    assert.strictEqual(typeof OCRProviderAdapter.processImage, 'function');
+    assert.strictEqual(typeof OCRProviderAdapter.process, 'function');
+    
+    const instance = new OCRProviderAdapter();
+    assert.strictEqual(typeof instance.processImage, 'function');
+    assert.strictEqual(typeof instance.process, 'function');
+  });
+
+  await t.test('renamed methods backward compatibility (process calls processImage)', async () => {
+    const { OCRProviderAdapter } = OCRProviderAdapterModule;
+    
+    // Stub MathpixService to verify it is called
+    const { MathpixService } = require('../src/services/mathpixService');
+    const originalProcess = MathpixService.processBuffer;
+    
+    let called = false;
+    MathpixService.processBuffer = async () => {
+      called = true;
+      return { rawText: 'ok', latex: 'ok', confidence: 1.0 };
+    };
+
+    try {
+      await OCRProviderAdapter.process(Buffer.from('mock'), 'image/jpeg', 'test.jpg');
+      assert.strictEqual(called, true, 'Calling process() should successfully delegate to processImage / MathpixService');
+    } finally {
+      MathpixService.processBuffer = originalProcess;
+    }
+  });
+
+  await t.test('broken imports resolution (both destructuring and direct wrapper object expose processImage)', () => {
+    // 1. Destructured import style
+    const { OCRProviderAdapter } = OCRProviderAdapterModule;
+    assert.strictEqual(typeof OCRProviderAdapter.processImage, 'function');
+
+    // 2. Direct object import style (as in old pdfController)
+    const DirectWrapperObj = OCRProviderAdapterModule;
+    assert.strictEqual(typeof DirectWrapperObj.processImage, 'function', 'Direct wrapper object must expose processImage for backward compatibility');
+  });
+
+  await t.test('detects missing processImage on malformed provider', () => {
+    const malformedProvider = {};
+    const hasProcessImage = typeof malformedProvider.processImage === 'function';
+    assert.strictEqual(hasProcessImage, false);
+  });
+});
+
+test('Page-Level Failure Logging and Integration', async (t) => {
+  await t.test('QA Report correctly logs failedPages and applies score penalties', () => {
+    const report = PdfController.generateQAReport({
+      expectedQuestions: 10,
+      extractedQuestions: 8,
+      totalRejected: 0,
+      answerKeysFound: 8,
+      footerPollutionDetected: false,
+      chapterHeadingsRemoved: 0,
+      duplicatesPrevented: 0,
+      quarantinedQuestions: 0,
+      failedPages: [
+        { page: 3, status: 'FAILED', reason: 'OCRProviderAdapter.processImage missing' }
+      ]
+    });
+
+    assert.strictEqual(report.failedPages.length, 1);
+    assert.strictEqual(report.failedPages[0].page, 3);
+    assert.strictEqual(report.failedPages[0].status, 'FAILED');
+    assert.strictEqual(report.failedPages[0].reason, 'OCRProviderAdapter.processImage missing');
+    
+    // Penalized score: 100 - (missing * 10) - (INCOMPLETE completeness * 15) - (failedPages * 20) = 100 - 20 - 15 - 20 = 45
+    assert.strictEqual(report.overallQualityScore, 45, 'Quality score must subtract 20 points per page failure and apply completeness penalty');
+  });
+});

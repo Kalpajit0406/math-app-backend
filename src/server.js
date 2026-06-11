@@ -22,6 +22,21 @@ const healthRoutes = require('./routes/healthRoutes');
 const selfAssessmentRoutes = require('./routes/selfAssessmentRoutes');
 const errorHandler = require('./middleware/errorHandler');
 
+// Startup validation for OCR Provider Adapter
+try {
+  const { OCRProviderAdapter } = require('./services/ocrProviderAdapter');
+  if (!OCRProviderAdapter || typeof OCRProviderAdapter.processImage !== 'function') {
+    throw new Error('processImage() not found');
+  }
+} catch (err) {
+  console.error('\n====================================================');
+  console.error('OCR Adapter Misconfigured:');
+  console.error(err.message);
+  console.error('Provider: MathpixProvider');
+  console.error('====================================================\n');
+  process.exit(1);
+}
+
 const path = require('path');
 const app = express();
 app.set('trust proxy', true);

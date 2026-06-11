@@ -34,7 +34,8 @@ const verificationSessionSchema = new mongoose.Schema({
     quarantinedQuestions:    { type: Number, default: 0 },
     overallQualityScore:     { type: Number, default: 0 },
     completenessStatus:      { type: String, default: 'COMPLETE' },
-    warningMessage:          { type: String, default: null }
+    warningMessage:          { type: String, default: null },
+    failedPages:             { type: [mongoose.Schema.Types.Mixed], default: [] }
   },
 }, { 
   timestamps: true,
