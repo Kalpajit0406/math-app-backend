@@ -174,7 +174,16 @@ studentSchema.pre('validate', async function(next) {
       this.passwordChangedAt = new Date();
     }
   }
-  if (this.isModified('accountType') || !this.permissions || Object.keys(this.permissions).length === 0) {
+  const hasEmptyPermissions = !this.permissions || 
+    (this.permissions.canAccessExams === false && 
+     this.permissions.canAccessTeacherExams === false && 
+     this.permissions.canGeneratePractice === false && 
+     this.permissions.canReceiveNotifications === false && 
+     this.permissions.canViewPremiumAnalytics === false && 
+     this.permissions.canAccessLeaderboard === false && 
+     this.permissions.canJoinJointEntrance === false);
+
+  if (this.isNew || this.isModified('accountType') || hasEmptyPermissions) {
     const type = this.accountType || 'NORMAL';
     const defaults = DEFAULT_PERMISSIONS[type] || DEFAULT_PERMISSIONS.NORMAL;
     this.permissions = { ...defaults };
