@@ -8,7 +8,6 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
       - name: Deploy to DigitalOcean
         uses: appleboy/ssh-action@v1.2.0
@@ -20,5 +19,28 @@ jobs:
             cd /root/mwsd-v2
             git pull origin main
             npm install
+            
+            # Automatically update Nginx configuration to support 20MB file uploads
+            if [ -f /etc/nginx/nginx.conf ]; then
+              echo "Configuring Nginx client_max_body_size to 20M..."
+              if grep -q "client_max_body_size" /etc/nginx/nginx.conf; then
+                sudo sed -i 's/client_max_body_size [0-9]\+[a-zA-Z]\+;/client_max_body_size 20M;/g' /etc/nginx/nginx.conf
+              else
+                sudo sed -i '/http {/a \\tclient_max_body_size 20M;' /etc/nginx/nginx.conf
+              fi
+              
+              # Also check and update site-specific configs
+              sudo find /etc/nginx/sites-available/ /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ -type f 2>/dev/null | while read -r file; do
+                if grep -q "client_max_body_size" "$file"; then
+                  sudo sed -i 's/client_max_body_size [0-9]\+[a-zA-Z]\+;/client_max_body_size 20M;/g' "$file"
+                fi
+              done
+              
+              # Test and reload Nginx
+              sudo nginx -t && (sudo systemctl reload nginx || sudo service nginx reload || sudo nginx -s reload)
+            else
+              echo "Nginx not found at /etc/nginx/nginx.conf. Skipping Nginx configuration."
+            fi
+            
             pm2 restart mathswithsd-v2
             pm2 save
