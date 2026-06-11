@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
 
-const BASE_URL = 'http://localhost:5000';
+const BASE_URL = 'http://127.0.0.1:5000';
 const STUDENT_PHONE = '6289855545';
 
 async function request(method, path, body = null, headers = {}) {

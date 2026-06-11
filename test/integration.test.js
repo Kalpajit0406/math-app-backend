@@ -5,7 +5,7 @@
 
 const http = require('http');
 
-const BASE_URL = 'http://localhost:5000';
+const BASE_URL = 'http://127.0.0.1:5000';
 const TEACHER_PHONE = '6289855545';
 const TEACHER_PASS = process.env.TEACHER_BYPASS_PASSWORD || 'admin123';
 
