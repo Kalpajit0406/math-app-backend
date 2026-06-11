@@ -23,6 +23,19 @@ const verificationSessionSchema = new mongoose.Schema({
     sourceUsed:      { type: String, default: 'unknown' },
     processingTimeMs:{ type: Number, default: 0 },
   },
+  qaReport: {
+    expectedQuestions:       { type: Number, default: 0 },
+    extractedQuestions:      { type: Number, default: 0 },
+    missingQuestions:        { type: Number, default: 0 },
+    answerKeysFound:         { type: Number, default: 0 },
+    footerPollutionDetected: { type: Boolean, default: false },
+    chapterHeadingsRemoved:  { type: Number, default: 0 },
+    duplicatesPrevented:     { type: Number, default: 0 },
+    quarantinedQuestions:    { type: Number, default: 0 },
+    overallQualityScore:     { type: Number, default: 0 },
+    completenessStatus:      { type: String, default: 'COMPLETE' },
+    warningMessage:          { type: String, default: null }
+  },
 }, { 
   timestamps: true,
   toJSON: { virtuals: true },

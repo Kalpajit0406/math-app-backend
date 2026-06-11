@@ -124,6 +124,7 @@ class VerificationQueueManager {
         rawOcrData: compactOcrData,
         validationErrors:   Array.isArray(validation.errors)   ? validation.errors   : [],
         validationWarnings: Array.isArray(validation.warnings) ? validation.warnings : [],
+        quarantineReasons:  Array.isArray(q.quarantineReasons) ? q.quarantineReasons : [],
         verified:        false,
         isDeleted:       false,
         extractionState: q.extractionState || 'ACCEPTED',
@@ -143,6 +144,65 @@ class VerificationQueueManager {
     const itemsWithSessionId = items.map(item => ({ ...item, sessionId, expiresAt }));
     await VerificationSessionItem.insertMany(itemsWithSessionId);
 
+    let duplicatesPrevented = 0;
+    let quarantinedQuestions = 0;
+    let answerKeysFound = 0;
+    for (const item of items) {
+      if (item.duplicateInfo?.detected) {
+        duplicatesPrevented++;
+      }
+      if (item.extractionState === 'QUARANTINED') {
+        quarantinedQuestions++;
+      }
+      if (item.correctAnswer) {
+        answerKeysFound++;
+      }
+    }
+
+    const expectedQuestions = pipelineMeta.expectedQuestions || 0;
+    const totalRejected = pipelineMeta.totalRejected || 0;
+    const footerPollutionDetected = pipelineMeta.footerPollutionDetected || false;
+    const chapterHeadingsRemoved = pipelineMeta.chapterHeadingsRemoved || 0;
+
+    const missingQuestions = Math.max(0, expectedQuestions - items.length);
+    let completenessStatus = 'COMPLETE';
+    let warningMessage = null;
+    if (expectedQuestions > 0) {
+      const completenessRatio = items.length / expectedQuestions;
+      if (completenessRatio < 0.90) {
+        completenessStatus = 'INCOMPLETE';
+        warningMessage = `Missing questions detected. Expected: ${expectedQuestions}, Extracted: ${items.length}`;
+      }
+    }
+
+    let score = 100;
+    score -= quarantinedQuestions * 5;
+    score -= missingQuestions * 10;
+    if (completenessStatus === 'INCOMPLETE') {
+      score -= 15;
+    }
+    score -= totalRejected * 3;
+    if (footerPollutionDetected) {
+      score -= 5;
+    }
+    score += Math.min(10, duplicatesPrevented * 2);
+    score += Math.min(5, chapterHeadingsRemoved * 1);
+    const overallQualityScore = Math.max(0, Math.min(100, Math.round(score)));
+
+    const qaReport = {
+      expectedQuestions,
+      extractedQuestions: items.length,
+      missingQuestions,
+      answerKeysFound: answerKeysFound || pipelineMeta.answerKeysFound || 0,
+      footerPollutionDetected,
+      chapterHeadingsRemoved,
+      duplicatesPrevented,
+      quarantinedQuestions,
+      overallQualityScore,
+      completenessStatus,
+      warningMessage
+    };
+
     const session = await VerificationSession.create({
       sessionId,
       userId,
@@ -159,6 +219,7 @@ class VerificationQueueManager {
         sourceUsed:       pipelineMeta.sourceUsed       || 'unknown',
         processingTimeMs: pipelineMeta.processingTimeMs || 0,
       },
+      qaReport
     });
 
     if (archiveDocs.length > 0) {
@@ -265,6 +326,7 @@ class VerificationQueueManager {
           rawOcrData: compactOcrData,
           validationErrors:   Array.isArray(validation.errors)   ? validation.errors   : [],
           validationWarnings: Array.isArray(validation.warnings) ? validation.warnings : [],
+          quarantineReasons:  Array.isArray(q.quarantineReasons) ? q.quarantineReasons : [],
           verified:        q.verified || false,
           isDeleted:       q.isDeleted || false,
           extractionState: q.extractionState || 'ACCEPTED',

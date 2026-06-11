@@ -7,6 +7,150 @@ const fs = require('fs');
 const path = require('path');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
+// Canonicalize answer labels mapping
+function canonicalizeAnswer(ans) {
+  if (!ans) return '';
+  const labelMap = {
+    'a': 'A', 'b': 'B', 'c': 'C', 'd': 'D',
+    'A': 'A', 'B': 'B', 'C': 'C', 'D': 'D',
+    'ক': 'A', 'খ': 'B', 'গ': 'C', 'ঘ': 'D',
+    '১': 'A', '২': 'B', '৩': 'C', '৪': 'D',
+    '1': 'A', '2': 'B', '3': 'C', '4': 'D',
+  };
+  return labelMap[ans.trim()] || ans.trim().toUpperCase();
+}
+
+// Answer Key Parser
+function parseAnswerKeys(text) {
+  const answers = [];
+  if (!text) return answers;
+  const regex = /(\d{1,3})\s*[-–\s\.)\:]+\s*\(?([A-Da-dকখগঘ১২৩৪])\)?/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const qNum = parseInt(match[1], 10);
+    const ans = canonicalizeAnswer(match[2]);
+    answers.push({ questionNumber: qNum, correctAnswer: ans });
+  }
+  return answers;
+}
+
+// Count Expected Questions
+function countExpectedQuestions(text) {
+  if (!text) return 0;
+  const lines = text.split('\n');
+  const foundNumbers = new Set();
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const match = trimmed.match(/^(?:Q|Question\s*|(?:\d+[\.\)]))?(\d+)/i);
+    if (match) {
+      if (/^(?:Q\d+|Question\s*\d+|\d+[\.\)])/i.test(trimmed)) {
+        foundNumbers.add(parseInt(match[1], 10));
+      }
+    }
+  }
+  return foundNumbers.size;
+}
+
+// Repeated Lines & Headers/Footers cleaning
+function removeHeadersFootersAndRepeatedLines(pageTexts) {
+  const pageLines = pageTexts.map(text => 
+    text.split('\n').map(line => line.trim()).filter(Boolean)
+  );
+
+  const linePageCounts = new Map();
+  pageLines.forEach((lines) => {
+    const uniqueLinesInPage = new Set(lines);
+    uniqueLinesInPage.forEach(line => {
+      if (line.length < 4) return;
+      linePageCounts.set(line, (linePageCounts.get(line) || 0) + 1);
+    });
+  });
+
+  const repeatedLines = new Set();
+  const threshold = Math.max(2, Math.ceil(pageTexts.length * 0.3));
+  for (const [line, count] of linePageCounts.entries()) {
+    if (count >= threshold) {
+      repeatedLines.add(line);
+    }
+  }
+
+  return pageTexts.map(text => {
+    const lines = text.split('\n');
+    const cleaned = lines.filter(line => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      
+      if (/^Prepared by.*/i.test(trimmed)) return false;
+      if (/^Downloaded from.*/i.test(trimmed)) return false;
+      if (/^Page\s+\d+/i.test(trimmed)) return false;
+      if (/^Page\s+No\.?\s*\d*/i.test(trimmed)) return false;
+      if (/^www\..*/i.test(trimmed)) return false;
+      if (/^https?:\/\/.*/i.test(trimmed)) return false;
+      if (/^chhaya\s+mathematics/i.test(trimmed)) return false;
+      
+      if (repeatedLines.has(trimmed)) {
+        return false;
+      }
+      return true;
+    });
+    return cleaned.join('\n');
+  });
+}
+
+// QA Report Generator
+function generateQAReport({
+  expectedQuestions = 0,
+  extractedQuestions = 0,
+  totalRejected = 0,
+  answerKeysFound = 0,
+  footerPollutionDetected = false,
+  chapterHeadingsRemoved = 0,
+  duplicatesPrevented = 0,
+  quarantinedQuestions = 0
+}) {
+  const missingQuestions = Math.max(0, expectedQuestions - extractedQuestions);
+  
+  let completenessStatus = 'COMPLETE';
+  let warningMessage = null;
+  if (expectedQuestions > 0) {
+    const completenessRatio = extractedQuestions / expectedQuestions;
+    if (completenessRatio < 0.90) {
+      completenessStatus = 'INCOMPLETE';
+      warningMessage = `Missing questions detected. Expected: ${expectedQuestions}, Extracted: ${extractedQuestions}`;
+    }
+  }
+
+  let score = 100;
+  score -= quarantinedQuestions * 5;
+  score -= missingQuestions * 10;
+  if (completenessStatus === 'INCOMPLETE') {
+    score -= 15;
+  }
+  score -= totalRejected * 3;
+  if (footerPollutionDetected) {
+    score -= 5;
+  }
+
+  score += Math.min(10, duplicatesPrevented * 2);
+  score += Math.min(5, chapterHeadingsRemoved * 1);
+
+  const overallQualityScore = Math.max(0, Math.min(100, Math.round(score)));
+
+  return {
+    expectedQuestions,
+    extractedQuestions,
+    missingQuestions,
+    answerKeysFound,
+    footerPollutionDetected,
+    chapterHeadingsRemoved,
+    duplicatesPrevented,
+    quarantinedQuestions,
+    overallQualityScore,
+    completenessStatus,
+    warningMessage
+  };
+}
+
 function getPdfPageCount(pdfPath) {
   return new Promise((resolve, reject) => {
     exec(`pdfinfo "${pdfPath}"`, (error, stdout, stderr) => {
@@ -228,13 +372,14 @@ class PdfController {
    */
   async extractQuestionsFromPdf(req, res) {
     let pdfPath = null;
-    let ownedPdf = false; // did we download it (needs cleanup)?
+    let ownedPdf = false;
+    const requestStartedAt = Date.now();
 
     try {
       // ── 1. Resolve PDF path ───────────────────────────────────────────
       if (req.file) {
         pdfPath = req.file.path;
-        ownedPdf = false; // multer owns cleanup
+        ownedPdf = false;
       } else if (req.body && req.body.url) {
         pdfPath = path.join(__dirname, `../../public/temp/pdf-${Date.now()}.pdf`);
         ownedPdf = true;
@@ -265,70 +410,142 @@ class PdfController {
 
       console.log(`[PdfController] Starting synchronous extraction: ${totalPages} pages`);
 
-      // ── 3. Process each page synchronously ────────────────────────────
-      const allQuestions = [];
-      let globalOrder = 0;
+      const OCRProviderAdapter = require('../services/ocrProviderAdapter');
+      const { PageClassificationEngine } = require('../services/pageClassificationEngine');
 
+      const rawPageTexts = [];
+      const ocrResults = [];
+
+      // Loop over pages and run OCR Provider
       for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-        console.log(`[PdfController] Processing page ${pageNum}/${totalPages}`);
+        console.log(`[PdfController] Running OCR on page ${pageNum}/${totalPages}`);
         try {
           const pageBuffer = await extractPageAsBuffer(pdfPath, pageNum);
-          const result = await OCRPipeline.runFromBuffer(
-            pageBuffer,
-            'image/jpeg',
-            `page_${pageNum}.jpg`
-          );
-
-          const pageQuestions = result.parsedQuestions || [];
-          console.log(`[PdfController] Page ${pageNum}: extracted ${pageQuestions.length} questions`);
-
-          // Prefix question numbers with page number for traceability
-          pageQuestions.forEach(q => {
-            globalOrder++;
-            q.detectionOrder = globalOrder;
-            q.questionNumber = pageQuestions.length > 1
-              ? `${pageNum}-${q.questionNumber || globalOrder}`
-              : q.questionNumber || String(globalOrder);
-          });
-
-          allQuestions.push(...pageQuestions);
+          const ocrResult = await OCRProviderAdapter.processImage(pageBuffer, 'image/jpeg', `page_${pageNum}.jpg`);
+          ocrResults.push(ocrResult);
+          rawPageTexts.push(ocrResult.latex || ocrResult.rawText || '');
         } catch (pageErr) {
-          // Don't abort — log and continue with remaining pages
           console.error(`[PdfController] Page ${pageNum} failed (skipping):`, pageErr.message);
         }
       }
 
-      console.log(`[PdfController] Total questions extracted: ${allQuestions.length}`);
+      // ── 3. Clean page texts & remove repeated lines ──────────────────
+      const cleanedPageTexts = removeHeadersFootersAndRepeatedLines(rawPageTexts);
 
-      // ── 4. Create VerificationSession ─────────────────────────────────
+      const allAnswerKeys = [];
+      const nonAnsKeyPageTexts = [];
+      const nonAnsKeyOcrResults = [];
+
+      for (let i = 0; i < cleanedPageTexts.length; i++) {
+        const text = cleanedPageTexts[i];
+        const classification = PageClassificationEngine.classifyPage(text);
+
+        if (classification.pageType === 'ANSWER_KEY_PAGE') {
+          console.log(`[PdfController] Page ${i + 1} detected as ANSWER_KEY_PAGE. Extracting answer keys.`);
+          const keys = parseAnswerKeys(text);
+          allAnswerKeys.push(...keys);
+        } else {
+          nonAnsKeyPageTexts.push(text);
+          nonAnsKeyOcrResults.push(ocrResults[i]);
+        }
+      }
+
+      // ── 4. Count expected questions from non-answer-key pages ────────
+      let expectedQuestionCount = 0;
+      nonAnsKeyPageTexts.forEach(text => {
+        expectedQuestionCount += countExpectedQuestions(text);
+      });
+
+      console.log(`[PdfController] Expected questions count: ${expectedQuestionCount}`);
+
+      // ── 5. Combine non-answer-key page texts for segmentation ────────
+      let finalQuestions = [];
+      if (nonAnsKeyOcrResults.length > 0) {
+        const combinedRawText = nonAnsKeyOcrResults.map(r => r.rawText || '').join('\n\n');
+        const combinedLatex = nonAnsKeyOcrResults.map(r => r.latex || r.rawText || '').join('\n\n');
+        const avgConfidence = nonAnsKeyOcrResults.reduce((sum, r) => sum + (r.confidence || 1.0), 0) / nonAnsKeyOcrResults.length;
+
+        const combinedOcrResult = {
+          rawText: combinedRawText,
+          latex: combinedLatex,
+          confidence: avgConfidence,
+          lines: nonAnsKeyOcrResults.flatMap(r => r.lines || [])
+        };
+
+        const parseResult = await OCRPipeline.runParsing(combinedOcrResult, req.file?.originalname || 'document.pdf');
+        
+        // Accumulate any answer keys found in sections
+        if (parseResult.answerKeys) {
+          allAnswerKeys.push(...parseResult.answerKeys);
+        }
+
+        const validationResult = await OCRPipeline.runValidation(
+          parseResult.parsedQuestions,
+          combinedOcrResult,
+          parseResult.pageType,
+          parseResult.sections,
+          parseResult.totalRejected,
+          null, // preprocessInfo
+          req.file?.originalname || 'document.pdf',
+          allAnswerKeys
+        );
+
+        finalQuestions = validationResult.parsedQuestions || [];
+      }
+
+      // Add detectionOrder and traceable questionNumbers
+      finalQuestions.forEach((q, idx) => {
+        q.detectionOrder = idx + 1;
+        if (!q.questionNumber || q.questionNumber === String(idx + 1)) {
+          q.questionNumber = String(idx + 1);
+        }
+      });
+
+      console.log(`[PdfController] Total questions extracted: ${finalQuestions.length}`);
+
+      // ── 6. Create VerificationSession ─────────────────────────────────
       const sessionId = `pdf_sync_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const userId = req.user?.id || req.user?._id || null;
+
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'User credentials not found'
+        });
+      }
 
       const session = await VerificationQueueManager.createSession(
         sessionId,
         userId,
-        allQuestions,
+        finalQuestions,
         86400, // 24h TTL
         null,
         {
           pageType: 'PDF_DOCUMENT',
           sectionsFound: 0,
-          totalExtracted: allQuestions.length,
+          totalExtracted: finalQuestions.length,
           totalRejected: 0,
           sourceUsed: 'pdf_sync',
-          processingTimeMs: 0,
-          totalPages
+          processingTimeMs: Date.now() - requestStartedAt,
+          totalPages,
+          expectedQuestions: expectedQuestionCount,
+          answerKeysFound: allAnswerKeys.length,
+          footerPollutionDetected: rawPageTexts.some(t => /(?:Prepared by|Downloaded from|Page\s+\d+|www\..*|https?:\/\/.*)/i.test(t)),
+          chapterHeadingsRemoved: rawPageTexts.reduce((acc, text) => {
+            const matches = text.match(/\b(?:chapter|exercise|ch\.)\s*\d/gi);
+            return acc + (matches ? matches.length : 0);
+          }, 0)
         },
         'completed',
         100
       );
 
-      // ── 5. Cleanup PDF from disk ───────────────────────────────────────
+      // ── 7. Cleanup PDF from disk ───────────────────────────────────────
       if (ownedPdf && pdfPath && fs.existsSync(pdfPath)) {
         try { fs.unlinkSync(pdfPath); } catch (_) {}
       }
 
-      // ── 6. Return completed session immediately ────────────────────────
+      // ── 8. Return completed session immediately ────────────────────────
       return res.status(200).json({
         success: true,
         data: {
@@ -336,7 +553,7 @@ class PdfController {
           sessionId: session.sessionId,
           queueSessionId: session.sessionId,
           currentIndex: 0,
-          total: allQuestions.length,
+          total: finalQuestions.length,
           items: session.items || [],
           questions: session.items || [],
           status: 'completed',
@@ -347,7 +564,6 @@ class PdfController {
       });
 
     } catch (error) {
-      // Cleanup on error
       if (ownedPdf && pdfPath && fs.existsSync(pdfPath)) {
         try { fs.unlinkSync(pdfPath); } catch (_) {}
       }
@@ -386,5 +602,12 @@ class PdfController {
     return this.upload;
   }
 }
+
+// Expose helper functions for unit testing
+PdfController.removeHeadersFootersAndRepeatedLines = removeHeadersFootersAndRepeatedLines;
+PdfController.countExpectedQuestions = countExpectedQuestions;
+PdfController.generateQAReport = generateQAReport;
+PdfController.parseAnswerKeys = parseAnswerKeys;
+PdfController.canonicalizeAnswer = canonicalizeAnswer;
 
 module.exports = PdfController;

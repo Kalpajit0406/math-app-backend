@@ -287,6 +287,55 @@ function routeToParser(segmentText, parserType, ocrConfidence) {
 
 // ─── 5. STRUCTURAL PRE-FILTER ────────────────────────────────────────────────
 /**
+ * Candidate filtering logic to reject non-question lines.
+ */
+function isQuestionCandidate(text) {
+  if (!text || typeof text !== 'string') return false;
+  const trimmed = text.trim();
+  
+  const rejectPatterns = [
+    /^(?:CHAPTER|UNIT|EXERCISE|MULTIPLE CHOICE QUESTIONS|SHORT ANSWER QUESTIONS|LONG ANSWER QUESTIONS|ANSWERS|SOLUTIONS|ANSWER KEY|INDEX|CONTENTS)\b/i,
+    /^(?:CHAPTER|UNIT|EXERCISE|MULTIPLE CHOICE QUESTIONS|SHORT ANSWER QUESTIONS|LONG ANSWER QUESTIONS|ANSWERS|SOLUTIONS|ANSWER KEY|INDEX|CONTENTS)\s*[-–\:\d]/i,
+    /^(?:Conventional\s*Type|Multiple\s*Choice\s*Questions|Fill\s*in\s*the\s*Blank|Column\s*Matching|Analytical\s*Type|Short\s*Answer\s*Type|Long\s*Answer\s*Type|উত্তরমালা|উত্তর|Answers?(?:\s*Key)?)\s*$/i
+  ];
+
+  for (const pattern of rejectPatterns) {
+    if (pattern.test(trimmed)) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Answer Key Parsing Helper
+ */
+function parseAnswerKeys(text) {
+  const answers = [];
+  if (!text) return answers;
+  
+  const canonicalizeAnswer = (ans) => {
+    if (!ans) return '';
+    const labelMap = {
+      'a': 'A', 'b': 'B', 'c': 'C', 'd': 'D',
+      'A': 'A', 'B': 'B', 'C': 'C', 'D': 'D',
+      'ক': 'A', 'খ': 'B', 'গ': 'C', 'ঘ': 'D',
+      '১': 'A', '২': 'B', '৩': 'C', '৪': 'D',
+      '1': 'A', '2': 'B', '3': 'C', '4': 'D',
+    };
+    return labelMap[ans.trim()] || ans.trim().toUpperCase();
+  };
+
+  const regex = /(\d{1,3})\s*[-–\s\.)\:]+\s*\(?([A-Da-dকখগঘ১২৩৪])\)?/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const qNum = parseInt(match[1], 10);
+    const ans = canonicalizeAnswer(match[2]);
+    answers.push({ questionNumber: qNum, correctAnswer: ans });
+  }
+  return answers;
+}
+
+/**
  * Quick pre-filter check BEFORE creating the full enriched object.
  * Returns { skip: true, reason } if this segment should be discarded.
  */
@@ -297,13 +346,8 @@ function preFilterSegment(questionText, questionNum, seenNumbers) {
     return { skip: true, reason: `Fragment too short (${text.length} chars)` };
   }
 
-  // Section header leaked through
-  if (
-    ContentClassificationEngine.classifyLine(text) === 'SECTION_TITLE' ||
-    /^(?:Conventional\s*Type|Multiple\s*Choice\s*Questions|Fill\s*in\s*the\s*Blank|Column\s*Matching|Analytical\s*Type|Short\s*Answer\s*Type|Long\s*Answer\s*Type|উত্তরমালা)\s*$/i.test(text) ||
-    /\b(?:exercise|chapter|ch\.)\s*\d/i.test(text)
-  ) {
-    return { skip: true, reason: `Section header: "${text}"` };
+  if (!isQuestionCandidate(text)) {
+    return { skip: true, reason: `Candidate filter rejected: "${text}"` };
   }
 
   // Answer key string leaked through
@@ -369,30 +413,52 @@ function detectOverlappingBoxes(lines) {
 /**
  * Compute a composite confidence score from OCR and parser signals.
  */
-function computeConfidenceScore(ocrConfidence, parserConfidence, layoutConfidence, sectionConfidence, segmentText, parsedBlock, questionNumber) {
-  const ocr    = ocrConfidence    != null ? ocrConfidence    : 0.80;
+function computeConfidenceScore(ocrConfidence, parserConfidence, layoutConfidence, sectionConfidence, segmentText, parsedBlock, questionNumber, extraSignals = {}) {
+  const ocr = ocrConfidence != null ? ocrConfidence : 0.80;
   const parser = parserConfidence != null ? parserConfidence : 0.70;
   const layout = layoutConfidence != null ? layoutConfidence : 0.80;
-  const sect   = sectionConfidence != null ? sectionConfidence : 0.80;
+  const sect = sectionConfidence != null ? sectionConfidence : 0.80;
 
   const questionText = (segmentText || parsedBlock?.question || '').trim();
 
-  // 1. Structural confidence
-  let structuralConfidence = 1.0;
-  if (questionText.length < 20) structuralConfidence -= 0.15;
-  if (questionText.length < 10) structuralConfidence -= 0.20;
+  // 1. Boundary Confidence (25%)
+  let boundaryConfidence = questionNumber != null ? 1.0 : 0.75;
+  const bleedRegex = /(?:\n\s*\d+[\s.)]|\s+\([b-z]\)\s+|\bQ\d+\b)/;
+  if (bleedRegex.test(questionText)) {
+    boundaryConfidence = Math.max(0, boundaryConfidence - 0.25);
+  }
 
+  // 2. Option Integrity (20%)
   const format = (parsedBlock?.format || '').toLowerCase();
   const options = parsedBlock?.options || [];
   const filledOptions = options.filter(o => o.text && o.text.trim().length > 0).length;
-
-  if (['mcq', 'line-based', 'inline-mcq', 'structured'].includes(format)) {
-    if (filledOptions < 4) structuralConfidence -= 0.15;
-    if (filledOptions < 2) structuralConfidence -= 0.35;
+  const isMCQ = ['mcq', 'line-based', 'inline-mcq', 'structured'].includes(format);
+  
+  let optionIntegrity = 1.0;
+  if (isMCQ) {
+    if (filledOptions >= 4) optionIntegrity = 1.0;
+    else if (filledOptions === 3) optionIntegrity = 0.75;
+    else if (filledOptions === 2) optionIntegrity = 0.50;
+    else optionIntegrity = 0.0;
   }
-  structuralConfidence = Math.max(0, structuralConfidence);
 
-  // 2. LaTeX confidence: deduct 0.15 per unmatched bracket/brace/parenthesis
+  // 3. Answer Key Integrity (10%)
+  let answerKeyIntegrity = 1.0;
+  if (isMCQ && !extraSignals.correctAnswerMapped) {
+    answerKeyIntegrity = 0.70;
+  }
+
+  // 4. Completeness Score (10%)
+  const completeness = extraSignals.completenessScore != null ? extraSignals.completenessScore : 1.0;
+
+  // 5. Semantic Validation (5%)
+  let semanticValidation = 0.80; // default plain text
+  const mathKeywords = /\b(?:find|evaluate|solve|equals?|determine|calculate|prove|show|simplify|integrate|differentiate|matrix|equation|probability|triangle|circle|derivative|angle|sum|product|ratio|fraction|expression|value|what|how|where|verify|construct)\b/i;
+  const mathSymbols = /[+\-=*/^\\{}\[\]|<>∫∑∏√±≤≥≠≈∞αβγδεθλμπσφω]/;
+  const trigPatterns = /\\(?:sin|cos|tan|cot|sec|csc|log|ln|exp|lim|max|min)/;
+  const cleanText = questionText.replace(/\s+/g, '');
+  
+  // LaTeX confidence: check unclosed braces
   let unclosed = 0;
   const openers = ['{', '[', '('];
   const closers = ['}', ']', ')'];
@@ -412,88 +478,64 @@ function computeConfidenceScore(ocrConfidence, parserConfidence, layoutConfidenc
   unclosed += stack.length;
   const latexConfidence = Math.max(0, 1.0 - (0.15 * unclosed));
 
-  // 3. Semantic confidence — improved: boost for math notation, trig, equations
-  let semanticConfidence = 0.85; // default: moderate
-  const mathKeywords = /\b(?:find|evaluate|solve|equals?|determine|calculate|prove|show|simplify|integrate|differentiate|matrix|equation|probability|triangle|circle|derivative|angle|sum|product|ratio|fraction|expression|value|what|how|where|verify|construct)\b/i;
-  const mathSymbols = /[+\-=*/^\\{}\[\]|<>∫∑∏√±≤≥≠≈∞αβγδεθλμπσφω]/;
-  const trigPatterns = /\\(?:sin|cos|tan|cot|sec|csc|log|ln|exp|lim|max|min)/;
-  const cleanText = questionText.replace(/\s+/g, '');
   if (cleanText.length > 0) {
     const validChars = cleanText.match(/[a-zA-Z0-9+\-=*/^$\\_{}\[\]()|<>.,;?!]/g) || [];
     const validRatio = validChars.length / cleanText.length;
     if (validRatio < 0.50) {
-      semanticConfidence = 0.40;
-    } else if (trigPatterns.test(questionText) || mathSymbols.test(questionText)) {
-      // Contains valid math notation — boost
-      semanticConfidence = 0.95;
-    } else if (mathKeywords.test(questionText)) {
-      semanticConfidence = 1.0;
-    } else {
-      // Valid chars but no clear math pattern — neutral
-      semanticConfidence = 0.80;
+      semanticValidation = 0.40;
+    } else if (trigPatterns.test(questionText) || mathSymbols.test(questionText) || mathKeywords.test(questionText)) {
+      semanticValidation = 1.0;
     }
   } else {
-    semanticConfidence = 0.40;
+    semanticValidation = 0.40;
   }
 
-  // 4. Option integrity confidence
-  let optionIntegrityConfidence = 1.0;
-  if (['mcq', 'line-based', 'inline-mcq', 'structured'].includes(format)) {
-    if (filledOptions >= 4) optionIntegrityConfidence = 1.0;
-    else if (filledOptions === 3) optionIntegrityConfidence = 0.80;
-    else if (filledOptions === 2) optionIntegrityConfidence = 0.55;
-    else optionIntegrityConfidence = 0.0;
-  } else {
-    // Non-MCQ: options absence is expected
-    optionIntegrityConfidence = 1.0;
-  }
+  // Calculate composite score based on weights
+  let composite = (ocr * 0.30) +
+                  (boundaryConfidence * 0.25) +
+                  (optionIntegrity * 0.20) +
+                  (answerKeyIntegrity * 0.10) +
+                  (completeness * 0.10) +
+                  (semanticValidation * 0.05);
 
-  // 5. Question-boundary confidence
-  let boundaryConfidence = questionNumber != null ? 1.0 : 0.75;
-  const bleedRegex = /(?:\n\s*\d+[\s.)]|\s+\([b-z]\)\s+|\bQ\d+\b)/;
-  if (bleedRegex.test(questionText)) {
-    boundaryConfidence = Math.max(0, boundaryConfidence - 0.25);
-  }
+  // Penalties (applied directly to composite score)
+  const penalties = {
+    missingQuestion: questionText.length < 5 || /^(?:Question\s*(?:Text)?|Q\.?No\.?)$/i.test(questionText),
+    missingAnswers: isMCQ && filledOptions < 2,
+    footerContamination: /(?:Prepared by|Downloaded from|Page\s+\d+|www\..*|https?:\/\/.*)/i.test(questionText),
+    chapterTitleAsQuestion: /\b(?:exercise|chapter|ch\.)\s*\d/i.test(questionText)
+  };
 
-  // ── STRUCTURAL BOOST ──────────────────────────────────────────────────────
-  // If structure + options are perfect, reduce OCR confidence dominance.
-  // An MCQ with 4 clean options and valid boundaries is almost certainly correct.
-  let structuralBoost = 0.0;
-  const isMCQFormat = ['mcq', 'line-based', 'inline-mcq', 'structured'].includes(format);
-  if (isMCQFormat && filledOptions >= 4 && structuralConfidence >= 0.85 && boundaryConfidence >= 0.75) {
-    structuralBoost = 0.08; // bonus for structurally-perfect MCQ
-  } else if (!isMCQFormat && structuralConfidence >= 0.90) {
-    structuralBoost = 0.04;
-  }
-
-  // ── WEIGHTED COMPOSITE ────────────────────────────────────────────────────
-  // OCR weight reduced: structure correctness is more reliable than raw OCR conf.
-  // Priority: structural > option integrity > parser > boundary > latex > semantic > ocr
-  const composite = (structuralConfidence      * 0.22) +
-                    (optionIntegrityConfidence  * 0.18) +
-                    (parser                    * 0.18) +
-                    (boundaryConfidence        * 0.14) +
-                    (latexConfidence           * 0.10) +
-                    (semanticConfidence        * 0.08) +
-                    (ocr                       * 0.06) +
-                    (layout                    * 0.04) +
-                    structuralBoost;
+  if (penalties.missingQuestion) composite -= 0.50;
+  if (penalties.missingAnswers) composite -= 0.30;
+  if (penalties.footerContamination) composite -= 0.20;
+  if (penalties.chapterTitleAsQuestion) composite -= 0.40;
 
   const clampedComposite = Math.max(0, Math.min(1, composite));
 
   return {
-    ocrConfidence:             ocr,
-    parserConfidence:          parser,
-    layoutConfidence:          layout,
-    sectionConfidence:         sect,
-    structuralConfidence,
-    latexConfidence,
-    semanticConfidence,
-    optionIntegrityConfidence,
+    ocrConfidence: ocr,
+    parserConfidence: parser,
+    layoutConfidence: layout,
+    sectionConfidence: sect,
     boundaryConfidence,
-    structuralBoost,
-    composite:                 clampedComposite,
+    optionIntegrityConfidence: optionIntegrity,
+    answerKeyIntegrity,
+    completenessScore: completeness,
+    semanticConfidence: semanticValidation,
+    structuralConfidence: 1.0 - (penalties.missingQuestion ? 0.5 : 0) - (penalties.missingAnswers ? 0.3 : 0),
+    latexConfidence,
+    composite: clampedComposite,
     rating: clampedComposite >= 0.90 ? 'high' : clampedComposite >= 0.75 ? 'medium' : 'low',
+    breakdown: {
+      ocr: (ocr * 0.30).toFixed(3),
+      boundary: (boundaryConfidence * 0.25).toFixed(3),
+      options: (optionIntegrity * 0.20).toFixed(3),
+      answerKey: (answerKeyIntegrity * 0.10).toFixed(3),
+      completeness: (completeness * 0.10).toFixed(3),
+      semantic: (semanticValidation * 0.05).toFixed(3),
+      penaltiesApplied: Object.keys(penalties).filter(k => penalties[k])
+    }
   };
 }
 
@@ -546,7 +588,8 @@ class OCRPipeline {
       parseResult.sections,
       parseResult.totalRejected,
       preprocessInfo,
-      filename
+      filename,
+      parseResult.answerKeys || []
     );
   }
 
@@ -656,15 +699,15 @@ class OCRPipeline {
       ContentClassificationEngine.isAnswerKeyPage(layoutText);
 
     if (isAnsKey) {
-      console.log('[OCRPipeline] ANSWER_KEY_PAGE detected. Blocking all content.');
+      console.log('[OCRPipeline] ANSWER_KEY_PAGE detected. Parsing answer keys.');
+      const keys = parseAnswerKeys(layoutText);
       return {
-        blocked: true,
-        blockedResponse: {
-          rawText: rawText || '', latex: rawLatex || '', parsedQuestions: [],
-          confidence: ocrConf, qualityRating: 'high', isValid: false,
-          pageType: 'ANSWER_KEY_PAGE',
-          detectionQuality: { source: 'classifier', multipleDetected: false, questionCount: 0 }
-        }
+        blocked: false,
+        parsedQuestions: [],
+        answerKeys: keys,
+        pageType: 'ANSWER_KEY_PAGE',
+        sections: [{ title: 'Answers', parserType: 'ANSWER_KEY' }],
+        totalRejected: 0
       };
     }
 
@@ -730,11 +773,17 @@ class OCRPipeline {
 
     // ── Layer 10: Per-section segmentation and routing ────────────────────
     const parsedQuestions = [];
+    const answerKeys      = [];
     let   globalOrder     = 0;
     let   totalRejected   = 0;
 
     for (const section of sectionSlices) {
-      if (section.parserType === PARSER_TYPES.ANSWER_KEY || section.parserType === PARSER_TYPES.THEORY) {
+      if (section.parserType === PARSER_TYPES.ANSWER_KEY) {
+        const keys = parseAnswerKeys(section.text);
+        answerKeys.push(...keys);
+        continue;
+      }
+      if (section.parserType === PARSER_TYPES.THEORY) {
         console.log(`[OCRPipeline] Skipping ignored section: "${section.title}" (${section.parserType})`);
         continue;
       }
@@ -818,6 +867,7 @@ class OCRPipeline {
     return {
       blocked: false,
       parsedQuestions,
+      answerKeys,
       pageType: safePageClassification.pageType,
       sections: useSections.map(s => ({ title: s.title, parserType: s.parserType })),
       totalRejected
@@ -827,7 +877,7 @@ class OCRPipeline {
   /**
    * Run structural validation, confidence scoring, and quarantining.
    */
-  static runValidation(parsedQuestions, ocrResult, pageType, sections, totalRejected, preprocessInfo, filename) {
+  static runValidation(parsedQuestions, ocrResult, pageType, sections, totalRejected, preprocessInfo, filename, answerKeys = []) {
     const { rawText, latex: rawLatex, confidence } = ocrResult;
     const sanitizedLatex = LatexSanitizer.sanitize(rawLatex || rawText, confidence);
     const finalQuestions = [];
@@ -839,6 +889,14 @@ class OCRPipeline {
     // Optimize: only check overlapping boxes once per page if NOT fast path
     const isFastPath = parsedQuestions.length > 0 && parsedQuestions[0].fastPath;
     const hasOverlapping = !isFastPath && detectOverlappingBoxes(ocrResult.ocr?.lines || ocrResult.lines);
+
+    // Build a map of qNum -> ans for mapping answer keys
+    const answerKeyMap = new Map();
+    if (Array.isArray(answerKeys) && answerKeys.length > 0) {
+      answerKeys.forEach(k => {
+        answerKeyMap.set(k.questionNumber, k.correctAnswer);
+      });
+    }
 
     for (const q of parsedQuestions) {
       try {
@@ -855,6 +913,18 @@ class OCRPipeline {
 
         sourceUsed = q.sourceUsed || 'unknown';
 
+        // Check if an answer key was mapped for this specific question
+        let correctAnswer = '';
+        let correctAnswerMapped = false;
+        const numMatch = String(q.questionNumber).match(/(\d+)$/);
+        if (numMatch) {
+          const num = parseInt(numMatch[1], 10);
+          if (answerKeyMap.has(num)) {
+            correctAnswer = answerKeyMap.get(num);
+            correctAnswerMapped = true;
+          }
+        }
+
         // Fast-path: skip heavy confidence computation, skip repeated evaluations
         const confScore = isFastPath
           ? {
@@ -868,7 +938,9 @@ class OCRPipeline {
               latexConfidence: 1.0,
               semanticConfidence: 1.0,
               optionIntegrityConfidence: 1.0,
-              boundaryConfidence: 1.0
+              boundaryConfidence: 1.0,
+              answerKeyIntegrity: 1.0,
+              completenessScore: 1.0
             }
           : computeConfidenceScore(
               confidence,
@@ -877,7 +949,8 @@ class OCRPipeline {
               q.sectionConfidence,
               q.rawChunk,
               parsedBlock,
-              q.questionNumber
+              q.questionNumber,
+              { correctAnswerMapped }
             );
 
         const enrichedQuestion = {
@@ -895,6 +968,7 @@ class OCRPipeline {
           detectionOrder: q.detectionOrder,
           verified: false,
           confidenceScores: confScore,
+          correctAnswer, // Auto-populated correct answer!
           rawOcrData: {
             sourceUsed: q.sourceUsed,
             rawText: q.rawChunk, // Optimized: store only question chunk, not full page!
@@ -930,65 +1004,32 @@ class OCRPipeline {
 
         const quarantineReasons = [];
 
-        // ── STRUCTURAL INTEGRITY CHECK ─────────────────────────────────────
-        // Determine if this question is structurally clean (independent of OCR conf)
+        // ── PHASE 8: SMART QUARANTINE LOGIC ─────────────────────────────────────
         const isMCQFormatQ = ['mcq', 'line-based', 'inline-mcq', 'structured'].includes(enrichedQuestion.format);
         const optionsFilled = (enrichedQuestion.options || []).filter(o => (typeof o === 'object' ? o.text : o) && String(typeof o === 'object' ? o.text : o).trim()).length;
-        const isStructurallyClean = (
-          confScore.structuralConfidence >= 0.85 &&
-          confScore.boundaryConfidence   >= 0.70 &&
-          confScore.parserConfidence     >= 0.70 &&
-          (!isMCQFormatQ || optionsFilled >= 3)
-        );
 
-        if (!isFastPath) {
-          // Only quarantine for low OCR confidence when structure is also weak
-          if (confScore.ocrConfidence < 0.55 && !isStructurallyClean) {
-            quarantineReasons.push('low_ocr_confidence');
-          }
+        // 1. MISSING_QUESTION
+        if (enrichedQuestion.question.length < 5 || /^(?:Question\s*(?:Text)?|Q\.?No\.?)$/i.test(enrichedQuestion.question)) {
+          quarantineReasons.push('MISSING_QUESTION');
+        }
 
-          // LaTeX confidence threshold relaxed: 0.60 (was 0.80)
-          if (confScore.latexConfidence < 0.60) quarantineReasons.push('malformed_latex');
+        // 2. MISSING_OPTIONS
+        if (isMCQFormatQ && optionsFilled < 2) {
+          quarantineReasons.push('MISSING_OPTIONS');
+        }
 
-          // Parser ambiguity: only if really low
-          if (confScore.parserConfidence < 0.55) quarantineReasons.push('parser_ambiguity');
+        // 3. OCR_CORRUPTION
+        if (confScore.ocrConfidence < 0.55 || confScore.composite < 0.60) {
+          quarantineReasons.push('OCR_CORRUPTION');
+        }
 
-          if (hasOverlapping) quarantineReasons.push('overlapping_bounding_boxes');
-
-          const sectionKey = `${q.sectionTitle || 'Default'}_${q.questionNumber}`;
-          const duplicateQuestion = sectionSeenNumbers.has(sectionKey);
-          if (duplicateQuestion) quarantineReasons.push('duplicate_question_number');
-
-          // Only quarantine for missing options if fewer than 2 valid options
-          if (isMCQFormatQ && optionsFilled < 2) {
-            quarantineReasons.push('malformed_options_array');
-          }
-
-          // UNKNOWN_PAGE: only quarantine if structurally dirty
-          if (pageType === 'UNKNOWN_PAGE' && !isStructurallyClean) {
-            quarantineReasons.push('unsupported_layout');
-          }
-
-          if (preprocessInfo?.diagnostics?.isLowLight || preprocessInfo?.diagnostics?.issues?.includes('low_light')) {
-            quarantineReasons.push('low_light_image');
-          }
-
-          if (preprocessInfo?.diagnostics?.isBlurred || preprocessInfo?.diagnostics?.issues?.includes('blur') || preprocessInfo?.diagnostics?.issues?.includes('low_contrast')) {
-            quarantineReasons.push('blur_threshold_exceeded');
-          }
-
-          const bleedRegex = /(?:\n\s*\d+[\s.)]|\s+\([b-z]\)\s+|\bQ\d+\b)/;
-          if (bleedRegex.test(q.question)) {
-            quarantineReasons.push('parser_contamination_suspected');
-          }
-
-          if (!validationResult.isValid) {
-            quarantineReasons.push(...validationResult.errors);
-          }
+        // 4. INVALID_LATEX
+        const { LatexSanitizer: sanitizerInstance } = require('./latexSanitizer');
+        if (confScore.latexConfidence < 0.60 || !sanitizerInstance.isValidLatexSyntax(enrichedQuestion.question)) {
+          quarantineReasons.push('INVALID_LATEX');
         }
 
         // ── EXTRACTION STATE DECISION ──────────────────────────────────────
-        // New thresholds: 90+→ACCEPTED, 75–89→MANUAL_REVIEW, 60–74→QUARANTINED, <60→REJECTED
         let extractionState = 'ACCEPTED';
         const composite = confScore.composite;
         if (isFastPath || composite >= 0.90) {
@@ -1001,16 +1042,9 @@ class OCRPipeline {
           extractionState = 'REJECTED';
         }
 
-        // Override quarantine: structurally clean questions stay at MANUAL_REVIEW minimum
-        if (quarantineReasons.length > 0 && extractionState !== 'REJECTED') {
-          if (isStructurallyClean && quarantineReasons.every(r =>
-            ['low_ocr_confidence', 'unsupported_layout'].includes(r)
-          )) {
-            // Structurally perfect — downgrade quarantine to manual review
-            extractionState = 'MANUAL_REVIEW';
-          } else {
-            extractionState = 'QUARANTINED';
-          }
+        // Override quarantine: if quarantineReasons are detected, set state to QUARANTINED instead of rejecting
+        if (quarantineReasons.length > 0) {
+          extractionState = 'QUARANTINED';
         }
 
         enrichedQuestion.extractionState = extractionState;
@@ -1093,4 +1127,6 @@ module.exports = {
   // QuestionQueueManager,
   OCRResultValidator,
   OCRPipeline,
+  isQuestionCandidate,
+  parseAnswerKeys,
 };

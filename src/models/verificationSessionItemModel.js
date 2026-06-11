@@ -57,6 +57,7 @@ const verificationSessionItemSchema = new mongoose.Schema({
 
   validationErrors:   { type: [String], default: [] },
   validationWarnings: { type: [String], default: [] },
+  quarantineReasons:  { type: [String], default: [] },
 
   duplicateInfo: {
     detected:             { type: Boolean, default: false },
