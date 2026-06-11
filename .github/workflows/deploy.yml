@@ -30,7 +30,7 @@ jobs:
               fi
               
               # Also check and update site-specific configs
-              sudo find /etc/nginx/sites-available/ /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ -type f 2>/dev/null | while read -r file; do
+              sudo find /etc/nginx/sites-available/ /etc/nginx/conf.d/ -type f 2>/dev/null | while read -r file; do
                 if grep -q "client_max_body_size" "$file"; then
                   sudo sed -i 's/client_max_body_size [0-9]\+[a-zA-Z]\+;/client_max_body_size 100M;/g' "$file"
                 else
