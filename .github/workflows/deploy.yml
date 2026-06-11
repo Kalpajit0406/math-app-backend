@@ -20,19 +20,22 @@ jobs:
             git pull origin main
             npm install
             
-            # Automatically update Nginx configuration to support 20MB file uploads
+            # Automatically update Nginx configuration to support 100MB file uploads
             if [ -f /etc/nginx/nginx.conf ]; then
-              echo "Configuring Nginx client_max_body_size to 20M..."
+              echo "Configuring Nginx client_max_body_size to 100M..."
               if grep -q "client_max_body_size" /etc/nginx/nginx.conf; then
-                sudo sed -i 's/client_max_body_size [0-9]\+[a-zA-Z]\+;/client_max_body_size 20M;/g' /etc/nginx/nginx.conf
+                sudo sed -i 's/client_max_body_size [0-9]\+[a-zA-Z]\+;/client_max_body_size 100M;/g' /etc/nginx/nginx.conf
               else
-                sudo sed -i '/http {/a \\tclient_max_body_size 20M;' /etc/nginx/nginx.conf
+                sudo sed -i '/http {/a \\tclient_max_body_size 100M;' /etc/nginx/nginx.conf
               fi
               
               # Also check and update site-specific configs
               sudo find /etc/nginx/sites-available/ /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ -type f 2>/dev/null | while read -r file; do
                 if grep -q "client_max_body_size" "$file"; then
-                  sudo sed -i 's/client_max_body_size [0-9]\+[a-zA-Z]\+;/client_max_body_size 20M;/g' "$file"
+                  sudo sed -i 's/client_max_body_size [0-9]\+[a-zA-Z]\+;/client_max_body_size 100M;/g' "$file"
+                else
+                  # Inject client_max_body_size 100M; inside the server block if not present
+                  sudo sed -i '/server {/a \\tclient_max_body_size 100M;' "$file"
                 fi
               done
               

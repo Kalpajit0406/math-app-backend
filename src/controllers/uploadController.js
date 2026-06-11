@@ -371,7 +371,7 @@ const upload = async (req, res) => {
         let result;
         let fileType;
         
-        const maxSizeBytes = 50 * 1024 * 1024; // 50MB
+        const maxSizeBytes = 100 * 1024 * 1024; // 100MB
         if (uploadedFile.size > maxSizeBytes) {
             throw new Error(`File too large. Maximum size is ${maxSizeBytes / (1024 * 1024)}MB`);
         }

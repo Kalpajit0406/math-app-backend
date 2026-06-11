@@ -388,8 +388,8 @@ const validationRules = {
       if (!allowedMimes.includes(req.file.mimetype)) {
         errors.push('Only JPEG, PNG, and WebP images are allowed');
       }
-      if (req.file.size > 20 * 1024 * 1024) { // 20MB limit
-        errors.push('File size must be under 20MB');
+      if (req.file.size > 100 * 1024 * 1024) { // 100MB limit
+        errors.push('File size must be under 100MB');
       }
     }
     

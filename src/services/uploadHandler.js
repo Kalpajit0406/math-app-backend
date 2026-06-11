@@ -8,7 +8,7 @@ class UploadHandler {
   }
 
   static get maxSizeBytes() {
-    return 20 * 1024 * 1024; // 20MB
+    return 100 * 1024 * 1024; // 100MB
   }
 
   /**
@@ -25,7 +25,7 @@ class UploadHandler {
     }
 
     if (file.size > this.maxSizeBytes) {
-      throw new Error('File size exceeds the 20MB limit.');
+      throw new Error('File size exceeds the 100MB limit.');
     }
 
     if (!file.buffer || file.buffer.length === 0) {
