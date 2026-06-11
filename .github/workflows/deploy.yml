@@ -20,6 +20,12 @@ jobs:
             git pull origin main
             npm install
             
+            # Install poppler-utils (needed for pdfinfo and pdftoppm) if missing
+            if ! command -v pdfinfo >/dev/null 2>&1; then
+              echo "Installing poppler-utils..."
+              sudo apt-get update && sudo apt-get install -y poppler-utils
+            fi
+            
             # Automatically update Nginx configuration to support 100MB file uploads
             if [ -f /etc/nginx/nginx.conf ]; then
               echo "Configuring Nginx client_max_body_size to 100M..."
