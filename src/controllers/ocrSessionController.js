@@ -377,8 +377,14 @@ const verifyItem = async (req, res) => {
     const opts = transactionStarted ? { session: dbSession } : {};
 
     if (action === 'replace' && replaceQuestionId) {
-      const { normalizeQuestion, generateHash } = require('../services/questionDuplicateDetector');
+      const { normalizeQuestion, generateHash, generateContentHash } = require('../services/questionDuplicateDetector');
       const hash = generateHash(normalizeQuestion(finalQuestion));
+      const cHash = generateContentHash({
+        question: finalQuestion,
+        options: finalOptions,
+        correctAnswer,
+        type: (finalOptions && finalOptions.length > 0) ? 'mcq' : 'numeric'
+      });
 
       const { getClassIdFromNo } = require('../utils/classCache');
       const classId = getClassIdFromNo(classNo);
@@ -407,7 +413,8 @@ const verifyItem = async (req, res) => {
         options: finalOptions,
         question: finalQuestion,
         diagram: diagramUrl,
-        questionHash: hash
+        questionHash: hash,
+        contentHash: cHash
       }, { ...opts, returnDocument: 'after' });
 
       if (!finalQuestionObj) {

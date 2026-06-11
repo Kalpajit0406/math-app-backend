@@ -47,6 +47,11 @@ const questionSchema = new mongoose.Schema({
   },
   questionHash: {
     type: String,
+    sparse: true,
+    index: true,
+  },
+  contentHash: {
+    type: String,
     unique: true,
     sparse: true,
     index: true,
@@ -165,11 +170,17 @@ questionSchema.pre('validate', async function (next) {
 });
 
 questionSchema.pre('save', function (next) {
+  const { normalizeQuestion, generateHash, generateContentHash } = require('../services/questionDuplicateDetector');
+  
   if (this.isModified('question') && this.question) {
-    const { normalizeQuestion, generateHash } = require('../services/questionDuplicateDetector');
     const normalized = normalizeQuestion(this.question);
     this.questionHash = generateHash(normalized);
   }
+  
+  if (this.isModified('question') || this.isModified('options') || this.isModified('correctAnswer') || this.isNew) {
+    this.contentHash = generateContentHash(this);
+  }
+  
   if (next && typeof next === 'function') {
     next();
   }

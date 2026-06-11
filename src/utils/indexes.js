@@ -59,7 +59,12 @@ async function ensureIndexes(mongoose) {
       await Question.collection.dropIndex('questionHash_1');
       console.log('✓ Dropped legacy/conflicting questionHash_1 index from questions');
     } catch (err) {}
-    await safeCreateIndex(Question.collection, { questionHash: 1 }, { unique: true, sparse: true });
+    await safeCreateIndex(Question.collection, { questionHash: 1 }, { sparse: true });
+
+    try {
+      await Question.collection.dropIndex('contentHash_1');
+    } catch (err) {}
+    await safeCreateIndex(Question.collection, { contentHash: 1 }, { unique: true, sparse: true });
     await safeCreateIndex(Question.collection, { chapterId: 1 });
     await safeCreateIndex(Question.collection, { classId: 1 });
     await safeCreateIndex(Question.collection, { language: 1 });

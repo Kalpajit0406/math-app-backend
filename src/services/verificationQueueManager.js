@@ -65,7 +65,13 @@ class VerificationQueueManager {
       };
 
       try {
-        const dupResult = await QuestionDuplicateDetector.checkDuplicate(qText, q.classNo || 11);
+        const dupResult = await QuestionDuplicateDetector.checkDuplicate({
+          question: qText,
+          options: optionsArray,
+          correctAnswer: q.correctAnswer || '',
+          type: q.type || q.format || ((optionsArray && optionsArray.length > 0) ? 'mcq' : 'numeric'),
+          classNo: q.classNo || 11
+        });
         if (dupResult.duplicateDetected) {
           duplicateInfo.detected = true;
           duplicateInfo.similarity = dupResult.similarity;
@@ -199,7 +205,13 @@ class VerificationQueueManager {
             existingQuestionText: ''
           };
           try {
-            const dupResult = await QuestionDuplicateDetector.checkDuplicate(qText, q.classNo || 11);
+            const dupResult = await QuestionDuplicateDetector.checkDuplicate({
+              question: qText,
+              options: optionsArray,
+              correctAnswer: q.correctAnswer || '',
+              type: q.type || q.format || ((optionsArray && optionsArray.length > 0) ? 'mcq' : 'numeric'),
+              classNo: q.classNo || 11
+            });
             if (dupResult.duplicateDetected) {
               duplicateInfo.detected = true;
               duplicateInfo.similarity = dupResult.similarity;
@@ -420,7 +432,16 @@ class VerificationQueueManager {
       };
 
       try {
-        const dupResult = await QuestionDuplicateDetector.checkDuplicate(updateData.questionText, updateData.classNo || 11);
+        const qOptions = updateData.options || item.options || [];
+        const qCorrectAnswer = updateData.correctAnswer || item.correctAnswer || '';
+        const qFormat = updateData.format || item.format || '';
+        const dupResult = await QuestionDuplicateDetector.checkDuplicate({
+          question: updateData.questionText,
+          options: qOptions.map(o => (typeof o === 'object' ? o.text : o) || ''),
+          correctAnswer: qCorrectAnswer,
+          type: qFormat,
+          classNo: updateData.classNo || item.classNo || 11
+        });
         if (dupResult.duplicateDetected) {
           duplicateInfo.detected = true;
           duplicateInfo.similarity = dupResult.similarity;

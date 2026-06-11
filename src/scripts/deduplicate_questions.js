@@ -11,12 +11,12 @@ async function deduplicate() {
     const duplicates = await Question.aggregate([
       {
         $match: {
-          questionHash: { $ne: null }
+          contentHash: { $ne: null }
         }
       },
       {
         $group: {
-          _id: '$questionHash',
+          _id: '$contentHash',
           count: { $sum: 1 },
           docs: { $push: '$_id' }
         }
@@ -28,7 +28,7 @@ async function deduplicate() {
       }
     ]);
 
-    console.log(`Found ${duplicates.length} duplicate questionHash groups.`);
+    console.log(`Found ${duplicates.length} duplicate contentHash groups.`);
 
     let totalDeleted = 0;
     for (const group of duplicates) {

@@ -6,7 +6,13 @@
 
 const assert = require('assert');
 const test = require('node:test');
-const { normalizeQuestion, generateHash, getSimilarityScore } = require('../src/services/questionDuplicateDetector');
+const {
+  normalizeQuestion,
+  generateHash,
+  normalizeComponent,
+  generateContentHash,
+  getSimilarityScore
+} = require('../src/services/questionDuplicateDetector');
 
 test('Question Normalization Engine', async (t) => {
   await t.test('normalizes spaces, casing, and numberings identically', () => {
@@ -78,5 +84,95 @@ test('Lightweight Similarity Matching', async (t) => {
     const q2 = "solve the quadratic equation x^2 - 5x + 6 = 0";
     const score = getSimilarityScore(q1, q2);
     assert.ok(score < 0.50);
+  });
+});
+
+test('Content Hashing and Normalization Engine', async (t) => {
+  await t.test('normalizeComponent converts to lowercase, trims, and collapses spaces', () => {
+    const raw = "  Choose  the   Correct  Answer ";
+    const norm = normalizeComponent(raw);
+    assert.strictEqual(norm, 'choose the correct answer');
+  });
+
+  await t.test('Same question text + different options => generates different contentHash', () => {
+    const q1 = {
+      question: "Pick the correct one",
+      options: ["2 + 2 = 4", "2 + 2 = 5", "2 + 2 = 6", "2 + 2 = 7"],
+      correctAnswer: "A",
+      type: "mcq"
+    };
+    const q2 = {
+      question: "Pick the correct one",
+      options: ["Earth is flat", "Earth revolves around Sun", "Sun revolves around Earth", "Moon is a star"],
+      correctAnswer: "B",
+      type: "mcq"
+    };
+
+    const hash1 = generateContentHash(q1);
+    const hash2 = generateContentHash(q2);
+
+    assert.notStrictEqual(hash1, hash2);
+    // questionHash (question text only) must still be identical
+    const qHash1 = generateHash(normalizeQuestion(q1.question));
+    const qHash2 = generateHash(normalizeQuestion(q2.question));
+    assert.strictEqual(qHash1, qHash2);
+  });
+
+  await t.test('Same question text + same options + same answer => generates same contentHash', () => {
+    const q1 = {
+      question: "Pick the correct one",
+      options: ["2 + 2 = 4", "2 + 2 = 5", "2 + 2 = 6", "2 + 2 = 7"],
+      correctAnswer: "A",
+      type: "mcq"
+    };
+    const q2 = {
+      question: "Pick the correct one",
+      options: ["2 + 2 = 4", "2 + 2 = 5", "2 + 2 = 6", "2 + 2 = 7"],
+      correctAnswer: "A",
+      type: "mcq"
+    };
+
+    const hash1 = generateContentHash(q1);
+    const hash2 = generateContentHash(q2);
+
+    assert.strictEqual(hash1, hash2);
+  });
+
+  await t.test('Different spacing/casing of same question/options/answer => treated as duplicate (same contentHash)', () => {
+    const q1 = {
+      question: " Pick  the correct one ",
+      options: ["2 + 2 = 4", "2 + 2 = 5", "2 + 2 = 6", "2 + 2 = 7"],
+      correctAnswer: "a",
+      type: "mcq"
+    };
+    const q2 = {
+      question: "pick the correct one",
+      options: [" 2 + 2 = 4 ", "2 + 2 = 5", "2 + 2 = 6", "2 + 2 = 7"],
+      correctAnswer: "A",
+      type: "MCQ"
+    };
+
+    const hash1 = generateContentHash(q1);
+    const hash2 = generateContentHash(q2);
+
+    assert.strictEqual(hash1, hash2);
+  });
+
+  await t.test('OCR imports generating generic question text handled correctly', () => {
+    const q1 = {
+      question: "Choose the correct option",
+      options: ["A", "B", "C", "D"],
+      correctAnswer: "A"
+    };
+    const q2 = {
+      question: "Choose the correct option",
+      options: ["X", "Y", "Z", "W"],
+      correctAnswer: "C"
+    };
+
+    const hash1 = generateContentHash(q1);
+    const hash2 = generateContentHash(q2);
+
+    assert.notStrictEqual(hash1, hash2);
   });
 });

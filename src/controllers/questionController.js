@@ -193,11 +193,26 @@ const updateQuestion = async (req, res) => {
       }
     }
 
-    if (question) {
-      const { normalizeQuestion, generateHash } = require('../services/questionDuplicateDetector');
-      const normalized = normalizeQuestion(question);
+    const { normalizeQuestion, generateHash, generateContentHash } = require('../services/questionDuplicateDetector');
+    const existingQuestionObj = await Question.findById(id);
+    if (!existingQuestionObj) return res.status(404).json({ success: false, message: "Question not found" });
+
+    const finalQuestion = question !== undefined ? question : existingQuestionObj.question;
+    const finalOptions = parsedOptions !== undefined ? parsedOptions : existingQuestionObj.options;
+    const finalCorrectAnswer = correctAnswer !== undefined ? correctAnswer : existingQuestionObj.correctAnswer;
+    const finalType = (finalOptions && finalOptions.length > 0) ? 'mcq' : 'numeric';
+
+    if (question !== undefined) {
+      const normalized = normalizeQuestion(finalQuestion);
       updateData.questionHash = generateHash(normalized);
     }
+    
+    updateData.contentHash = generateContentHash({
+      question: finalQuestion,
+      options: finalOptions,
+      correctAnswer: finalCorrectAnswer,
+      type: finalType
+    });
 
     // Remove undefined fields
     Object.keys(updateData).forEach(key => updateData[key] === undefined && delete updateData[key]);

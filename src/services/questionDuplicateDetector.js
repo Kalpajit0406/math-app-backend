@@ -162,6 +162,30 @@ function getSimilarityScore(raw1, raw2) {
   return Math.max(levSim, jacSim);
 }
 
+function normalizeComponent(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str.toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+function generateContentHash(questionObj) {
+  const qText = normalizeComponent(questionObj.question || questionObj.questionText || '');
+  const optionsArray = Array.isArray(questionObj.options) ? questionObj.options : [];
+  const opts = optionsArray.map(normalizeComponent).join('|');
+  const answer = normalizeComponent(questionObj.correctAnswer || '');
+  
+  let type = '';
+  if (questionObj.type) {
+    type = normalizeComponent(questionObj.type);
+  } else if (optionsArray.length > 0) {
+    type = 'mcq';
+  } else {
+    type = 'numeric';
+  }
+
+  const contentStr = `${qText};${opts};${answer};${type}`;
+  return crypto.createHash('sha256').update(contentStr).digest('hex');
+}
+
 class QuestionDuplicateDetector {
   /**
    * Helper exposed for external use to normalize questions.
@@ -177,29 +201,48 @@ class QuestionDuplicateDetector {
     return generateHash(normalizedText);
   }
 
+  static normalizeComp(str) {
+    return normalizeComponent(str);
+  }
+
+  static contentHash(questionObj) {
+    return generateContentHash(questionObj);
+  }
+
   /**
    * Detect potential duplicates of a question in the database.
    * Uses classNo as partition/filter to keep candidate sets small and fast.
-   * 
-   * @param {string} questionText - Raw question text
-   * @param {number} classNo - Class level
-   * @returns {Promise<DuplicateResult>}
    */
-  static async checkDuplicate(questionText, classNo) {
+  static async checkDuplicate(input, classNoParam, optionsParam, correctAnswerParam, typeParam) {
+    let questionText = '';
+    let classNo = classNoParam;
+    let options = optionsParam || [];
+    let correctAnswer = correctAnswerParam || '';
+    let type = typeParam || '';
+
+    if (typeof input === 'object' && input !== null) {
+      questionText = input.question || input.questionText || '';
+      classNo = input.classNo;
+      options = input.options || [];
+      correctAnswer = input.correctAnswer || '';
+      type = input.type || '';
+    } else {
+      questionText = input || '';
+    }
+
     if (!questionText) {
       return { duplicateDetected: false, similarity: 0, rating: 'Allow normally' };
     }
 
     const start = Date.now();
-    const normalized = normalizeQuestion(questionText);
-    const hash = generateHash(normalized);
+    const contentHash = generateContentHash({ question: questionText, options, correctAnswer, type });
 
-    console.log(`[DuplicateDetector] Checking duplicate for normalized query: "${normalized}" (hash: ${hash})`);
+    console.log(`[DuplicateDetector] Checking duplicate for normalized content hash: ${contentHash}`);
 
-    // 1. Indexed Lookup (Exact match)
-    const exactMatch = await Question.findOne({ questionHash: hash }).lean();
+    // 1. Indexed Lookup (Exact match on contentHash)
+    const exactMatch = await Question.findOne({ contentHash }).lean();
     if (exactMatch) {
-      console.log(`[DuplicateDetector] Exact match found in ${Date.now() - start}ms (questionHash index match)`);
+      console.log(`[DuplicateDetector] Exact match found in ${Date.now() - start}ms (contentHash index match)`);
       return {
         duplicateDetected: true,
         similarity: 1.0,
@@ -208,7 +251,7 @@ class QuestionDuplicateDetector {
       };
     }
 
-    // 2. Fetch candidates from same classNo or all classes (with limit)
+    // 2. Fetch candidates from same classNo or all classes (with limit) for similarity check
     const classNum = parseInt(classNo, 10);
     let filter = {};
     if (!isNaN(classNum)) {
@@ -258,5 +301,7 @@ module.exports = {
   QuestionDuplicateDetector,
   normalizeQuestion,
   generateHash,
+  normalizeComponent,
+  generateContentHash,
   getSimilarityScore
 };

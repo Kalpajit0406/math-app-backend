@@ -1,7 +1,8 @@
 /**
  * Database Hash Migration Script
  * Scans all existing questions, normalizes their sentences,
- * computes the SHA-256 question-only hash, and backfills the database.
+ * computes the SHA-256 question-only hash, computes the contentHash,
+ * and backfills the database. Then rebuilds indexes safely.
  */
 
 'use strict';
@@ -11,6 +12,7 @@ const mongoose = require('mongoose');
 const connectDB = require('../config/db');
 const Question = require('../models/questionModel');
 const { QuestionDuplicateDetector } = require('../services/questionDuplicateDetector');
+const { ensureIndexes } = require('../utils/indexes');
 
 async function runMigration() {
   console.log('====================================================');
@@ -36,17 +38,23 @@ async function runMigration() {
       }
 
       const normalized = QuestionDuplicateDetector.normalize(q.question);
-      const hash = QuestionDuplicateDetector.hash(normalized);
+      const questionHash = QuestionDuplicateDetector.hash(normalized);
+      
+      const contentHash = QuestionDuplicateDetector.contentHash(q);
 
-      // Only update if hash is missing or incorrect
-      if (q.questionHash !== hash) {
-        q.questionHash = hash;
+      // Only update if hashes are missing or incorrect
+      if (q.questionHash !== questionHash || q.contentHash !== contentHash) {
+        q.questionHash = questionHash;
+        q.contentHash = contentHash;
         await q.save();
         totalUpdated++;
       } else {
         totalSkipped++;
       }
     }
+
+    console.log('Rebuilding database indexes safely...');
+    await ensureIndexes(mongoose);
 
     const duration = ((Date.now() - start) / 1000).toFixed(2);
     console.log('====================================================');
