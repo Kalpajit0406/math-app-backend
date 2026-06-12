@@ -211,10 +211,9 @@ test('Phase 8 & 9: Smart Quarantine & Confidence Scoring Rewrite', async (t) => 
     );
 
     const question = result.parsedQuestions[0];
-    assert.strictEqual(question.extractionState, 'QUARANTINED', 'Should be quarantined due to missing options');
-    assert.ok(question.quarantineReasons.includes('MISSING_OPTIONS'), 'Quarantine reason should be MISSING_OPTIONS');
-    assert.ok(question.confidenceScores.composite < 0.70, 'Composite score should be lower due to penalties');
-    assert.ok(question.confidenceScores.breakdown.penaltiesApplied.includes('missingAnswers'), 'Should show missingAnswers penalty');
+    assert.strictEqual(question.extractionState, 'MANUAL_REVIEW', 'Should be MANUAL_REVIEW (preferring REVIEW over QUARANTINE when not fully empty)');
+    assert.strictEqual(question.confidenceScores.composite, 0.78, 'Composite score should be exactly 0.78 based on new weighted scoring');
+    assert.strictEqual(question.confidenceScores.structuralConfidence, 0.7, 'Structural confidence should reflect the missingAnswers penalty');
   });
 
   await t.test('quarantines invalid LaTeX syntax', () => {

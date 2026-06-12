@@ -409,7 +409,35 @@ function detectOverlappingBoxes(lines) {
   return false;
 }
 
-// ─── 6. CONFIDENCE SCORER ────────────────────────────────────────────────────
+// Helper to calculate garbage ratio
+function calculateGarbageRatio(text) {
+  if (!text) return 0;
+  const clean = text.trim();
+  if (clean.length === 0) return 0;
+  // Non-alphanumeric, non-whitespace, non-standard math symbols/punctuation count as garbage
+  const junkChars = clean.match(/[^a-zA-Z0-9\s+\-=*/^$\\_{}\[\]()|<>.,;?!:θπαβγδεθλμπσφω∫∑∏√±≤≥≠≈∞]/g) || [];
+  return junkChars.length / clean.length;
+}
+
+// Helper to truncate footer leaks in options
+function truncateFooterLeak(text) {
+  if (!text) return '';
+  const footerPatterns = [
+    /\s+Prepared by.*/i,
+    /\s+Downloaded from.*/i,
+    /\s+Page\s+\d+.*/i,
+    /\s+www\..*/i,
+    /\s+https?:\/\/.*/i,
+    /\s+Copyright.*/i,
+    /\s+All rights reserved.*/i
+  ];
+  let cleaned = text;
+  for (const pattern of footerPatterns) {
+    cleaned = cleaned.replace(pattern, '');
+  }
+  return cleaned.trim();
+}
+
 /**
  * Compute a composite confidence score from OCR and parser signals.
  */
@@ -421,14 +449,14 @@ function computeConfidenceScore(ocrConfidence, parserConfidence, layoutConfidenc
 
   const questionText = (segmentText || parsedBlock?.question || '').trim();
 
-  // 1. Boundary Confidence (25%)
+  // 1. Boundary Confidence (10% weight)
   let boundaryConfidence = questionNumber != null ? 1.0 : 0.75;
   const bleedRegex = /(?:\n\s*\d+[\s.)]|\s+\([b-z]\)\s+|\bQ\d+\b)/;
   if (bleedRegex.test(questionText)) {
     boundaryConfidence = Math.max(0, boundaryConfidence - 0.25);
   }
 
-  // 2. Option Integrity (20%)
+  // 2. Option Integrity (10% weight)
   const format = (parsedBlock?.format || '').toLowerCase();
   const options = parsedBlock?.options || [];
   const filledOptions = options.filter(o => o.text && o.text.trim().length > 0).length;
@@ -442,23 +470,33 @@ function computeConfidenceScore(ocrConfidence, parserConfidence, layoutConfidenc
     else optionIntegrity = 0.0;
   }
 
-  // 3. Answer Key Integrity (10%)
-  let answerKeyIntegrity = 1.0;
-  if (isMCQ && !extraSignals.correctAnswerMapped) {
-    answerKeyIntegrity = 0.70;
-  }
+  // 3. Structural Confidence (15% weight)
+  const missingQuestion = questionText.length < 5 || /^(?:Question\s*(?:Text)?|Q\.?No\.?)$/i.test(questionText);
+  const missingAnswers = isMCQ && filledOptions < 2;
+  let structuralConfidence = 1.0;
+  if (missingQuestion) structuralConfidence -= 0.50;
+  if (missingAnswers) structuralConfidence -= 0.30;
+  structuralConfidence = Math.max(0, structuralConfidence);
 
-  // 4. Completeness Score (10%)
-  const completeness = extraSignals.completenessScore != null ? extraSignals.completenessScore : 1.0;
-
-  // 5. Semantic Validation (5%)
-  let semanticValidation = 0.80; // default plain text
+  // 4. Semantic Confidence (15% weight)
+  let semanticConfidence = 0.80; // default plain text
   const mathKeywords = /\b(?:find|evaluate|solve|equals?|determine|calculate|prove|show|simplify|integrate|differentiate|matrix|equation|probability|triangle|circle|derivative|angle|sum|product|ratio|fraction|expression|value|what|how|where|verify|construct)\b/i;
   const mathSymbols = /[+\-=*/^\\{}\[\]|<>∫∑∏√±≤≥≠≈∞αβγδεθλμπσφω]/;
   const trigPatterns = /\\(?:sin|cos|tan|cot|sec|csc|log|ln|exp|lim|max|min)/;
   const cleanText = questionText.replace(/\s+/g, '');
   
-  // LaTeX confidence: check unclosed braces
+  if (cleanText.length > 0) {
+    const garbageRatio = calculateGarbageRatio(questionText);
+    if (garbageRatio > 0.50) {
+      semanticConfidence = 0.40;
+    } else if (trigPatterns.test(questionText) || mathSymbols.test(questionText) || mathKeywords.test(questionText)) {
+      semanticConfidence = 1.0;
+    }
+  } else {
+    semanticConfidence = 0.40;
+  }
+
+  // LaTeX confidence: check unclosed braces (used internally, not part of composite weights directly)
   let unclosed = 0;
   const openers = ['{', '[', '('];
   const closers = ['}', ']', ')'];
@@ -478,38 +516,15 @@ function computeConfidenceScore(ocrConfidence, parserConfidence, layoutConfidenc
   unclosed += stack.length;
   const latexConfidence = Math.max(0, 1.0 - (0.15 * unclosed));
 
-  if (cleanText.length > 0) {
-    const validChars = cleanText.match(/[a-zA-Z0-9+\-=*/^$\\_{}\[\]()|<>.,;?!]/g) || [];
-    const validRatio = validChars.length / cleanText.length;
-    if (validRatio < 0.50) {
-      semanticValidation = 0.40;
-    } else if (trigPatterns.test(questionText) || mathSymbols.test(questionText) || mathKeywords.test(questionText)) {
-      semanticValidation = 1.0;
-    }
-  } else {
-    semanticValidation = 0.40;
-  }
-
-  // Calculate composite score based on weights
-  let composite = (ocr * 0.30) +
-                  (boundaryConfidence * 0.25) +
-                  (optionIntegrity * 0.20) +
-                  (answerKeyIntegrity * 0.10) +
-                  (completeness * 0.10) +
-                  (semanticValidation * 0.05);
-
-  // Penalties (applied directly to composite score)
-  const penalties = {
-    missingQuestion: questionText.length < 5 || /^(?:Question\s*(?:Text)?|Q\.?No\.?)$/i.test(questionText),
-    missingAnswers: isMCQ && filledOptions < 2,
-    footerContamination: /(?:Prepared by|Downloaded from|Page\s+\d+|www\..*|https?:\/\/.*)/i.test(questionText),
-    chapterTitleAsQuestion: /\b(?:exercise|chapter|ch\.)\s*\d/i.test(questionText)
-  };
-
-  if (penalties.missingQuestion) composite -= 0.50;
-  if (penalties.missingAnswers) composite -= 0.30;
-  if (penalties.footerContamination) composite -= 0.20;
-  if (penalties.chapterTitleAsQuestion) composite -= 0.40;
+  // Compute composite score using the new formula weights (Phase 9)
+  let composite = (ocr * 0.15) +
+                  (parser * 0.15) +
+                  (layout * 0.10) +
+                  (sect * 0.10) +
+                  (structuralConfidence * 0.15) +
+                  (semanticConfidence * 0.15) +
+                  (optionIntegrity * 0.10) +
+                  (boundaryConfidence * 0.10);
 
   const clampedComposite = Math.max(0, Math.min(1, composite));
 
@@ -520,21 +535,21 @@ function computeConfidenceScore(ocrConfidence, parserConfidence, layoutConfidenc
     sectionConfidence: sect,
     boundaryConfidence,
     optionIntegrityConfidence: optionIntegrity,
-    answerKeyIntegrity,
-    completenessScore: completeness,
-    semanticConfidence: semanticValidation,
-    structuralConfidence: 1.0 - (penalties.missingQuestion ? 0.5 : 0) - (penalties.missingAnswers ? 0.3 : 0),
+    completenessScore: extraSignals.completenessScore != null ? extraSignals.completenessScore : 1.0,
+    semanticConfidence,
+    structuralConfidence,
     latexConfidence,
     composite: clampedComposite,
-    rating: clampedComposite >= 0.90 ? 'high' : clampedComposite >= 0.75 ? 'medium' : 'low',
+    rating: clampedComposite >= 0.75 ? 'high' : clampedComposite >= 0.50 ? 'medium' : 'low',
     breakdown: {
-      ocr: (ocr * 0.30).toFixed(3),
-      boundary: (boundaryConfidence * 0.25).toFixed(3),
-      options: (optionIntegrity * 0.20).toFixed(3),
-      answerKey: (answerKeyIntegrity * 0.10).toFixed(3),
-      completeness: (completeness * 0.10).toFixed(3),
-      semantic: (semanticValidation * 0.05).toFixed(3),
-      penaltiesApplied: Object.keys(penalties).filter(k => penalties[k])
+      ocr: (ocr * 0.15).toFixed(3),
+      parser: (parser * 0.15).toFixed(3),
+      layout: (layout * 0.10).toFixed(3),
+      section: (sect * 0.10).toFixed(3),
+      structural: (structuralConfidence * 0.15).toFixed(3),
+      semantic: (semanticConfidence * 0.15).toFixed(3),
+      optionIntegrity: (optionIntegrity * 0.10).toFixed(3),
+      boundary: (boundaryConfidence * 0.10).toFixed(3)
     }
   };
 }
@@ -597,8 +612,30 @@ class OCRPipeline {
    * Run Layout analysis, page classification, and question parsing on raw OCR output.
    */
   static async runParsing(ocrResult, filename) {
-    const { rawText, latex: rawLatex, confidence } = ocrResult;
+    let { rawText, latex: rawLatex, confidence } = ocrResult;
     const ocrConf = confidence !== null ? confidence : 1.0;
+
+    // Clean raw text and latex before parsing (Phase 4: Footer/Header Removal)
+    const cleanDocText = (text) => {
+      if (!text) return '';
+      return text.split('\n').filter(line => {
+        const trimmed = line.trim();
+        if (/^Prepared by.*/i.test(trimmed)) return false;
+        if (/^Downloaded from.*/i.test(trimmed)) return false;
+        if (/^Page\s+\d+/i.test(trimmed)) return false;
+        if (/^www\./i.test(trimmed)) return false;
+        if (/^https?:\/\/.*/i.test(trimmed)) return false;
+        if (/^Copyright.*/i.test(trimmed)) return false;
+        if (/^All rights reserved.*/i.test(trimmed)) return false;
+        return true;
+      }).join('\n');
+    };
+
+    rawText = cleanDocText(rawText);
+    rawLatex = cleanDocText(rawLatex);
+    
+    ocrResult.rawText = rawText;
+    ocrResult.latex = rawLatex;
 
     // ── Layer 4: Page Classification (DOCUMENT UNDERSTANDING) ─────────────
     const textForClassification = rawLatex || rawText;
@@ -645,7 +682,7 @@ class OCRPipeline {
         globalOrder++;
         parsedQuestions.push({
           question: questionText,
-          options: parsedBlock.options,
+          options: (parsedBlock.options || []).map(o => ({ label: o.label, text: truncateFooterLeak(o.text) })),
           columnA: [],
           columnB: [],
           matchingChoices: [],
@@ -833,7 +870,7 @@ class OCRPipeline {
 
           const sanitizedOptions  = (parsedBlock.options || []).map(o => ({
             label: o.label,
-            text:  LatexSanitizer.sanitize(o.text, ocrConf),
+            text:  truncateFooterLeak(LatexSanitizer.sanitize(o.text, ocrConf)),
           }));
 
           globalOrder++;
@@ -953,6 +990,20 @@ class OCRPipeline {
               { correctAnswerMapped }
             );
 
+        // ── SECTION 3: HEADING DETECTION ──
+        const isHeading = (
+          (q.options || []).filter(o => o.text && o.text.trim().length > 0).length === 0 &&
+          !q.question.includes("?") &&
+          !/^Q\d+/i.test(q.question) &&
+          q.question.length < 120 &&
+          ["chapter", "unit", "exercise", "test", "mock", "section", "topic"].some(kw => q.question.toLowerCase().includes(kw))
+        );
+
+        if (isHeading) {
+          console.log(`[OCRPipeline] SKIP_AS_HEADING detected: "${q.question}"`);
+          continue; // Do not store, do not quarantine, do not count
+        }
+
         const enrichedQuestion = {
           question: OCRNormalizer.cleanQuestionText(q.question),
           options: q.options,
@@ -1014,35 +1065,62 @@ class OCRPipeline {
         }
 
         // 2. MISSING_OPTIONS
-        if (isMCQFormatQ && optionsFilled < 2) {
+        if (isMCQFormatQ && optionsFilled === 0) {
           quarantineReasons.push('MISSING_OPTIONS');
         }
 
-        // 3. OCR_CORRUPTION
-        if (confScore.ocrConfidence < 0.55 || confScore.composite < 0.60) {
+        // 3. EXCESSIVE_GARBAGE / OCR_CORRUPTION
+        const garbageRatio = calculateGarbageRatio(enrichedQuestion.question);
+        if (garbageRatio > 0.30) {
           quarantineReasons.push('OCR_CORRUPTION');
         }
 
         // 4. INVALID_LATEX
         const { LatexSanitizer: sanitizerInstance } = require('./latexSanitizer');
-        if (confScore.latexConfidence < 0.60 || !sanitizerInstance.isValidLatexSyntax(enrichedQuestion.question)) {
+        const isUnbalancedLatex = confScore.latexConfidence < 0.60 || !sanitizerInstance.isValidLatexSyntax(enrichedQuestion.question);
+        if (isUnbalancedLatex) {
           quarantineReasons.push('INVALID_LATEX');
         }
 
-        // ── EXTRACTION STATE DECISION ──────────────────────────────────────
-        let extractionState = 'ACCEPTED';
-        const composite = confScore.composite;
-        if (isFastPath || composite >= 0.90) {
-          extractionState = 'ACCEPTED';
-        } else if (composite >= 0.75) {
-          extractionState = 'MANUAL_REVIEW';
-        } else if (composite >= 0.60) {
-          extractionState = 'QUARANTINED';
-        } else {
-          extractionState = 'REJECTED';
+        // 5. PARSER_FAILURE
+        if (confScore.parserConfidence < 0.40) {
+          quarantineReasons.push('PARSER_FAILURE');
         }
 
-        // Override quarantine: if quarantineReasons are detected, set state to QUARANTINED instead of rejecting
+        // 6. OCR_CORRUPTION specific triggers (Section 9)
+        const repeatedSymbols = /([!@#$%^&*()_+={}\[\]|\\:;"'<>,.?\/~`\-]){4,}/.test(enrichedQuestion.question);
+        const excessNoise = garbageRatio > 0.40;
+        const isOcrCorrupted = repeatedSymbols || excessNoise || isUnbalancedLatex || confScore.parserConfidence < 0.40;
+        if (isOcrCorrupted && !quarantineReasons.includes('OCR_CORRUPTION')) {
+          quarantineReasons.push('OCR_CORRUPTION');
+        }
+
+        // ── EXTRACTION STATE DECISION (Section 2) ──────────────────────────
+        let extractionState = 'MANUAL_REVIEW';
+        const composite = confScore.composite;
+        const validQuestionStructure = enrichedQuestion.question.trim().length > 10 && (!isMCQFormatQ || optionsFilled >= 2);
+        const semanticValidationPassed = confScore.semanticConfidence >= 0.75;
+
+        const hasQuarantineSignal = (
+          composite < 0.50 ||
+          !enrichedQuestion.question || enrichedQuestion.question.trim().length === 0 ||
+          (isMCQFormatQ && optionsFilled === 0) ||
+          garbageRatio > 0.30 ||
+          isUnbalancedLatex ||
+          confScore.parserConfidence < 0.40
+        );
+
+        if (hasQuarantineSignal) {
+          extractionState = 'QUARANTINED';
+        } else if (composite >= 0.75 && validQuestionStructure && semanticValidationPassed) {
+          extractionState = 'ACCEPTED'; // maps to VERIFIED
+        } else if (composite >= 0.50) {
+          extractionState = 'MANUAL_REVIEW'; // maps to REVIEW
+        } else {
+          extractionState = 'QUARANTINED';
+        }
+
+        // Keep final quarantine status override
         if (quarantineReasons.length > 0) {
           extractionState = 'QUARANTINED';
         }
@@ -1050,6 +1128,17 @@ class OCRPipeline {
         enrichedQuestion.extractionState = extractionState;
         enrichedQuestion.quarantineReasons = quarantineReasons;
         enrichedQuestion.quarantined = extractionState === 'QUARANTINED';
+
+        // Log observability info (Section 10)
+        console.log("[OCRPipeline] Extracted Question Info:", JSON.stringify({
+          questionNumber: enrichedQuestion.questionNumber,
+          compositeConfidence: confScore.composite,
+          ocrConfidence: confScore.ocrConfidence,
+          parserConfidence: confScore.parserConfidence,
+          semanticConfidence: confScore.semanticConfidence,
+          finalDecision: extractionState === 'ACCEPTED' ? 'VERIFIED' : (extractionState === 'MANUAL_REVIEW' ? 'REVIEW' : 'QUARANTINED'),
+          quarantineReasons
+        }));
 
         if (extractionState === 'REJECTED') {
           totalRejectedFromValidation++;

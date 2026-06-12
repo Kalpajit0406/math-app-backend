@@ -168,22 +168,41 @@ function normalizeComponent(str) {
 }
 
 function generateContentHash(questionObj) {
-  const qText = normalizeComponent(questionObj.question || questionObj.questionText || '');
+  const qText = normalizeQuestion(questionObj.question || questionObj.questionText || '');
   const optionsArray = Array.isArray(questionObj.options) ? questionObj.options : [];
-  const opts = optionsArray.map(normalizeComponent).join('|');
-  const answer = normalizeComponent(questionObj.correctAnswer || '');
   
-  let type = '';
-  if (questionObj.type) {
-    type = normalizeComponent(questionObj.type);
-  } else if (optionsArray.length > 0) {
-    type = 'mcq';
-  } else {
-    type = 'numeric';
-  }
+  const getOptText = (index) => {
+    const opt = optionsArray[index];
+    if (!opt) return '';
+    const rawVal = typeof opt === 'object' ? (opt.text || '') : opt;
+    return normalizeQuestion(rawVal);
+  };
 
-  const contentStr = `${qText};${opts};${answer};${type}`;
-  return crypto.createHash('sha256').update(contentStr).digest('hex');
+  const optA = getOptText(0);
+  const optB = getOptText(1);
+  const optC = getOptText(2);
+  const optD = getOptText(3);
+
+  const hashSource = `${qText}||${optA}||${optB}||${optC}||${optD}`;
+  return crypto.createHash('sha256').update(hashSource).digest('hex');
+}
+
+function getOptionSimilarity(options1, options2) {
+  const opts1 = Array.isArray(options1) ? options1 : [];
+  const opts2 = Array.isArray(options2) ? options2 : [];
+  
+  if (opts1.length === 0 && opts2.length === 0) return 1.0;
+  if (opts1.length !== opts2.length) return 0.0;
+  
+  let totalScore = 0;
+  for (let i = 0; i < opts1.length; i++) {
+    const o1 = opts1[i];
+    const o2 = opts2[i];
+    const text1 = typeof o1 === 'object' ? o1.text : o1;
+    const text2 = typeof o2 === 'object' ? o2.text : o2;
+    totalScore += getSimilarityScore(text1 || '', text2 || '');
+  }
+  return totalScore / opts1.length;
 }
 
 class QuestionDuplicateDetector {
@@ -270,17 +289,22 @@ class QuestionDuplicateDetector {
     let maxSimilarity = 0.0;
 
     for (const cand of candidates) {
-      const score = getSimilarityScore(questionText, cand.question);
-      if (score > maxSimilarity) {
-        maxSimilarity = score;
-        bestMatch = cand;
+      const qSim = getSimilarityScore(questionText, cand.question);
+      if (qSim > 0.95) {
+        const optSim = getOptionSimilarity(options, cand.options);
+        if (optSim > 0.90) {
+          if (qSim > maxSimilarity) {
+            maxSimilarity = qSim;
+            bestMatch = cand;
+          }
+        }
       }
     }
 
     const end = Date.now();
     console.log(`[DuplicateDetector] Checked ${candidates.length} candidates in ${end - start}ms. Best match: ${maxSimilarity.toFixed(2)}`);
 
-    if (maxSimilarity >= 0.80) {
+    if (maxSimilarity > 0.0) {
       return {
         duplicateDetected: true,
         similarity: maxSimilarity,
