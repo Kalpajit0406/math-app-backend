@@ -44,6 +44,8 @@ async function ensureIndexes(mongoose) {
     const AuditLog = require('../models/auditLogModel');
     const AuthSession = require('../models/authSessionModel');
     const SystemMetrics = require('../models/systemMetricsModel');
+    const ImportJob = require('../models/importJobModel');
+    const ImportItem = require('../models/importItemModel');
 
     // Student indexes
     await safeCreateIndex(Student.collection, { studentPhone: 1 }, { unique: true });
@@ -185,6 +187,18 @@ async function ensureIndexes(mongoose) {
     } catch (err) {}
     await safeCreateIndex(SystemMetrics.collection, { timestamp: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });
     console.log('✓ SystemMetrics indexes created');
+
+    // ImportJob indexes
+    await safeCreateIndex(ImportJob.collection, { userId: 1 });
+    await safeCreateIndex(ImportJob.collection, { status: 1 });
+    await safeCreateIndex(ImportJob.collection, { createdAt: -1 });
+    console.log('✓ ImportJob indexes created');
+
+    // ImportItem indexes
+    await safeCreateIndex(ImportItem.collection, { jobId: 1 });
+    await safeCreateIndex(ImportItem.collection, { status: 1 });
+    await safeCreateIndex(ImportItem.collection, { createdAt: -1 });
+    console.log('✓ ImportItem indexes created');
 
     // Drop legacy indexes
     try {
