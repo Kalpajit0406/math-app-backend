@@ -264,7 +264,9 @@ test('Exam Security Telemetry and Anti-Cheat API Verification', async (t) => {
       '/api/v1/tests/create',
       {
         title: 'Grading Integrity Test Exam',
-        duration: 30,
+        duration: 1,
+        date: '2020-01-01', // Past date - ensures exam is already ended at submit time
+        time: '10:00 AM',
         classNo: 10,
         language: 'English',
         questions: [
@@ -341,6 +343,6 @@ test('Exam Security Telemetry and Anti-Cheat API Verification', async (t) => {
     if (attemptId2) await Attempt.findByIdAndDelete(attemptId2);
     if (examId2) await Exam.findByIdAndDelete(examId2);
     
-    await mongoose.disconnect();
+    await mongoose.connection.close(false);
   });
 });

@@ -34,6 +34,7 @@ const getChapters = async (req, res) => {
       }
     }
 
+    filter.isDeleted = { $ne: true };
     const chapters = await Chapter.find(filter).sort({ classId: 1, chapterName: 1 });
     res.json({
       success: true,
@@ -162,9 +163,6 @@ const editChapter = async (req, res) => {
       } catch (err) {
         // Replica sets not enabled, proceed without transaction
       }
-
-      chapter.chapterName = chapterName.trim();
-      await chapter.save({ session: transactionStarted ? session : undefined });
 
       chapter.chapterName = chapterName.trim();
       await chapter.save({ session: transactionStarted ? session : undefined });

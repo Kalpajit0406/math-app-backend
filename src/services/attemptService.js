@@ -127,10 +127,14 @@ const attemptService = {
       const exam = await Exam.findById(attempt.examId);
       if (!exam) throw new Error('Exam not found');
 
-      // Check if exam has ended
+      // Check if the exam period (attempt window or scheduled slot) is over
+      let attemptEndBoundary = new Date(attempt.startTime.getTime() + exam.duration * 60 * 1000);
       const examEndTime = getExamEndTime(exam);
+      if (examEndTime && examEndTime < attemptEndBoundary) {
+        attemptEndBoundary = examEndTime;
+      }
       const now = new Date();
-      const isExamEnded = examEndTime ? (now >= examEndTime) : true;
+      const isExamEnded = now >= attemptEndBoundary;
 
       let score = 0;
       const evaluatedResponses = [];
@@ -206,12 +210,21 @@ const attemptService = {
     
     const exam = result.examId;
     if (exam) {
+      let attemptEndBoundary = new Date(result.startTime.getTime() + exam.duration * 60 * 1000);
       const examEndTime = getExamEndTime(exam);
+      if (examEndTime && examEndTime < attemptEndBoundary) {
+        attemptEndBoundary = examEndTime;
+      }
       const now = new Date();
-      const isExamEnded = examEndTime ? (now >= examEndTime) : true;
+      const isExamEnded = now >= attemptEndBoundary;
 
       if (!isExamEnded && !isPrivileged) {
-        throw new Error(`Results for this exam will be available after the exam ends at ${exam.date} @ ${exam.time}`);
+        const remainingMs = attemptEndBoundary.getTime() - now.getTime();
+        const remainingSec = Math.max(0, Math.ceil(remainingMs / 1000));
+        const err = new Error(`Results will be processed and available once the exam period is over.`);
+        err.statusCode = 403;
+        err.remainingSeconds = remainingSec;
+        throw err;
       }
 
       await evaluateAttemptIfNeeded(result, exam);

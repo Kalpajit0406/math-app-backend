@@ -38,6 +38,21 @@ test('Chapter Management & Centralized Schema Synchronization', async (t) => {
 
   // 1. Authenticate as Teacher
   await t.test('Authenticate as Teacher/Admin', async () => {
+    try {
+      const mongoose = require('mongoose');
+      const connectDB = require('../src/config/db');
+      if (mongoose.connection.readyState === 0) {
+        await connectDB();
+      }
+      const Chapter = require('../src/models/chapterModel');
+      const Question = require('../src/models/questionModel');
+      await Chapter.deleteMany({ chapterName: /Integration Chapter/i });
+      await Question.deleteMany({ chapter: /Integration Chapter/i });
+      await mongoose.connection.close(false);
+    } catch (err) {
+      console.error('DB cleanup failed:', err);
+    }
+
     const res = await request('POST', '/api/v1/student/login', {
       studentPhone: TEACHER_PHONE,
       password: process.env.TEACHER_BYPASS_PASSWORD || 'admin123'

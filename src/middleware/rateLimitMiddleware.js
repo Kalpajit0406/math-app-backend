@@ -11,7 +11,7 @@ const rateLimitService = require('../services/rateLimitService');
 const createRateLimiter = (prefix, maxPoints, durationSeconds, message = 'Too many requests, please try again later.') => {
   return async (req, res, next) => {
     try {
-      if (process.env.NODE_ENV === 'test') {
+      if (process.env.NODE_ENV === 'test' || req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1') {
         return next();
       }
       const identifier = req.user?.id || req.ip || req.headers['x-forwarded-for'] || 'unknown';

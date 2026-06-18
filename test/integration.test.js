@@ -250,20 +250,12 @@ async function runTests() {
   console.log('');
 
   if (testsFailed > 0) {
-    console.log('Failed tests:');
-    results
-      .filter((r) => r.status === 'FAIL')
-      .forEach((r) => {
-        console.log(`  - ${r.name}: ${r.error}`);
-      });
+    throw new Error(`${testsFailed} integration test(s) failed`);
   }
-
-  process.exit(testsFailed > 0 ? 1 : 0);
 }
 
-// Run tests
-console.log(`Starting integration tests against ${BASE_URL}\n`);
-runTests().catch((e) => {
-  console.error('Fatal error:', e);
-  process.exit(1);
+// Run tests (wrapped in node:test so failures are properly reported)
+const { test: nodeTest } = require('node:test');
+nodeTest('Integration Tests', async () => {
+  await runTests();
 });

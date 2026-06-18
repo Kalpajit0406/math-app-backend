@@ -31,8 +31,12 @@ const getResult = async (req, res) => {
     const result = await attemptService.getResult(req.user.id, req.user.role, req.params.id);
     res.json({ success: true, data: result });
   } catch (error) {
-    const statusCode = error.message === 'Result not found' ? 404 : 403;
-    res.status(statusCode).json({ success: false, message: error.message });
+    const statusCode = error.statusCode || (error.message === 'Result not found' ? 404 : 403);
+    res.status(statusCode).json({ 
+      success: false, 
+      message: error.message,
+      remainingSeconds: error.remainingSeconds 
+    });
   }
 };
 

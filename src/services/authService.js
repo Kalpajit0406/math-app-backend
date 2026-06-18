@@ -304,6 +304,22 @@ const authService = {
       throw new Error('Invalid credentials');
     }
 
+    // Check if user is already logged in on a different device
+    if (student.accountType !== 'ADMIN') {
+      const AuthSession = require('../models/authSessionModel');
+      const activeSession = await AuthSession.findOne({
+        userId: student._id,
+        revoked: false,
+        expiresAt: { $gt: new Date() }
+      });
+
+      if (activeSession) {
+        if (!deviceFingerprint || activeSession.deviceFingerprint !== deviceFingerprint) {
+          throw new Error('This account is already logged in on another device. Please log out from that device first.');
+        }
+      }
+    }
+
     const jwtSecret = process.env.JWT_SECRET || process.env.ACCESS_TOKEN_SECRET;
     if (!jwtSecret) throw new Error('JWT secret is not configured');
 
