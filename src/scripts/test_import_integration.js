@@ -96,14 +96,14 @@ async function runTest() {
   }
 
   // Get items
-  const items = await ImportItem.find({ jobId: job._id });
+  const items = await ImportItem.find({ importJobId: job._id });
   console.log(`Found ${items.length} items for job.`);
   items.forEach((item, index) => {
-    console.log(`Item ${index + 1}: ${item.questionText}`);
+    console.log(`Item ${index + 1}: ${item.question}`);
     console.log(`  Options: ${item.options.join(', ')}`);
     console.log(`  Correct Answer: ${item.correctAnswer}`);
-    console.log(`  Class: ${item.classNo}, Chapter: ${item.chapterName}`);
-    console.log(`  Duplicate detected: ${item.duplicateInfo.detected}`);
+    console.log(`  Class: ${item.className}, Chapter: ${item.chapterName}`);
+    console.log(`  Duplicate detected: ${item.duplicateFound}`);
   });
 
   if (items.length !== 2) {
@@ -117,7 +117,7 @@ async function runTest() {
 
   let mockResData = null;
   const mockReq = {
-    params: { jobId: job._id.toString() },
+    params: { id: job._id.toString() },
     body: { confirmItemIds, rejectItemIds },
     user: { id: user._id.toString() }
   };
@@ -156,11 +156,12 @@ async function runTest() {
 
   // Clean up
   await ImportJob.deleteMany({ sourceFileName: 'TEST_INTEGRATION_SOURCE' });
-  await ImportItem.deleteMany({ jobId: job._id });
+  await ImportItem.deleteMany({ importJobId: job._id });
   await Question.deleteMany({ _id: savedQuestion._id });
   if (user.email === 'test_teacher_import@example.com') {
     await User.deleteOne({ _id: user._id });
   }
+
 
   console.log('\n✓ All backend import integration tests passed successfully!');
   await mongoose.disconnect();

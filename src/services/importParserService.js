@@ -9,6 +9,7 @@ const ImportItem = require('../models/importItemModel');
 const { OCRPipeline, QuestionSegmenter } = require('./ocrPipeline');
 const { MCQOptionParser } = require('./mcqOptionParser');
 const { QuestionDuplicateDetector } = require('./questionDuplicateDetector');
+const ImportNormalizerService = require('./importNormalizerService');
 
 // Helper to count PDF pages using pdfinfo
 function getPdfPageCount(pdfPath) {
@@ -76,9 +77,15 @@ function parseCSVLine(line) {
 
 // Dynamic Class and Chapter Mapper helper
 async function resolveClassAndChapter(classVal, chapterVal) {
-  const { getClassIdFromNo } = require('../utils/classCache');
+  const { getClassIdFromNo, initCache } = require('../utils/classCache');
   const Chapter = mongoose.model('Chapter');
   const { normalizeChapterName } = require('../utils/chapterNormalization');
+
+  // Ensure class cache is initialized
+  let testClassId = getClassIdFromNo(12);
+  if (!testClassId) {
+    await initCache();
+  }
 
   const parsedClassNo = parseInt(classVal, 10) || 12;
   const classId = getClassIdFromNo(parsedClassNo) || getClassIdFromNo(12);
@@ -99,17 +106,7 @@ async function resolveClassAndChapter(classVal, chapterVal) {
 
 // Normalize options array to exactly 4 items
 function normalizeOptions(options) {
-  const list = (options || []).map(o => {
-    if (typeof o === 'object' && o !== null) {
-      return (o.text || '').trim();
-    }
-    return String(o || '').trim();
-  }).filter(Boolean);
-
-  while (list.length < 4) {
-    list.push(`Option ${String.fromCharCode(65 + list.length)}`);
-  }
-  return list.slice(0, 4);
+  return ImportNormalizerService.normalizeOptions(options);
 }
 
 class ImportParserService {
@@ -123,11 +120,14 @@ class ImportParserService {
 
     try {
       job.status = 'parsing';
+      job.startedAt = new Date();
+      job.progress = 10;
       await job.save();
 
       let parsedItems = [];
+      const type = job.sourceType || job.importType;
 
-      switch (job.importType) {
+      switch (type) {
         case 'pdf':
           parsedItems = await this.parsePDFJob(job);
           break;
@@ -144,56 +144,104 @@ class ImportParserService {
           parsedItems = await this.parseCSVJob(job);
           break;
         default:
-          throw new Error(`Unsupported import type: ${job.importType}`);
+          throw new Error(`Unsupported import type: ${type}`);
       }
 
       console.log(`[ImportService] Parsed ${parsedItems.length} items for job ${job._id}`);
 
+      job.progress = 50;
+      await job.save();
+
       // Save extracted items into MongoDB under ImportItem
       let savedCount = 0;
+      let index = 0;
       for (const item of parsedItems) {
+        const textToNormalize = item.questionText || item.question || '';
+        const normalized = ImportNormalizerService.normalizeQuestion({
+          question: textToNormalize,
+          options: item.options,
+          correctAnswer: item.correctAnswer,
+          explanation: item.explanation
+        });
+
+        // Resolve class and chapter IDs dynamically
+        const resolved = await resolveClassAndChapter(item.classNo || 12, item.chapterName || 'General');
+
         // Run Duplicate Check before saving ImportItem
         const dupCheck = await QuestionDuplicateDetector.checkDuplicate(
-          item.questionText,
-          item.classNo,
-          item.options,
-          item.correctAnswer
+          normalized.question,
+          resolved.classNo,
+          normalized.options,
+          normalized.correctAnswer
         );
 
+        const qHash = QuestionDuplicateDetector.hash(QuestionDuplicateDetector.normalize(normalized.question));
+        const cHash = QuestionDuplicateDetector.contentHash({
+          question: normalized.question,
+          options: normalized.options,
+          correctAnswer: normalized.correctAnswer
+        });
+
+        const warnings = [];
+        if (dupCheck.duplicateDetected) {
+          warnings.push(`Duplicate check warning: ${dupCheck.rating} (${(dupCheck.similarity * 100).toFixed(0)}% similarity)`);
+        }
+
+        const errors = [];
+        if (!normalized.question) {
+          errors.push('Question text is empty or failed to parse.');
+        }
+        if (!normalized.options || normalized.options.length !== 4) {
+          errors.push('Exactly 4 options are required.');
+        }
+
         const importItem = new ImportItem({
-          jobId: job._id,
-          status: 'pending_verification',
-          questionText: item.questionText,
-          options: normalizeOptions(item.options),
-          correctAnswer: item.correctAnswer || 'A',
-          explanation: item.explanation || '',
-          classNo: item.classNo,
-          chapterName: item.chapterName,
+          importJobId: job._id,
+          sourceIndex: index++,
+          question: normalized.question,
+          options: normalized.options,
+          correctAnswer: normalized.correctAnswer,
+          explanation: normalized.explanation || '',
           language: item.language || 'English',
-          duplicateInfo: {
-            detected: dupCheck.duplicateDetected,
-            similarity: dupCheck.similarity,
-            rating: dupCheck.rating,
-            existingQuestionId: dupCheck.existingQuestion ? dupCheck.existingQuestion._id : null
-          },
-          rawItemData: item.rawItemData || {}
+          className: String(resolved.classNo),
+          chapterName: resolved.chapterName,
+          classId: resolved.classId,
+          chapterId: resolved.chapterId,
+          diagram: item.diagram || null,
+          rawContent: item.rawContent || JSON.stringify(item.rawItemData || {}),
+          normalizedContent: normalized.question,
+          parserConfidence: item.confidence || 1.0,
+          status: 'pending_verification',
+          warnings,
+          errors,
+          questionHash: qHash,
+          contentHash: cHash,
+          duplicateFound: dupCheck.duplicateDetected,
+          duplicateQuestionId: dupCheck.existingQuestion ? dupCheck.existingQuestion._id : null
         });
 
         await importItem.save();
         savedCount++;
+
+        // Update progress dynamically
+        job.progress = Math.round(50 + (savedCount / parsedItems.length) * 50);
+        await job.save();
       }
 
       job.status = 'preview_ready';
       job.totalItems = savedCount;
+      job.completedAt = new Date();
       await job.save();
 
     } catch (err) {
       console.error(`[ImportService] Job ${job._id} failed:`, err.message);
       job.status = 'failed';
       job.errorMessage = err.message;
+      job.completedAt = new Date();
       await job.save();
     }
   }
+
 
   // --- PDF PARSER ---
   static async parsePDFJob(job) {

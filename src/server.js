@@ -134,6 +134,7 @@ app.use('/api/v1/admin/ocr', ocrRoutes);
 app.use('/api/v1/pdf', pdfRoutes);
 app.use('/api/v1/self-assessment', selfAssessmentRoutes);
 app.use('/api/v1/import', importRoutes);
+app.use('/api/v1/imports', importRoutes);
 app.use('/api/v1/scan', ocrRoutes); // Backward compatibility for legacy frontend constants
 
 // Health probe for service discovery

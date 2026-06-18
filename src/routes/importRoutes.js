@@ -11,22 +11,32 @@ const { secureScanUpload } = require('../middleware/uploadMiddleware');
 router.use(authMiddleware);
 router.use(authorizeRoles('admin', 'teacher'));
 
-// Upload source for import (PDF/Image/URL/Markdown/CSV)
-router.post('/upload', secureScanUpload.single('file'), importController.uploadSource);
+// --- NEW CLEAN REST API (Relative to /api/v1/imports) ---
+// Create and queue import job
+router.post('/', secureScanUpload.single('file'), importController.createImport);
+// List all import jobs
+router.get('/', importController.getJobs);
+// Get job status
+router.get('/:id', importController.getJobStatus);
+// Get job items
+router.get('/:id/items', importController.getJobItems);
+// Update/edit item
+router.patch('/item/:id', importController.updateItem);
+// Approve individual item
+router.post('/item/:id/approve', importController.approveItem);
+// Reject individual item
+router.post('/item/:id/reject', importController.rejectItem);
+// Batch save/confirm items
+router.post('/:id/save', importController.confirmJobItems);
+// Delete job
+router.delete('/:id', importController.deleteJob);
 
-// Retrieve all import jobs
+// --- LEGACY ENDPOINTS (For backward compatibility, e.g. /api/v1/import) ---
+router.post('/upload', secureScanUpload.single('file'), importController.createImport);
 router.get('/jobs', importController.getJobs);
-
-// Retrieve job status
 router.get('/jobs/:jobId', importController.getJobStatus);
-
-// Retrieve job extracted items for preview
 router.get('/jobs/:jobId/items', importController.getJobItems);
-
-// Edit an individual unverified item
 router.put('/items/:itemId', importController.updateItem);
-
-// Confirm/Reject batch of items for a job
 router.post('/jobs/:jobId/confirm', importController.confirmJobItems);
 
 module.exports = router;
