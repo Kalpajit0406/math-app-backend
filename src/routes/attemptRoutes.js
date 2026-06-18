@@ -13,6 +13,7 @@ router.post('/sync-offline', authMiddleware, checkPermission('canAccessTeacherEx
 router.get('/result/:id', authMiddleware, checkPermission('canAccessTeacherExams'), attemptController.getResult);
 router.get('/leaderboard/:examId', authMiddleware, checkPermission('canAccessLeaderboard'), attemptController.getLeaderboard);
 router.get('/completed-exam-ids', authMiddleware, checkPermission('canAccessTeacherExams'), attemptController.getCompletedExamIds);
+router.get('/completed-attempts', authMiddleware, checkPermission('canAccessTeacherExams'), attemptController.getCompletedAttempts);
 
 // TestResponse routes (Web)
 router.post('/', authMiddleware, testResponseController.saveStudentTest);

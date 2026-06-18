@@ -25,6 +25,24 @@ class PerformanceAnalytics {
         };
       }
 
+      // Auto-evaluate completed attempts that have ended but haven't been evaluated/saved yet
+      const Exam = require('../models/examModel');
+      const unevaluatedAttempts = await Attempt.find({
+        userId: student._id,
+        endTime: { $exists: true },
+        'responses.isCorrect': null
+      }).populate('examId');
+
+      for (const attempt of unevaluatedAttempts) {
+        if (attempt.examId) {
+          try {
+            await evaluateAttemptIfNeeded(attempt, attempt.examId);
+          } catch (err) {
+            console.error(`Error auto-evaluating attempt ${attempt._id} in performance fetch:`, err.message);
+          }
+        }
+      }
+
       const perf = await StudentPerformance.findOne({ studentId: student._id });
       if (!perf || !perf.testHistory || perf.testHistory.length === 0) {
         return {
