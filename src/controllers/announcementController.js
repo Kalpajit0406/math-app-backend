@@ -28,9 +28,13 @@ const createAnnouncement = async (req, res) => {
     const announcement = new Announcement({ title, message, targetClassIds, image });
     await announcement.save();
 
-    // Convert to object and delete targetClass to ensure response does not contain it
+    // Convert to object and map targetClassIds back to targetClass for client app compatibility
     const responseData = announcement.toJSON();
-    delete responseData.targetClass;
+    if (responseData.targetClassIds && responseData.targetClassIds.length === 1) {
+      responseData.targetClass = responseData.targetClassIds[0].toString();
+    } else {
+      responseData.targetClass = 'all';
+    }
 
     res.status(201).json({ success: true, data: responseData });
   } catch (error) {
@@ -55,10 +59,14 @@ const getAnnouncements = async (req, res) => {
     }
     const announcements = await Announcement.find(filter).sort({ createdAt: -1 });
     
-    // Ensure response output does not contain targetClass
+    // Ensure response output contains mapped targetClass for client app compatibility
     const sanitizedAnnouncements = announcements.map(ann => {
       const annObj = ann.toJSON();
-      delete annObj.targetClass;
+      if (annObj.targetClassIds && annObj.targetClassIds.length === 1) {
+        annObj.targetClass = annObj.targetClassIds[0].toString();
+      } else {
+        annObj.targetClass = 'all';
+      }
       return annObj;
     });
 
