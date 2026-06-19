@@ -9,6 +9,11 @@ const PerformanceAnalytics = require('./performanceAnalyticsService');
 
 const { getRedisClient } = require('../config/redis');
 
+// In-process fallback lock set (used only when Redis is in MockRedis mode).
+// This is safe for single-process deployments (one PM2 fork). For multi-process
+// deployments, Redis must be available for cross-process locking.
+const submissionLocks = new Set();
+
 // Distributed lock helpers using Redis
 async function acquireAttemptLock(attemptId, ttlMs = 15000) {
   const redis = getRedisClient();
@@ -253,6 +258,7 @@ const attemptService = {
     if (!examId) throw new Error('Exam id is required');
     if (!Array.isArray(responses)) throw new Error('Responses must be an array');
 
+    // Use in-memory lock as fallback when Redis is operating in MockRedis mode
     const lockKey = `${userId}_${examId}`;
     if (submissionLocks.has(lockKey)) {
       throw new Error('Sync operation is already in progress for this exam.');
@@ -281,10 +287,9 @@ const attemptService = {
         }
       }
 
-      // Check if a completed attempt already exists
+      // Check if a completed attempt already exists (idempotent)
       let attempt = await Attempt.findOne({ userId, examId, endTime: { $exists: true } });
       if (attempt) {
-        // Idempotent sync
         return attempt;
       }
 
@@ -294,6 +299,8 @@ const attemptService = {
       const isExamEnded = examEndTime ? (now >= examEndTime) : true;
 
       let score = 0;
+      let marksObtained = 0;
+      let evaluationSummary = null;
       const evaluatedResponses = [];
       const seenQuestionIds = new Set();
 
@@ -321,11 +328,27 @@ const attemptService = {
         }
       }
 
-      // Check if there is an uncompleted attempt
+      // Use the same evaluation engine as submitAttempt for consistency
+      if (isExamEnded) {
+        const ResultEvaluationService = require('./resultEvaluationService');
+        evaluationSummary = ResultEvaluationService.evaluate(
+          exam.questions.length,
+          evaluatedResponses,
+          exam.questions,
+          exam.marksPerQuestion || 1.0,
+          exam.negativeMarking || 0.0
+        );
+        score = evaluationSummary.correctQuestions;
+        marksObtained = evaluationSummary.marksObtained;
+      }
+
+      // Check if there is an uncompleted attempt — update it
       let savedAttempt;
       attempt = await Attempt.findOne({ userId, examId, endTime: { $exists: false } });
       if (attempt) {
         attempt.score = isExamEnded ? score : 0;
+        attempt.marksObtained = isExamEnded ? marksObtained : 0;
+        attempt.evaluationSummary = isExamEnded ? evaluationSummary : null;
         attempt.responses = evaluatedResponses;
         attempt.endTime = new Date();
         if (securityMetadata.violations) attempt.violations = securityMetadata.violations;
@@ -335,11 +358,13 @@ const attemptService = {
         if (securityMetadata.rootDetected !== undefined) attempt.rootDetected = securityMetadata.rootDetected;
         savedAttempt = await attempt.save();
       } else {
-        // Create new completed attempt
+        // Create new completed attempt for offline submissions
         attempt = new Attempt({
           userId,
           examId,
           score: isExamEnded ? score : 0,
+          marksObtained: isExamEnded ? marksObtained : 0,
+          evaluationSummary: isExamEnded ? evaluationSummary : null,
           responses: evaluatedResponses,
           startTime: new Date(Date.now() - (exam.duration * 60 * 1000)),
           endTime: new Date(),
