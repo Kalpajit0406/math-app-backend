@@ -12,11 +12,11 @@ const register = async (req, res) => {
 
 const login = async (req, res) => {
   try {
-    const { studentPhone, password, deviceBlueprint } = req.body;
+    const { studentPhone, password, deviceBlueprint, logoutFromOtherDevices } = req.body;
     if (!studentPhone || !password) {
       return res.status(400).json({ success: false, message: 'Phone and password are required' });
     }
-    const data = await authService.login(studentPhone, password, deviceBlueprint);
+    const data = await authService.login(studentPhone, password, deviceBlueprint, logoutFromOtherDevices);
     // Note: data contains { student, accessToken }
     res.json({ success: true, data });
   } catch (error) {

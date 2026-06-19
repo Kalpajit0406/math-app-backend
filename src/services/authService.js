@@ -144,7 +144,7 @@ const authService = {
     return await student.save();
   },
 
-  login: async (studentPhone, password, deviceBlueprint = null) => {
+  login: async (studentPhone, password, deviceBlueprint = null, logoutFromOtherDevices = false) => {
     const teacherBypassPhone = getTeacherBypassPhone();
     const crypto = require('crypto');
 
@@ -315,7 +315,14 @@ const authService = {
 
       if (activeSession) {
         if (!deviceFingerprint || activeSession.deviceFingerprint !== deviceFingerprint) {
-          throw new Error('This account is already logged in on another device. Please log out from that device first.');
+          if (logoutFromOtherDevices) {
+            await AuthSession.updateMany(
+              { userId: student._id },
+              { $set: { revoked: true, revokedAt: new Date() } }
+            );
+          } else {
+            throw new Error('This account is already logged in on another device. Please log out from that device first.');
+          }
         }
       }
     }
