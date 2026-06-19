@@ -45,6 +45,14 @@ const attemptSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  marksObtained: {
+    type: Number,
+    default: 0,
+  },
+  evaluationSummary: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null,
+  },
   responses: [responseSchema],
   violations: [violationSchema],
   isAutoSubmitted: {

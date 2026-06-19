@@ -136,7 +136,7 @@ async function evaluateAttemptIfNeeded(attempt, exam) {
   }
   
   const hasNullResponse = attempt.responses.some(r => r.isCorrect === null);
-  if (!hasNullResponse) {
+  if (!hasNullResponse && attempt.evaluationSummary) {
     return attempt;
   }
 
@@ -146,20 +146,28 @@ async function evaluateAttemptIfNeeded(attempt, exam) {
   const isExamEnded = endTime ? (now >= endTime) : true;
 
   if (isExamEnded) {
-    let score = 0;
-    for (const res of attempt.responses) {
-      const question = (exam.questions && typeof exam.questions.id === 'function')
-        ? exam.questions.id(res.questionId)
-        : (exam.questions ? exam.questions.find(q => q._id && res.questionId && q._id.toString() === res.questionId.toString()) : null);
-      if (question) {
-        res.isCorrect = evaluateQuestionCorrectness(question, res.userAnswer);
-        if (res.isCorrect) score++;
-      } else {
-        res.isCorrect = false;
+    const ResultEvaluationService = require('../services/resultEvaluationService');
+    const summary = ResultEvaluationService.evaluate(
+      exam.questions.length,
+      attempt.responses,
+      exam.questions,
+      exam.marksPerQuestion || 1.0,
+      exam.negativeMarking || 0.0
+    );
+
+    // Map evaluation status back to response array
+    attempt.responses.forEach(res => {
+      const evalQ = summary.questions.find(q => q.questionId === String(res.questionId));
+      if (evalQ) {
+        res.isCorrect = evalQ.isCorrect;
       }
-    }
-    attempt.score = score;
+    });
+
+    attempt.score = summary.correctQuestions;
+    attempt.marksObtained = summary.marksObtained;
+    attempt.evaluationSummary = summary;
     attempt.markModified('responses');
+    attempt.markModified('evaluationSummary');
     await attempt.save();
 
     // Save performance analytics after the exam has ended
@@ -168,13 +176,12 @@ async function evaluateAttemptIfNeeded(attempt, exam) {
       const student = await Student.findById(attempt.userId);
       if (student && student.studentPhone) {
         const PerformanceAnalytics = require('../services/performanceAnalyticsService');
-        const totalQ = exam.questions ? exam.questions.length : attempt.responses.length;
         await PerformanceAnalytics.savePerformance(
           student.studentPhone,
           attempt._id.toString(),
           'exam',
-          score,
-          totalQ
+          summary.correctQuestions,
+          exam.questions.length
         );
       }
     } catch (err) {

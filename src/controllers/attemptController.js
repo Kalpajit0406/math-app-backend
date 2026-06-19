@@ -73,9 +73,20 @@ const getLeaderboard = async (req, res) => {
     
     const leaderboard = await Attempt.find({ examId })
       .populate('userId', 'firstName lastName studentPhone')
-      .sort({ score: -1, endTime: 1 });
+      .sort({ marksObtained: -1, score: -1, endTime: 1 })
+      .lean();
 
-    res.json({ success: true, data: leaderboard });
+    const formattedLeaderboard = leaderboard.map(entry => {
+      // Map _id to id for consistency
+      const id = entry._id ? entry._id.toString() : '';
+      return {
+        ...entry,
+        id,
+        score: entry.marksObtained !== undefined ? entry.marksObtained : entry.score
+      };
+    });
+
+    res.json({ success: true, data: formattedLeaderboard });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

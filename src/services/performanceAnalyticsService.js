@@ -109,6 +109,7 @@ class PerformanceAnalytics {
           examTitle: h.testType === 'self-assessment' ? 'Self Assessment' : 'Exam',
           score: h.score,
           maxScore: h.totalQuestions,
+          accuracyPercent: h.percentage,
           date: h.takenAt ? new Date(h.takenAt).toLocaleDateString() : '',
         })),
         lastTestPercentage: perf.lastTestPercentage,

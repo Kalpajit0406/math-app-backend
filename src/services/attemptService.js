@@ -137,6 +137,8 @@ const attemptService = {
       const isExamEnded = now >= attemptEndBoundary;
 
       let score = 0;
+      let marksObtained = 0;
+      let evaluationSummary = null;
       const evaluatedResponses = [];
       const seenQuestionIds = new Set();
 
@@ -164,7 +166,22 @@ const attemptService = {
         }
       }
 
-      attempt.score = isExamEnded ? score : 0;
+      if (isExamEnded) {
+        const ResultEvaluationService = require('./resultEvaluationService');
+        evaluationSummary = ResultEvaluationService.evaluate(
+          exam.questions.length,
+          evaluatedResponses,
+          exam.questions,
+          exam.marksPerQuestion || 1.0,
+          exam.negativeMarking || 0.0
+        );
+        score = evaluationSummary.correctQuestions;
+        marksObtained = evaluationSummary.marksObtained;
+      }
+
+      attempt.score = score;
+      attempt.marksObtained = marksObtained;
+      attempt.evaluationSummary = evaluationSummary;
       attempt.responses = evaluatedResponses;
       attempt.endTime = new Date();
 
@@ -181,13 +198,12 @@ const attemptService = {
           const Student = require('../models/studentModel');
           const student = await Student.findById(userId);
           if (student && student.studentPhone) {
-            const totalQ = exam ? exam.questions.length : attempt.responses.length;
             await PerformanceAnalytics.savePerformance(
               student.studentPhone,
               attempt._id.toString(),
               'exam',
               score,
-              totalQ
+              exam.questions.length
             );
           }
         } catch (err) {
