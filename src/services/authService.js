@@ -291,6 +291,11 @@ const authService = {
     const student = await Student.findOne({ studentPhone }).select('+passwordHash');
     if (!student) throw new Error('Invalid credentials');
 
+    // Block ADMIN accounts from standard login when teacher bypass is disabled
+    if (!isTeacherBypassEnabled() && student.accountType === 'ADMIN') {
+      throw new Error('Invalid credentials');
+    }
+
     // Check lockout on standard student
     const LOCKOUT_TIME = 15 * 60 * 1000;
     if (student.failedLoginAttempts >= 5 && student.lastFailedLoginAt) {
