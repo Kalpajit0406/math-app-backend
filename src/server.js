@@ -40,7 +40,7 @@ try {
 
 const path = require('path');
 const app = express();
-app.set('trust proxy', true);
+app.set('trust proxy', 'loopback');
 app.use('/public', express.static(path.join(__dirname, '../public')));
 
 // Request logger middleware
