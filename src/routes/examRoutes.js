@@ -28,7 +28,7 @@ router.post('/create', authMiddleware, authorizeRoles('admin', 'teacher'), valid
 router.get('/:id', authMiddleware, checkPermission('canAccessTeacherExams'), examController.getExamById);
 
 // TestConfig routes (Web) - all require authentication
-router.post('/', authMiddleware, authorizeRoles('admin', 'teacher'), testConfigController.createTestConfig);
+router.post('/', authMiddleware, authorizeRoles('admin', 'teacher'), validationRules.createExamValidation, testConfigController.createTestConfig);
 router.get('/:classNo/:language', authMiddleware, testConfigController.getTestsByClassAndLanguage);
 router.delete('/delete/:id', authMiddleware, authorizeRoles('admin', 'teacher'), testConfigController.deleteTestConfig);
 

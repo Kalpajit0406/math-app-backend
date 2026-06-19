@@ -194,22 +194,34 @@ const validationRules = {
 
   // Exam validation
   createExamValidation: (req, res, next) => {
-    const isSchedulePayload = !!(req.body.date && req.body.time && req.body.classNo && req.body.language);
+    const isSchedulePayload = req.path === '/';
     
     if (isSchedulePayload) {
       req.body.title = req.body.title || `Class ${req.body.classNo} ${req.body.language} Test`;
-      req.body.duration = Number(req.body.totalTime || req.body.duration || 0);
+      
+      const totalMarks = Number(req.body.totalMarks || 0);
+      const marksPQ = Number(req.body.marksPQ !== undefined ? req.body.marksPQ : 1.0);
+      const timePQ = Number(req.body.timePQ || 0); // timePQ in seconds
+      
+      const calculatedQuestions = marksPQ > 0 ? (totalMarks / marksPQ) : 0;
+      const calculatedDurationSeconds = calculatedQuestions * timePQ;
+      const calculatedDurationMinutes = Math.ceil(calculatedDurationSeconds / 60);
+
+      req.body.duration = Number(req.body.duration || calculatedDurationMinutes || 0);
       req.body.totalTime = req.body.duration;
-      req.body.totalQuestions = Number(req.body.totalQuestions || 0);
-      req.body.negativeMarking = Number(req.body.negativeMarking !== undefined ? req.body.negativeMarking : 0.0);
-      req.body.marksPerQuestion = Number(req.body.marksPerQuestion !== undefined ? req.body.marksPerQuestion : 1.0);
+      req.body.totalQuestions = Number(req.body.totalQuestions || calculatedQuestions || 0);
+      req.body.negativeMarking = Number(req.body.negativeMarking !== undefined ? req.body.negativeMarking : (req.body.negativeMarksPQ || 0.0));
+      req.body.marksPerQuestion = Number(req.body.marksPerQuestion !== undefined ? req.body.marksPerQuestion : marksPQ);
       req.body.chapters = Array.isArray(req.body.chapters) ? req.body.chapters : [];
       if (!req.body.questions) {
         req.body.questions = [];
       }
     }
 
-    const { title, description, duration, classNo, language, totalMarks, questions } = req.body;
+    const rawDuration = req.body.duration !== undefined ? req.body.duration : req.body.totalTime;
+    const duration = rawDuration !== undefined ? Number(rawDuration) : undefined;
+    const title = req.body.title || `Class ${req.body.classNo} ${req.body.language} Test`;
+    const { description, classNo, language, totalMarks, questions, date, time } = req.body;
     
     const errors = [];
     if (!title || typeof title !== 'string' || title.length < 3 || title.length > 200) {
@@ -218,7 +230,7 @@ const validationRules = {
     if (description && (typeof description !== 'string' || description.length > 2000)) {
       errors.push('Description must be under 2000 characters');
     }
-    if (!duration || typeof duration !== 'number' || duration <= 0) {
+    if (duration === undefined || isNaN(duration) || duration <= 0) {
       errors.push('Duration must be greater than 0 minutes');
     }
     if (!validateClassNumber(classNo)) {
@@ -232,51 +244,53 @@ const validationRules = {
     }
     
     // Validate questions array
-    if (!isSchedulePayload) {
-      if (!Array.isArray(questions) || questions.length === 0) {
-        errors.push('Exam must contain at least one question');
-      } else {
-        const seenQuestions = new Set();
-        for (let i = 0; i < questions.length; i++) {
-          const q = questions[i];
-          if (!q) {
-            errors.push(`Question at index ${i} is empty`);
-            continue;
+    const isRandomSampleed = !!(classNo && language && date && time);
+    if (Array.isArray(questions) && questions.length > 0) {
+      const seenQuestions = new Set();
+      for (let i = 0; i < questions.length; i++) {
+        const q = questions[i];
+        if (!q) {
+          errors.push(`Question at index ${i} is empty`);
+          continue;
+        }
+        
+        const qText = (q.questionText || q.question || '').trim();
+        if (!qText) {
+          errors.push(`Question at index ${i} must have question text`);
+        } else {
+          if (seenQuestions.has(qText.toLowerCase())) {
+            errors.push(`Duplicate question detected at index ${i}`);
           }
-          
-          const qText = (q.questionText || q.question || '').trim();
-          if (!qText) {
-            errors.push(`Question at index ${i} must have question text`);
+          seenQuestions.add(qText.toLowerCase());
+        }
+
+        const qType = q.type || ((q.options && q.options.length > 0) ? 'mcq' : 'numeric');
+        if (!['mcq', 'numeric'].includes(qType)) {
+          errors.push(`Question at index ${i} must have a valid type (mcq or numeric)`);
+        }
+
+        if (qType === 'mcq') {
+          if (!Array.isArray(q.options) || q.options.length !== 4) {
+            errors.push(`MCQ question at index ${i} must have exactly 4 options`);
           } else {
-            if (seenQuestions.has(qText.toLowerCase())) {
-              errors.push(`Duplicate question detected at index ${i}`);
-            }
-            seenQuestions.add(qText.toLowerCase());
-          }
-
-          if (!q.type || !['mcq', 'numeric'].includes(q.type)) {
-            errors.push(`Question at index ${i} must have a valid type (mcq or numeric)`);
-          }
-
-          if (q.type === 'mcq') {
-            if (!Array.isArray(q.options) || q.options.length !== 4) {
-              errors.push(`MCQ question at index ${i} must have exactly 4 options`);
-            } else {
-              for (let j = 0; j < 4; j++) {
-                if (typeof q.options[j] !== 'string' || q.options[j].trim() === '') {
-                  errors.push(`MCQ question at index ${i} has empty option at choice ${j + 1}`);
-                }
+            for (let j = 0; j < 4; j++) {
+              if (typeof q.options[j] !== 'string' || q.options[j].trim() === '') {
+                errors.push(`MCQ question at index ${i} has empty option at choice ${j + 1}`);
               }
             }
-            if (!q.correctAnswer || !['A', 'B', 'C', 'D'].includes(String(q.correctAnswer).trim().toUpperCase())) {
-              errors.push(`MCQ question at index ${i} must have correct answer of A, B, C, or D`);
-            }
-          } else if (q.type === 'numeric') {
-            if (q.correctAnswer === undefined || String(q.correctAnswer).trim() === '') {
-              errors.push(`Numeric question at index ${i} must have a correct answer`);
-            }
+          }
+          if (!q.correctAnswer || !['A', 'B', 'C', 'D'].includes(String(q.correctAnswer).trim().toUpperCase())) {
+            errors.push(`MCQ question at index ${i} must have correct answer of A, B, C, or D`);
+          }
+        } else if (qType === 'numeric') {
+          if (q.correctAnswer === undefined || String(q.correctAnswer).trim() === '') {
+            errors.push(`Numeric question at index ${i} must have a correct answer`);
           }
         }
+      }
+    } else {
+      if (!isSchedulePayload && !isRandomSampleed) {
+        errors.push('Exam must contain at least one question');
       }
     }
     
@@ -284,14 +298,16 @@ const validationRules = {
       return res.status(400).json({ success: false, message: errors.join('; ') });
     }
     
+    req.body.duration = duration;
     req.body.title = sanitizeString(title);
     req.body.description = sanitizeString(description || '');
     if (Array.isArray(questions)) {
       req.body.questions = questions.map(q => {
         const qText = (q.questionText || q.question || '');
         const opts = Array.isArray(q.options) ? q.options.map(opt => sanitizeLatex(opt)) : [];
+        const qType = q.type || ((q.options && q.options.length > 0) ? 'mcq' : 'numeric');
         return {
-          type: q.type,
+          type: qType,
           questionText: sanitizeLatex(qText),
           options: opts,
           correctAnswer: String(q.correctAnswer).trim()
@@ -435,6 +451,63 @@ const validationRules = {
     
     req.body.title = sanitizeString(title);
     req.body.message = sanitizeString(message);
+    
+    next();
+  },
+
+  // Chapter validation
+  createChapterValidation: (req, res, next) => {
+    const { classId, chapterName, parentChapter } = req.body;
+    const errors = [];
+    
+    if (!classId || (typeof classId !== 'string' && typeof classId !== 'number')) {
+      errors.push('Invalid or missing classId');
+    }
+    
+    if (!chapterName || typeof chapterName !== 'string' || chapterName.trim().length < 1 || chapterName.length > 200) {
+      errors.push('Chapter name is required and must be under 200 characters');
+    }
+    
+    if (parentChapter !== undefined && (typeof parentChapter !== 'string' || !['11', '12', 'JEE'].includes(parentChapter))) {
+      errors.push('parentChapter must be "11", "12", or "JEE"');
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, message: errors.join('; ') });
+    }
+    
+    req.body.chapterName = sanitizeString(chapterName);
+    if (typeof classId === 'string') {
+      req.body.classId = classId.trim();
+    }
+    if (parentChapter) {
+      req.body.parentChapter = parentChapter.trim();
+    }
+    
+    next();
+  },
+
+  editChapterValidation: (req, res, next) => {
+    const { chapterName, action } = req.body;
+    const errors = [];
+    
+    if (!action || !['rename', 'delete_questions'].includes(action)) {
+      errors.push("Valid action ('rename' or 'delete_questions') is required");
+    }
+    
+    if (action === 'rename') {
+      if (!chapterName || typeof chapterName !== 'string' || chapterName.trim().length < 1 || chapterName.length > 200) {
+        errors.push('chapterName is required and must be under 200 characters for renaming');
+      }
+    }
+    
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, message: errors.join('; ') });
+    }
+    
+    if (chapterName) {
+      req.body.chapterName = sanitizeString(chapterName);
+    }
     
     next();
   },

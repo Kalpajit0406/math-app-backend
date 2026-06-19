@@ -63,6 +63,9 @@ test('Test Config and Test Response API Verification', async (t) => {
         timePQ: 60,
         negativeMarksPQ: 1,
         chapters: ['Algebra'],
+      },
+      {
+        'Authorization': `Bearer ${token}`
       }
     );
     assert.equal(res.status, 201);
@@ -98,7 +101,9 @@ test('Test Config and Test Response API Verification', async (t) => {
 
   // 5. Get Tests by Class and Language
   await t.test('GET /api/v1/tests/10/English', async () => {
-    const res = await request('GET', '/api/v1/tests/10/English');
+    const res = await request('GET', '/api/v1/tests/10/English', null, {
+      'Authorization': `Bearer ${token}`
+    });
     assert.equal(res.status, 200);
     const body = JSON.parse(res.body);
     assert.ok(Array.isArray(body));
@@ -135,7 +140,9 @@ test('Test Config and Test Response API Verification', async (t) => {
 
   // 7. Check Test Response
   await t.test('GET /api/v1/testResponse/check/:studentMobile/:testId', async () => {
-    const res = await request('GET', `/api/v1/testResponse/check/${STUDENT_PHONE}/${testConfigId}`);
+    const res = await request('GET', `/api/v1/testResponse/check/${STUDENT_PHONE}/${testConfigId}`, null, {
+      'Authorization': `Bearer ${token}`
+    });
     assert.equal(res.status, 200);
     const body = JSON.parse(res.body);
     assert.ok(body.success);
@@ -145,7 +152,9 @@ test('Test Config and Test Response API Verification', async (t) => {
 
   // 8. Get student test response
   await t.test('GET /api/v1/testResponse/:studentMobile', async () => {
-    const res = await request('GET', `/api/v1/testResponse/${STUDENT_PHONE}`);
+    const res = await request('GET', `/api/v1/testResponse/${STUDENT_PHONE}`, null, {
+      'Authorization': `Bearer ${token}`
+    });
     assert.equal(res.status, 200);
     const body = JSON.parse(res.body);
     assert.ok(body.success);
@@ -167,7 +176,9 @@ test('Test Config and Test Response API Verification', async (t) => {
 
   // 10. Clean up TestConfig
   await t.test('DELETE /api/v1/tests/delete/:id', async () => {
-    const res = await request('DELETE', `/api/v1/tests/delete/${testConfigId}`);
+    const res = await request('DELETE', `/api/v1/tests/delete/${testConfigId}`, null, {
+      'Authorization': `Bearer ${token}`
+    });
     assert.equal(res.status, 200);
     const body = JSON.parse(res.body);
     assert.ok(body.success);
