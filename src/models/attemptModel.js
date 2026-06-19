@@ -87,18 +87,10 @@ const attemptSchema = new mongoose.Schema({
 
 // Composite query index for lookups
 attemptSchema.index({ userId: 1, examId: 1, endTime: 1 });
-
-// Partial unique index: only one active (unfinished) attempt per user per exam.
-// partialFilterExpression targets documents where endTime does NOT exist, so
-// completed attempts are unaffected and historical records are preserved.
-attemptSchema.index(
-  { userId: 1, examId: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { endTime: { $exists: false } },
-    name: 'unique_active_attempt_per_user_exam'
-  }
-);
+// Note: A partial unique index on {userId,examId} where endTime does not exist would
+// prevent race-condition duplicate active attempts at DB level, but MongoDB Atlas
+// shared clusters reject $exists:false in partialFilterExpression.
+// Duplicate prevention is enforced at application level in startAttempt().
 
 attemptSchema.index({ createdAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
 

@@ -122,21 +122,9 @@ async function ensureIndexes(mongoose) {
     await safeCreateIndex(Attempt.collection, { userId: 1, examId: 1 });
     await safeCreateIndex(Attempt.collection, { userId: 1, examId: 1, endTime: 1 });
     await safeCreateIndex(Attempt.collection, { createdAt: -1 });
-    // Partial unique index: prevents race-condition duplicate active attempts
-    try {
-      await Attempt.collection.createIndex(
-        { userId: 1, examId: 1 },
-        {
-          unique: true,
-          partialFilterExpression: { endTime: { $exists: false } },
-          name: 'unique_active_attempt_per_user_exam'
-        }
-      );
-    } catch (err) {
-      if (!isIgnorableIndexError(err)) {
-        console.warn('Attempt partial unique index warning:', err.message);
-      }
-    }
+    // Note: partial unique index {userId,examId} where endTime does not exist
+    // is not supported by MongoDB Atlas (rejects $exists:false in partialFilterExpression).
+    // Duplicate active attempt prevention is enforced at application level in startAttempt.
     console.log('✓ Attempt indexes created');
 
     // Verification Sessions indexes
