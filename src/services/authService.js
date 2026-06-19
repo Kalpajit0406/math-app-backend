@@ -283,6 +283,11 @@ const authService = {
       throw new Error('Phone and password are required');
     }
 
+    // Block bypass phone from standard login when bypass is disabled
+    if (!isTeacherBypassEnabled() && teacherBypassPhone && studentPhone === teacherBypassPhone) {
+      throw new Error('Invalid credentials');
+    }
+
     const student = await Student.findOne({ studentPhone }).select('+passwordHash');
     if (!student) throw new Error('Invalid credentials');
 
