@@ -80,13 +80,11 @@ class PerformanceAnalytics {
       const completedAttempts = totalAttempts;
       const completionRate = totalAttempts > 0 ? 100.0 : 0.0;
       
-      const totalQuestionsAnswered = filteredHistory.reduce((sum, h) => sum + h.totalQuestions, 0);
-      const totalCorrect = filteredHistory.reduce((sum, h) => sum + h.score, 0);
-      const accuracyRate = totalQuestionsAnswered > 0
-        ? parseFloat(((totalCorrect / totalQuestionsAnswered) * 100).toFixed(1))
-        : 0.0;
-
       const sumPercentage = filteredHistory.reduce((sum, h) => sum + h.percentage, 0);
+      const totalQuestionsAnswered = filteredHistory.reduce((sum, h) => sum + h.totalQuestions, 0);
+      const accuracyRate = totalAttempts > 0
+        ? parseFloat((sumPercentage / totalAttempts).toFixed(1))
+        : 0.0;
       const averageScore = totalAttempts > 0
         ? parseFloat((sumPercentage / totalAttempts).toFixed(2))
         : 0.0;
@@ -191,7 +189,7 @@ class PerformanceAnalytics {
       let query = { classId };
       if (language) query.language = language;
 
-      const students = await require('../models/studentModel').find(query).select('_id').lean();
+      const students = await require('../models/studentModel').find(query).select('_id firstName lastName').lean();
       const totalStudents = students.length;
 
       if (totalStudents === 0) {
@@ -213,28 +211,65 @@ class PerformanceAnalytics {
           }
         },
         {
-          $group: {
-            _id: '$userId',
-            totalAttempts: { $sum: 1 },
-            totalScore:    { $sum: { $ifNull: ['$score', 0] } },
-            totalQuestions: { $sum: {
-              $cond: [
-                { $gt: [{ $size: { $ifNull: ['$responses', []] } }, 0] },
-                { $size: '$responses' },
-                0
-              ]
-            }}
+          $lookup: {
+            from: 'exams',
+            localField: 'examId',
+            foreignField: '_id',
+            as: 'examInfo'
           }
         },
         {
-          $addFields: {
-            averageScore: {
+          $unwind: {
+            path: '$examInfo',
+            preserveNullAndEmptyArrays: true
+          }
+        },
+        {
+          $project: {
+            userId: 1,
+            score: 1,
+            percentage: {
               $cond: [
-                { $gt: ['$totalAttempts', 0] },
-                { $divide: ['$totalScore', '$totalAttempts'] },
-                0
+                { $gt: [{ $ifNull: ['$evaluationSummary.accuracyPercent', -1] }, -1] },
+                '$evaluationSummary.accuracyPercent',
+                {
+                  $cond: [
+                    {
+                      $and: [
+                        { $not: { $eq: [{ $ifNull: ['$examInfo', null] }, null] } },
+                        { $isArray: '$examInfo.questions' },
+                        { $gt: [{ $size: '$examInfo.questions' }, 0] }
+                      ]
+                    },
+                    {
+                      $multiply: [
+                        { $divide: [{ $ifNull: ['$score', 0] }, { $size: '$examInfo.questions' }] },
+                        100
+                      ]
+                    },
+                    {
+                      $cond: [
+                        { $gt: [{ $size: { $ifNull: ['$responses', []] } }, 0] },
+                        {
+                          $multiply: [
+                            { $divide: [{ $ifNull: ['$score', 0] }, { $size: '$responses' }] },
+                            100
+                          ]
+                        },
+                        0
+                      ]
+                    }
+                  ]
+                }
               ]
             }
+          }
+        },
+        {
+          $group: {
+            _id: '$userId',
+            totalAttempts: { $sum: 1 },
+            averageScore: { $avg: '$percentage' }
           }
         },
         { $sort: { averageScore: -1 } }
@@ -255,8 +290,15 @@ class PerformanceAnalytics {
         (studentStats.reduce((s, r) => s + r.averageScore, 0) / activeStudents).toFixed(2)
       );
 
+      const studentNameMap = new Map();
+      students.forEach(s => {
+        const name = `${s.firstName || ''} ${s.lastName || ''}`.trim();
+        studentNameMap.set(s._id.toString(), name);
+      });
+
       const formatted = studentStats.map(r => ({
         studentId: r._id,
+        name: studentNameMap.get(r._id.toString()) || 'N/A',
         averageScore: parseFloat(r.averageScore.toFixed(2)),
         totalAttempts: r.totalAttempts
       }));
