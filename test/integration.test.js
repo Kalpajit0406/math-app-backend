@@ -124,7 +124,7 @@ async function runTests() {
 
   // Test 5: Fetch questions with case-insensitive language
   await test('Fetch Questions (lowercase language)', async () => {
-    const res = await request('GET', '/api/v1/question/questions?classNo=10&language=english&pageSize=100');
+    const res = await request('GET', '/api/v1/question/questions?classNo=10&language=english&pageSize=100', null, { Authorization: `Bearer ${token}` });
     if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
     const body = JSON.parse(res.body);
     if (!body.data) throw new Error('No data in response');

@@ -93,10 +93,19 @@ const getLeaderboard = async (req, res) => {
 };
 
 const syncOfflineAttempt = async (req, res) => {
-  res.status(400).json({
-    success: false,
-    message: 'Offline mode is deprecated. All exam attempts must remain connected to the live server session.'
-  });
+  try {
+    const { examId, responses, violations, isAutoSubmitted, autoSubmitReason, emulatorDetected, rootDetected } = req.body;
+    const result = await attemptService.syncOfflineAttempt(req.user.id, examId, responses, {
+      violations,
+      isAutoSubmitted,
+      autoSubmitReason,
+      emulatorDetected,
+      rootDetected
+    });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
 };
 
 const getCompletedExamIds = async (req, res) => {

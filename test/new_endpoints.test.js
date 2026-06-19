@@ -81,7 +81,7 @@ test('Test Config and Test Response API Verification', async (t) => {
     assert.equal(res.status, 200);
     const body = JSON.parse(res.body);
     assert.ok(Array.isArray(body));
-    const found = body.some(t => t._id === testConfigId);
+    const found = body.some(t => (t.id || t._id) === testConfigId);
     assert.ok(found, 'Created test config should be in the tests list');
   });
 
@@ -107,7 +107,7 @@ test('Test Config and Test Response API Verification', async (t) => {
     assert.equal(res.status, 200);
     const body = JSON.parse(res.body);
     assert.ok(Array.isArray(body));
-    assert.ok(body.some(t => t._id === testConfigId));
+    assert.ok(body.some(t => (t.id || t._id) === testConfigId));
   });
 
   // 6. Save Test Response

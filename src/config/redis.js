@@ -211,6 +211,10 @@ function getRedisClient() {
               if (res instanceof Promise) {
                 return res.catch(err => {
                   if (isConnectionError(err)) {
+                    if (process.env.NODE_ENV === 'production') {
+                      console.error('CRITICAL REDIS ERROR: Redis connection failed in production!');
+                      process.exit(1);
+                    }
                     if (!useMock) {
                       console.warn('⚠️ Redis connection failed. Falling back to in-memory MockRedis.');
                       useMock = true;
@@ -226,6 +230,10 @@ function getRedisClient() {
               return res;
             } catch (err) {
               if (isConnectionError(err)) {
+                if (process.env.NODE_ENV === 'production') {
+                  console.error('CRITICAL REDIS ERROR: Redis connection failed in production!');
+                  process.exit(1);
+                }
                 if (!useMock) {
                   console.warn('⚠️ Redis connection failed. Falling back to in-memory MockRedis.');
                   useMock = true;
@@ -249,12 +257,17 @@ function getRedisClient() {
     });
 
     realClient.on('error', (err) => {
-      if (!useMock) {
-        console.error('Redis client error:', err.message);
-        if (isConnectionError(err)) {
+      if (isConnectionError(err)) {
+        if (process.env.NODE_ENV === 'production') {
+          console.error('CRITICAL REDIS ERROR: Redis server is unreachable in production environment!');
+          process.exit(1);
+        }
+        if (!useMock) {
           console.warn('⚠️ Redis server is unreachable. Falling back to high-performance in-memory MockRedis.');
           useMock = true;
         }
+      } else if (!useMock) {
+        console.error('Redis client error:', err.message);
       }
     });
   }

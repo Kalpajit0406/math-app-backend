@@ -66,8 +66,8 @@ const saveStudentTest = asyncHandler(async (req, res) => {
         throw new ApiError(403, "Forbidden: student mismatch");
     }
 
-    // Delete existing response for the same student
-    await TestResponse.findOneAndDelete({ studentMobile });
+    // Delete existing response for the same student and testconfig to preserve historical responses of other tests
+    await TestResponse.findOneAndDelete({ studentMobile, testId });
 
     // Save new Submission
     const newTestResponse = await TestResponse.create({

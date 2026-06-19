@@ -73,7 +73,19 @@ const createTestConfig = asyncHandler(async (req, res) => {
 // @access  Public
 const getAllStudentTests = asyncHandler(async (req, res) => {
   const tests = await TestConfig.find().sort({ createdAt: -1 });
-  return res.status(200).json(tests);
+  const sanitized = tests.map(t => ({
+    id: t._id || t.id,
+    date: t.date,
+    time: t.time,
+    classNo: t.classNo,
+    language: t.language,
+    totalMarks: t.totalMarks,
+    marksPQ: t.marksPQ,
+    timePQ: t.timePQ,
+    negativeMarksPQ: t.negativeMarksPQ,
+    chapters: t.chapters || []
+  }));
+  return res.status(200).json(sanitized);
 });
 
 // @desc    Fetch tests by class and language
@@ -106,7 +118,20 @@ const getTestsByClassAndLanguage = asyncHandler(async (req, res) => {
     language: testLanguageFilter,
   }).sort({ createdAt: -1 });
 
-  return res.status(200).json(tests);
+  const sanitized = tests.map(t => ({
+    id: t._id || t.id,
+    date: t.date,
+    time: t.time,
+    classNo: t.classNo,
+    language: t.language,
+    totalMarks: t.totalMarks,
+    marksPQ: t.marksPQ,
+    timePQ: t.timePQ,
+    negativeMarksPQ: t.negativeMarksPQ,
+    chapters: t.chapters || []
+  }));
+
+  return res.status(200).json(sanitized);
 });
 
 // @desc    Delete existing test configuration
