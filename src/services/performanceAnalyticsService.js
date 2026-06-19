@@ -25,13 +25,14 @@ class PerformanceAnalytics {
         };
       }
 
-      // Auto-evaluate completed attempts that have ended but haven't been evaluated/saved yet
+      // Auto-evaluate completed attempts that have ended but haven't been evaluated/saved yet.
+      // Limit to 10 per request to avoid unbounded work on every analytics page load.
       const Exam = require('../models/examModel');
       const unevaluatedAttempts = await Attempt.find({
         userId: student._id,
         endTime: { $exists: true },
         'responses.isCorrect': null
-      }).populate('examId');
+      }).populate('examId').limit(10);
 
       for (const attempt of unevaluatedAttempts) {
         if (attempt.examId) {
@@ -136,51 +137,41 @@ class PerformanceAnalytics {
   }
 
   // Get performance breakdown by chapter
+  // NOTE: Avoids per-response Question.findById() calls (N*M DB queries).
+  // Uses exam-level chapter metadata instead.
   static async getPerformanceByChapter(studentId, attempts) {
     const performanceByChapter = {};
 
     for (const attempt of attempts) {
       if (!attempt.examId || !attempt.responses) continue;
 
+      // Build a questionId -> chapter map from embedded exam questions (no extra DB calls)
+      const questionChapterMap = new Map();
+      if (attempt.examId.questions && Array.isArray(attempt.examId.questions)) {
+        for (const q of attempt.examId.questions) {
+          if (q && q._id && q.chapter) {
+            questionChapterMap.set(String(q._id), q.chapter);
+          }
+        }
+      }
+
+      const examChapterFallback =
+        (attempt.examId.chapters && attempt.examId.chapters.length > 0)
+          ? attempt.examId.chapters[0]
+          : (attempt.examId.title || 'General');
+
       for (const response of attempt.responses) {
-        let chapter = 'General';
-        
-        // Find chapter from populated examId.questions subdocuments
-        if (attempt.examId.questions) {
-          const q = attempt.examId.questions.find(
-            item => item && item._id && response.questionId && item._id.toString() === response.questionId.toString()
-          );
-          if (q && q.chapter) {
-            chapter = q.chapter;
-          }
-        }
-        
-        // Fallback to checking the global Question collection just in case
-        if (chapter === 'General') {
-          const question = response.questionId ? await Question.findById(response.questionId).lean() : null;
-          if (question && question.chapter) {
-            chapter = question.chapter;
-          } else if (attempt.examId.chapters && attempt.examId.chapters.length > 0) {
-            chapter = attempt.examId.chapters[0];
-          } else if (attempt.examId.title) {
-            chapter = attempt.examId.title;
-          }
-        }
+        const chapter =
+          (response.questionId && questionChapterMap.get(String(response.questionId)))
+          || examChapterFallback;
 
         if (!performanceByChapter[chapter]) {
-          performanceByChapter[chapter] = {
-            attempts: 0,
-            attempted: 0,
-            correct: 0,
-            accuracy: 0.0,
-          };
+          performanceByChapter[chapter] = { attempts: 0, attempted: 0, correct: 0, accuracy: 0.0 };
         }
 
         performanceByChapter[chapter].attempts++;
         performanceByChapter[chapter].attempted++;
-        if (response.isCorrect) {
-          performanceByChapter[chapter].correct++;
-        }
+        if (response.isCorrect) performanceByChapter[chapter].correct++;
         performanceByChapter[chapter].accuracy = parseFloat((
           (performanceByChapter[chapter].correct / performanceByChapter[chapter].attempts) * 100
         ).toFixed(1));
@@ -190,7 +181,9 @@ class PerformanceAnalytics {
     return performanceByChapter;
   }
 
-  // Get class/batch analytics for teachers
+  // Get class/batch analytics for teachers.
+  // Uses a single MongoDB aggregation pipeline instead of loading all attempts into JS
+  // memory (previously O(N*M) where N=students, M=attempts per student).
   static async getClassPerformance(classNo, language = null) {
     try {
       const { getClassIdFromNo } = require('../utils/classCache');
@@ -198,62 +191,83 @@ class PerformanceAnalytics {
       let query = { classId };
       if (language) query.language = language;
 
-      const students = await require('../models/studentModel').find(query).lean();
-      const studentIds = students.map(s => s._id);
+      const students = await require('../models/studentModel').find(query).select('_id').lean();
+      const totalStudents = students.length;
 
-      const attempts = await Attempt.find({ userId: { $in: studentIds } })
-        .populate('userId', 'firstName lastName')
-        .lean();
-
-      if (attempts.length === 0) {
+      if (totalStudents === 0) {
         return {
-          classNo,
-          totalStudents: students.length,
-          activeStudents: 0,
-          classAverageScore: 0,
-          classAverageAccuracy: 0,
-          topPerformers: [],
-          needsAttention: [],
+          classNo, totalStudents: 0, activeStudents: 0,
+          classAverageScore: 0, classAverageAccuracy: 0,
+          topPerformers: [], needsAttention: []
         };
       }
 
-      // Calculate class metrics
-      const completedAttempts = attempts.filter(a => a.endTime);
-      const classAverageScore = (
-        completedAttempts.reduce((sum, a) => sum + (a.score || 0), 0) / completedAttempts.length
-      ).toFixed(2);
+      const studentIds = students.map(s => s._id);
 
-      // Find top performers and those needing attention
-      const studentStats = {};
-      for (const attempt of completedAttempts) {
-        if (!studentStats[attempt.userId]) {
-          studentStats[attempt.userId] = {
-            totalAttempts: 0,
-            totalScore: 0,
-            userData: attempt.userId,
-          };
-        }
-        studentStats[attempt.userId].totalAttempts++;
-        studentStats[attempt.userId].totalScore += attempt.score || 0;
+      // Single aggregation: group by userId, compute averages server-side
+      const pipeline = [
+        {
+          $match: {
+            userId: { $in: studentIds },
+            endTime: { $exists: true }
+          }
+        },
+        {
+          $group: {
+            _id: '$userId',
+            totalAttempts: { $sum: 1 },
+            totalScore:    { $sum: { $ifNull: ['$score', 0] } },
+            totalQuestions: { $sum: {
+              $cond: [
+                { $gt: [{ $size: { $ifNull: ['$responses', []] } }, 0] },
+                { $size: '$responses' },
+                0
+              ]
+            }}
+          }
+        },
+        {
+          $addFields: {
+            averageScore: {
+              $cond: [
+                { $gt: ['$totalAttempts', 0] },
+                { $divide: ['$totalScore', '$totalAttempts'] },
+                0
+              ]
+            }
+          }
+        },
+        { $sort: { averageScore: -1 } }
+      ];
+
+      const studentStats = await Attempt.aggregate(pipeline);
+
+      if (studentStats.length === 0) {
+        return {
+          classNo, totalStudents, activeStudents: 0,
+          classAverageScore: 0, classAverageAccuracy: 0,
+          topPerformers: [], needsAttention: []
+        };
       }
 
-      const studentPerformance = Object.entries(studentStats)
-        .map(([_, stats]) => ({
-          averageScore: (stats.totalScore / stats.totalAttempts).toFixed(2),
-          totalAttempts: stats.totalAttempts,
-        }))
-        .sort((a, b) => b.averageScore - a.averageScore);
+      const activeStudents = studentStats.length;
+      const classAverageScore = parseFloat(
+        (studentStats.reduce((s, r) => s + r.averageScore, 0) / activeStudents).toFixed(2)
+      );
 
-      const topPerformers = studentPerformance.slice(0, 5);
-      const needsAttention = studentPerformance.slice(-5).reverse();
+      const formatted = studentStats.map(r => ({
+        studentId: r._id,
+        averageScore: parseFloat(r.averageScore.toFixed(2)),
+        totalAttempts: r.totalAttempts
+      }));
 
       return {
         classNo,
-        totalStudents: students.length,
-        activeStudents: new Set(attempts.map(a => a.userId)).size,
-        classAverageScore: parseFloat(classAverageScore),
-        topPerformers,
-        needsAttention,
+        totalStudents,
+        activeStudents,
+        classAverageScore,
+        topPerformers: formatted.slice(0, 5),
+        needsAttention: formatted.slice(-5).reverse()
       };
     } catch (error) {
       console.error('Error calculating class performance:', error);

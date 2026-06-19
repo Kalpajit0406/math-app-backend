@@ -83,10 +83,21 @@ function generateHash(normalizedQuestion) {
 
 /**
  * Levenshtein distance algorithm for string similarity.
+ * 
+ * OOM Guard: Returns MAX distance (so similarity → 0) when either string exceeds
+ * MAX_LEV_LEN characters. For very long strings Jaccard similarity is used instead.
  */
+const MAX_LEV_LEN = 500; // characters
+
 function getLevenshteinDistance(str1, str2) {
   const m = str1.length;
   const n = str2.length;
+
+  // Guard: skip Levenshtein for very long strings or extreme length ratios
+  if (m > MAX_LEV_LEN || n > MAX_LEV_LEN) return Math.max(m, n);
+  const ratio = m > 0 && n > 0 ? Math.max(m, n) / Math.min(m, n) : Infinity;
+  if (ratio > 2.5) return Math.max(m, n); // strings too different in length
+
   const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
 
   for (let i = 0; i <= m; i++) dp[i][0] = i;
@@ -270,26 +281,42 @@ class QuestionDuplicateDetector {
       };
     }
 
-    // 2. Fetch candidates from same classNo or all classes (with limit) for similarity check
+    // 2. Fetch candidates from same classNo (with limit) for similarity check.
+    // Pre-filter by question text length to avoid Levenshtein on wildly different-length strings.
     const classNum = parseInt(classNo, 10);
     let filter = {};
     if (!isNaN(classNum)) {
       const { getClassIdFromNo } = require('../utils/classCache');
       const classId = getClassIdFromNo(classNum);
-      if (classId) {
-        filter = { classId };
-      }
+      if (classId) filter = { classId };
     }
     const candidates = await Question.find(filter)
       .select('question questionHash chapter options')
       .limit(1000)
       .lean();
 
+    // Pre-compute normalized input once
+    const normInput = normalizeQuestion(questionText);
+    const normInputLen = normInput.length;
+
     let bestMatch = null;
     let maxSimilarity = 0.0;
 
     for (const cand of candidates) {
-      const qSim = getSimilarityScore(questionText, cand.question);
+      // Quick length pre-filter: if normalized lengths differ by > 50%, skip Levenshtein
+      const normCand = normalizeQuestion(cand.question || '');
+      const lenRatio = normInputLen > 0 && normCand.length > 0
+        ? Math.max(normInputLen, normCand.length) / Math.min(normInputLen, normCand.length)
+        : Infinity;
+
+      let qSim;
+      if (lenRatio > 1.6) {
+        // Use Jaccard only when length ratio is too high for Levenshtein to give useful signal
+        qSim = getJaccardSimilarity(questionText, cand.question || '');
+      } else {
+        qSim = getSimilarityScore(questionText, cand.question || '');
+      }
+
       if (qSim > 0.95) {
         const optSim = getOptionSimilarity(options, cand.options);
         if (optSim > 0.90) {
