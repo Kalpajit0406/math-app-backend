@@ -5,15 +5,18 @@ const {
   getTestsByClassAndLanguage,
   deleteTestConfig
 } = require('../controllers/testConfigController');
+const authMiddleware = require('../middleware/authMiddleware');
+const authorizeRoles = require('../middleware/roleMiddleware');
 
+// All test config management requires admin/teacher authentication
 router.route('/')
-  .post(createTestConfig)
-  .get(getAllStudentTests);
+  .post(authMiddleware, authorizeRoles('admin', 'teacher'), createTestConfig)
+  .get(authMiddleware, authorizeRoles('admin', 'teacher'), getAllStudentTests);
 
 router.route('/:classNo/:language')
-  .get(getTestsByClassAndLanguage);
+  .get(authMiddleware, getTestsByClassAndLanguage);
 
 router.route('/delete/:id')
-  .delete(deleteTestConfig);
+  .delete(authMiddleware, authorizeRoles('admin', 'teacher'), deleteTestConfig);
 
 module.exports = router;
