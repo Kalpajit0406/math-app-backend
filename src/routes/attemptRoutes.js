@@ -3,6 +3,7 @@ const router = express.Router();
 const attemptController = require('../controllers/attemptController');
 const testResponseController = require('../controllers/testResponseController');
 const authMiddleware = require('../middleware/authMiddleware');
+const authorizeRoles = require('../middleware/roleMiddleware');
 const { validationRules } = require('../middleware/validationMiddleware');
 const { checkPermission } = require('../middleware/permissionMiddleware');
 
@@ -18,8 +19,8 @@ router.get('/completed-attempts', authMiddleware, checkPermission('canAccessTeac
 // TestResponse routes (Web)
 router.post('/', authMiddleware, testResponseController.saveStudentTest);
 router.get('/res/all', authMiddleware, testResponseController.getAllTestResponses);
-router.get('/check/:studentMobile/:testId', testResponseController.checkTestResponse);
-router.delete('/delete/:testId', authMiddleware, testResponseController.deleteAllTestResponsesById);
-router.get('/:studentMobile', testResponseController.getStudentTestResponse);
+router.get('/check/:studentMobile/:testId', authMiddleware, authorizeRoles('admin', 'teacher'), testResponseController.checkTestResponse);
+router.delete('/delete/:testId', authMiddleware, authorizeRoles('admin', 'teacher'), testResponseController.deleteAllTestResponsesById);
+router.get('/:studentMobile', authMiddleware, authorizeRoles('admin', 'teacher'), testResponseController.getStudentTestResponse);
 
 module.exports = router;
