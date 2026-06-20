@@ -44,6 +44,12 @@ exports.generateAssessment = async (req, res) => {
         message: error.message
       });
     }
+    if (error.message.includes('INVALID_LIMIT') || error.message.includes('NO_QUESTIONS')) {
+      return res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to generate assessment'

@@ -275,6 +275,50 @@ test('Stabilization Fixes Integration Tests', async (t) => {
     }
   });
 
+  // ==================================================
+  // SELF ASSESSMENT QUESTION LIMIT VALIDATION
+  // ==================================================
+  await t.test('Self Assessment: limit parameter validation', async () => {
+    const selfAssessmentController = require('../src/controllers/selfAssessmentController');
+    
+    // 1. Invalid limit should fail with 400
+    const mockReqInvalid = {
+      user: { id: student._id.toString() },
+      body: {
+        chapters: ['Algebra'],
+        limit: 15, // Not in [5, 10, 20, 40]
+        time: 30
+      },
+      headers: {}
+    };
+    
+    const mockResInvalid = await executeController(selfAssessmentController.generateAssessment, mockReqInvalid);
+    assert.equal(mockResInvalid.statusCode, 400);
+    assert.ok(mockResInvalid.body.message.includes('INVALID_LIMIT'), 'Should reject limit of 15');
+
+    // 2. Valid limit should succeed (if questions exist)
+    // Note: Since chapters/questions might not be fully configured for student's class,
+    // it might return NO_QUESTIONS, which also returns 400 but has message 'NO_QUESTIONS'.
+    // If it succeeds, it returns 201. Both confirm limit validation was bypassed.
+    const mockReqValid = {
+      user: { id: student._id.toString() },
+      body: {
+        chapters: ['Algebra'],
+        limit: 5, // Valid limit
+        time: 30
+      },
+      headers: {}
+    };
+    
+    const mockResValid = await executeController(selfAssessmentController.generateAssessment, mockReqValid);
+    assert.ok([201, 400].includes(mockResValid.statusCode));
+    if (mockResValid.statusCode === 400) {
+      assert.ok(mockResValid.body.message.includes('NO_QUESTIONS'), 'If failed, should be due to no questions, not invalid limit');
+    } else {
+      assert.equal(mockResValid.statusCode, 201);
+    }
+  });
+
   // Clean up
   await t.test('Clean up database models', async () => {
     await Student.deleteMany({ studentPhone: testMobile });
@@ -287,6 +331,11 @@ test('Stabilization Fixes Integration Tests', async (t) => {
       await Exam.findByIdAndDelete(examDoc._id);
     }
     
+    const SelfAssessmentUsage = require('../src/models/selfAssessmentUsageModel');
+    const SelfAssessmentSession = require('../src/models/selfAssessmentSessionModel');
+    await SelfAssessmentUsage.deleteMany({ studentId: student._id });
+    await SelfAssessmentSession.deleteMany({ studentId: student._id });
+
     await mongoose.connection.close();
   });
 });

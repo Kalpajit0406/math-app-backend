@@ -18,6 +18,13 @@ class SelfAssessmentService {
    * Generates a new secure randomized self-assessment session
    */
   static async generateAssessment(studentId, classNo, deviceFingerprint, chapters = [], limit = 10, durationMinutes = 30) {
+    // 1. Validate question count limit
+    const allowedLimits = [5, 10, 20, 40];
+    const parsedLimit = Number(limit) || 10;
+    if (!allowedLimits.includes(parsedLimit)) {
+      throw new Error('INVALID_LIMIT: Number of questions must be 5, 10, 20, or 40.');
+    }
+
     const today = this.getTodayString();
     const mongoose = require('mongoose');
     const Student = require('../models/studentModel');
@@ -27,7 +34,7 @@ class SelfAssessmentService {
       throw new Error('Student profile not found.');
     }
 
-    // 1. Quota Check (Server-Side enforced for Trial)
+    // 2. Quota Check (Server-Side enforced for Trial)
     if (student.accountType === 'TRIAL') {
       const usage = await SelfAssessmentUsage.findOne({ studentId, date: today });
       if (usage && usage.assessmentCount >= 5) {
@@ -74,7 +81,7 @@ class SelfAssessmentService {
 
     let questions = await Question.aggregate([
       { $match: matchCriteria },
-      { $sample: { size: Number(limit) || 10 } }
+      { $sample: { size: parsedLimit } }
     ]);
 
     if ((!questions || questions.length === 0) && allowedQuestionIds) {
@@ -85,7 +92,7 @@ class SelfAssessmentService {
       };
       questions = await Question.aggregate([
         { $match: fallbackCriteria },
-        { $sample: { size: Number(limit) || 10 } }
+        { $sample: { size: parsedLimit } }
       ]);
     }
 
