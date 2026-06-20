@@ -283,18 +283,8 @@ const authService = {
       throw new Error('Phone and password are required');
     }
 
-    // Block bypass phone from standard login when bypass is disabled
-    if (!isTeacherBypassEnabled() && teacherBypassPhone && studentPhone === teacherBypassPhone) {
-      throw new Error('Invalid credentials');
-    }
-
     const student = await Student.findOne({ studentPhone }).select('+passwordHash');
     if (!student) throw new Error('Invalid credentials');
-
-    // Block ADMIN accounts from standard login when teacher bypass is disabled
-    if (!isTeacherBypassEnabled() && student.accountType === 'ADMIN') {
-      throw new Error('Invalid credentials');
-    }
 
     // Check lockout on standard student
     const LOCKOUT_TIME = 15 * 60 * 1000;
