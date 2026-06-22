@@ -286,7 +286,7 @@ test('Stabilization Fixes Integration Tests', async (t) => {
       user: { id: student._id.toString() },
       body: {
         chapters: ['Algebra'],
-        limit: 15, // Not in [5, 10, 20, 40]
+        limit: 5, // Invalid limit (must be between 10 and 80)
         time: 30
       },
       headers: {}
@@ -294,8 +294,8 @@ test('Stabilization Fixes Integration Tests', async (t) => {
     
     const mockResInvalid = await executeController(selfAssessmentController.generateAssessment, mockReqInvalid);
     assert.equal(mockResInvalid.statusCode, 400);
-    assert.ok(mockResInvalid.body.message.includes('INVALID_LIMIT'), 'Should reject limit of 15');
-
+    assert.ok(mockResInvalid.body.message.includes('INVALID_LIMIT'), 'Should reject limit of 5');
+ 
     // 2. Valid limit should succeed (if questions exist)
     // Note: Since chapters/questions might not be fully configured for student's class,
     // it might return NO_QUESTIONS, which also returns 400 but has message 'NO_QUESTIONS'.
@@ -304,7 +304,7 @@ test('Stabilization Fixes Integration Tests', async (t) => {
       user: { id: student._id.toString() },
       body: {
         chapters: ['Algebra'],
-        limit: 5, // Valid limit
+        limit: 15, // Valid limit (between 10 and 80)
         time: 30
       },
       headers: {}

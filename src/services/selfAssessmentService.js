@@ -19,10 +19,9 @@ class SelfAssessmentService {
    */
   static async generateAssessment(studentId, classNo, deviceFingerprint, chapters = [], limit = 10, durationMinutes = 30) {
     // 1. Validate question count limit
-    const allowedLimits = [5, 10, 20, 40];
     const parsedLimit = Number(limit) || 10;
-    if (!allowedLimits.includes(parsedLimit)) {
-      throw new Error('INVALID_LIMIT: Number of questions must be 5, 10, 20, or 40.');
+    if (isNaN(parsedLimit) || parsedLimit < 10 || parsedLimit > 80) {
+      throw new Error('INVALID_LIMIT: Number of questions must be between 10 and 80.');
     }
 
     const today = this.getTodayString();
