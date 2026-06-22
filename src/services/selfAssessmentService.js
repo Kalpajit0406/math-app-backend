@@ -282,8 +282,11 @@ class SelfAssessmentService {
     const batchIds = questionPool.slice(Number(offset), end);
 
     const questions = [];
-    for (let i = 0; i < batchIds.length; i++) {
-      const q = await Question.findById(batchIds[i]);
+    const questionPromises = batchIds.map(id => Question.findById(id));
+    const fetchedQuestions = await Promise.all(questionPromises);
+
+    for (let i = 0; i < fetchedQuestions.length; i++) {
+      const q = fetchedQuestions[i];
       if (q) {
         questions.push({
           id: q._id,
