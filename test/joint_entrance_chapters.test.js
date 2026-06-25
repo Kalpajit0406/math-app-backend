@@ -33,7 +33,7 @@ test('Joint Entrance Parent/Subchapter Naming & Expansion Verification', async (
   }
 
   // Pre-clean Class 13 chapters and questions created during this test
-  await Chapter.deleteMany({ classId: classId13, chapterName: { $regex: /^(11|12|JEE):/ } });
+  await Chapter.deleteMany({ classId: classId13, chapterName: { $in: ['11: Probability', '11: Permutations', 'JEE: Calculus'] } });
 
   // Ensure default parent chapters exist
   const parent11 = await Chapter.findOneAndUpdate(
@@ -93,6 +93,6 @@ test('Joint Entrance Parent/Subchapter Naming & Expansion Verification', async (
   });
 
   // Clean up
-  await Chapter.deleteMany({ classId: classId13, chapterName: { $regex: /^(11|12|JEE):/ } });
+  await Chapter.deleteMany({ classId: classId13, chapterName: { $in: ['11: Probability', '11: Permutations', 'JEE: Calculus'] } });
   await mongoose.connection.close();
 });
