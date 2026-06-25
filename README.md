@@ -1,211 +1,166 @@
-# Math with SD - Backend API
+# 🎓 MathsWithSD — Backend API Service
 
-A Node.js + Express backend for the Math education platform, featuring secure authentication, exam management, and MongoDB integration.
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D%2018.0.0-blue.svg)](https://nodejs.org/)
+[![Express Version](https://img.shields.io/badge/express-v5.2.1-green.svg)](https://expressjs.com/)
+[![MongoDB Mongoose](https://img.shields.io/badge/mongoose-v9.6.1-red.svg)](https://mongoosejs.com/)
+[![Security Hardened](https://img.shields.io/badge/security-hardened-orange.svg)](#security-features)
 
-## Quick Start
+This is the high-performance core backend API for **MathsWithSD**, a comprehensive dual-application ecosystem designed to revolutionize how students prepare for mathematics exams and how teachers manage evaluations. The backend provides secure API services, JWT authentication, cohort management, a distributed worker pipeline for image processing, and an advanced Mathpix OCR integration for mathematical formula ingestion.
+
+---
+
+## 🚀 Key Features
+
+*   **Secure 3-Tier Authentication**: Standard JWT-based registration and logins for students with role-based access control (RBAC), and an automated passwordless authentication override for authorized teachers.
+*   **Mathpix AI OCR Ingestion Pipeline**: Ingestion endpoint capable of accepting physical camera scans of math questions, processing them, extracting math and text via Mathpix OCR, and returning parsed LaTeX equations.
+*   **Distributed Background Workers**: Support for distributed jobs (heartbeats, queues, locking mechanisms) to process CPU-intensive image tasks safely and perform data-tier cleanups.
+*   **MongoDB Performance Optimization**: Self-healing optimization routines that automatically compile indexes, normalize missing fields, and audit schemas.
+*   **Real-time Capabilities**: Built-in support for WebSockets (`ws`) to synchronize exam timers and real-time leaderboards.
+*   **Robust Security Hardening**: Protection against common web threats via helmet, mongo-sanitize, rate-limiting, XSS mitigation, and secure CORS validation.
+
+---
+
+## 🛠️ Technology Stack
+
+*   **Core**: Node.js & Express (v5.2.1)
+*   **Database**: MongoDB & Mongoose (v9.6.1)
+*   **Caching & Queueing**: Redis (`ioredis` v5.11.0)
+*   **Authentication**: JSON Web Tokens (`jsonwebtoken` v9.0.3) & bcrypt hashing
+*   **Image Processing**: Sharp (v0.34.5) & Cloudinary API (v2.10.0)
+*   **WebSockets**: ws (v8.21.0)
+
+---
+
+## 📁 Repository Structure
+
+```
+math-app-backend/
+├── public/                 # Static assets and public-facing files
+├── src/
+│   ├── config/             # Database connection setups (direct vs. SRV fallback) & server configs
+│   ├── controllers/        # Express route handlers (auth, ocr, exams, student progress, etc.)
+│   ├── middleware/         # Auth verification, role gates, safety/validation filters, rate-limiters
+│   ├── migrations/         # Migration files for schema changes and data upgrades
+│   ├── models/             # Mongoose schemas (Student, Exam, Attempt, ocrarchives, etc.)
+│   ├── routes/             # API v1 routes mapping definitions
+│   ├── scripts/            # Database indexing, optimizations, and seeding tools
+│   ├── services/           # Core business logic (OCR pipelines, grading, user auto-provisioning)
+│   ├── utils/              # Helper modules, network IP detection, custom error boundaries
+│   ├── workers/            # Distributed worker processes and watchdog reaper logic
+│   └── server.js           # Server startup script
+├── test/                   # Comprehensive backend automated test suite
+├── .env.example            # Sample environment variables file
+├── package.json            # Scripts, project details, and dependencies configuration
+└── README.md               # Backend documentation
+```
+
+---
+
+## ⚙️ Setup & Installation
 
 ### Prerequisites
-- Node.js 18+
-- MongoDB Atlas account (or local MongoDB)
-- Gemini API key (for AI features)
 
-### Installation
+Ensure you have the following installed on your machine:
+*   **Node.js** (v18 or higher)
+*   **npm** (v9 or higher)
+*   **MongoDB** (running locally or a MongoDB Atlas URI)
+*   **Redis** (optional, required if using distributed caching/queue features)
 
-1. Clone the repository and navigate to the backend:
-```bash
-cd math-app-backend
-npm install
-```
+### Installation Steps
 
-2. Set up environment variables:
-```bash
-cp .env.example .env
-```
+1.  **Clone & Navigate**:
+    ```bash
+    cd math-app-backend
+    ```
 
-3. Edit `.env` with your MongoDB connection details and other secrets:
-```env
-MONGODB_URI=mongodb://username:password@host1:27017,host2:27017,...
-MONGODB_DB_NAME=MathswithSD_DB
-JWT_SECRET=your_super_secret_key
-GEMINI_API_KEY=your_api_key
-```
+2.  **Install Dependencies**:
+    ```bash
+    npm install
+    ```
 
-### MongoDB Connection Setup
+3.  **Configure Environment Variables**:
+    Copy the sample configuration file to create your local `.env`:
+    ```bash
+    cp .env.example .env
+    ```
+    Open `.env` and fill in your details:
+    ```env
+    PORT=5000
+    MONGODB_URI=mongodb+srv://<username>:<password>@cluster.mongodb.net/?appName=Cluster0
+    MONGODB_URI_DIRECT=mongodb://<username>:<password>@host1:27017,host2:27017/?replicaSet=atlas-shard
+    MONGODB_DB_NAME=MathswithSD_DB
+    JWT_SECRET=your_super_secret_jwt_key
+    GEMINI_API_KEY=your_gemini_api_key
+    MATHPIX_APP_ID=your_mathpix_app_id
+    MATHPIX_APP_KEY=your_mathpix_app_key
+    CLOUDINARY_URL=cloudinary://<api_key>:<api_secret>@cloud_name
+    ```
 
-The backend supports two MongoDB connection methods:
+4.  **Initialize & Optimize Database**:
+    Run the optimization script to auto-generate recommended indexes and normalize schema constraints:
+    ```bash
+    npm run optimize:db
+    ```
 
-**Method 1: Direct Replica Set URI (Recommended)**
-```
-mongodb://username:password@host1:27017,host2:27017,host3:27017/?ssl=true&replicaSet=atlas-2o47ty-shard-0&authSource=admin&appName=Cluster0
-```
+5.  **Seed Teacher Admin Account**:
+    Create the default authorized teacher profile in the database:
+    ```bash
+    npm run seed:teacher
+    ```
 
-**Method 2: SRV URI (Fallback)**
-```
-mongodb+srv://username:password@cluster.mongodb.net/?appName=Cluster0
-```
+6.  **Start the Server**:
+    *   **Development mode (hot reload)**:
+        ```bash
+        npm run dev
+        ```
+    *   **Production mode**:
+        ```bash
+        npm start
+        ```
+    The server will boot up and start listening on port `5000` (or your configured `PORT`).
 
-If the primary SRV connection fails (e.g., DNS issues), the system automatically falls back to the direct URI.
+---
 
-### Running the Server
+## 🛡️ Security Features
 
-```bash
-# Development
-npm run start
+The backend incorporates standard security protocols to protect educational data:
+*   **Three-Tier Authorization Pipeline**:
+    1.  **Token Validation Layer** (`authMiddleware.js`): Checks token format, expiration, and extracts claims.
+    2.  **Role Authorization Gate** (`roleMiddleware.js`): Enforces granular access levels (Student vs. Teacher/Admin).
+    3.  **Ownership / Service Layer Validation**: Prevents student privilege escalation and restricts students from accessing other users' test submissions.
+*   **Input Sanitization**: Strict filtering of NoSQL query strings (`express-mongo-sanitize`) and XSS prevention (`xss-clean`).
+*   **Header Hardening**: Utilizes `helmet` to apply secure HTTP headers and control cache directives.
+*   **Rate Limiting**: Throttles rapid API requests (`express-rate-limit`) to mitigate denial-of-service attempts.
 
-# The server will:
-# - Connect to MongoDB
-# - Create performance indexes
-# - Listen on PORT (default: 5000)
-```
+---
 
-### Database Setup
+## 📡 API Reference Index
 
-Optimize and initialize the database:
-```bash
-npm run optimize:db
-```
+Here is a summary of the core endpoints exposed by the service:
 
-This will:
-- Create performance indexes on Student, Exam, Attempt, etc.
-- Normalize missing fields (verified, isRejected, targetClass)
-- Audit data integrity
+| Method | Endpoint | Description | Auth Scope |
+| :--- | :--- | :--- | :--- |
+| **POST** | `/api/v1/student/signup` | Registers a new student account | Public |
+| **POST** | `/api/v1/student/login` | Authenticates a student & returns JWT | Public |
+| **POST** | `/api/v1/student/teacher-login` | Passwordless login check for hardcoded teacher | Public |
+| **GET** | `/api/v1/student/me` | Fetches active student profile information | Student |
+| **GET** | `/api/v1/tests` | Lists student's available/assigned exams | Student |
+| **POST** | `/api/v1/testResponse/start` | Initiates an exam attempt (starts timer) | Student |
+| **POST** | `/api/v1/testResponse/submit` | Submits answers and locks exam attempt | Student |
+| **GET** | `/api/v1/testResponse/:attemptId`| Retrives details of a specific assessment attempt | Student (Own only) |
+| **GET** | `/api/v1/announcements` | Fetches announcements for a student's class | Student |
+| **POST** | `/api/v1/scan` | Submits image to Mathpix AI OCR for LaTeX parser | Teacher / Admin |
 
-Seed a teacher account for initial admin access:
-```bash
-npm run seed:teacher
-```
+---
 
-## API Architecture
+## 👥 Credits
 
-### Authentication Flow (3-tier)
+*   **Created by**: [Kalpajit](https://github.com)
+*   **Inspired by**: [Debosmit](https://github.com), [Rupam](https://github.com)
+*   **Special Thanks**: Soumen Sir, Swagata
 
-1. **Middleware Layer** (`src/middleware/authMiddleware.js`)
-   - Validates Bearer token format
-   - Checks JWT expiration
-   - Extracts user claims
+---
 
-2. **Role Authorization** (`src/middleware/roleMiddleware.js`)
-   - Enforces role-based access (student, teacher, admin)
-   - Protects sensitive routes
+## 📄 License
 
-3. **Service Layer** (`src/services/attemptService.js`, etc.)
-   - Ownership validation (students can only see their own attempts)
-   - Business logic enforcement (no re-submission after completion)
-   - Privilege escalation prevention
-
-### Route Structure
-
-```
-GET  /api/v1/student/me                 # Get authenticated user profile
-POST /api/v1/student/login              # User login
-POST /api/v1/student/signup             # User registration
-GET  /api/v1/tests                      # List available exams
-POST /api/v1/testResponse/start         # Start an exam attempt
-POST /api/v1/testResponse/submit        # Submit exam answers
-GET  /api/v1/testResponse/:attemptId    # Get attempt result (own only)
-GET  /api/v1/announcements              # Get announcements
-POST /api/v1/scan                       # AI scanning (handwritten solutions)
-```
-
-## Security Features
-
-### Implemented
-- ✅ JWT-based authentication with secure secret management
-- ✅ Role-based access control (RBAC) for routes
-- ✅ Ownership validation: students can't access others' attempts
-- ✅ Re-submission prevention: locked exams after completion
-- ✅ Hardcoded credential removal (removed admin backdoor from app)
-- ✅ Password hashing with bcrypt
-
-### Best Practices
-- Never commit `.env` to version control
-- Rotate `JWT_SECRET` periodically in production
-- Use HTTPS in production
-- Enable MongoDB authentication and encryption
-- Monitor failed login attempts
-
-## Database Models
-
-- **Student**: User account with phone, email, password, role (teacher/student)
-- **User**: Alternative user collection (optional dual-write)
-- **Exam**: Question sets created by teachers
-- **Question**: Individual questions with answers
-- **Attempt**: Student's exam submission with timestamps, answers, scores
-- **Announcement**: Teacher announcements for target classes
-
-## MongoDB Indexes
-
-Key indexes created automatically:
-- `Student.studentPhone` (unique)
-- `Attempt.userId_examId_createdAt` (for quick lookups)
-- `Attempt.userId_examId` with partial filter on active attempts
-
-## Troubleshooting
-
-### MongoDB Connection Error: "bad auth"
-- Verify username and password in connection string
-- Check that authSource is set to `admin`
-- Ensure database user has correct permissions
-- Try SRV URI fallback: modify `MONGODB_URI_DIRECT` in `.env`
-
-### MongoDB Connection Error: "querySrv ECONNREFUSED"
-- This is a DNS issue in certain networks
-- System will automatically try the direct URI
-- If needed, skip SRV entirely: comment out `MONGODB_URI` and use only direct URI
-
-### Server won't start
-- Check if port 5000 is available: `netstat -ano | findstr :5000` (Windows)
-- Verify MongoDB connection string
-- Check `.env` file for typos
-- Review logs for specific error messages
-
-## Environment Variables Reference
-
-See `.env.example` for all available options:
-- `PORT`: Server port (default: 5000)
-- `MONGODB_URI`: Primary connection string
-- `MONGODB_URI_DIRECT`: Fallback connection string
-- `MONGODB_DB_NAME`: Database name
-- `JWT_SECRET`: Secret for signing JWTs
-- `GEMINI_API_KEY`: Google AI API key
-- `MONGODB_MAX_RETRIES`: Connection retry attempts (default: 5)
-- `MONGODB_RETRY_DELAY_MS`: Delay between retries (default: 2000ms)
-
-## Development Notes
-
-### Adding New Routes
-1. Create controller in `src/controllers/`
-2. Create service in `src/services/`
-3. Create route file in `src/routes/`
-4. Mount route in `src/server.js` at `/api/v1/...`
-
-### Adding New Models
-1. Create schema in `src/models/`
-2. Add indexes to `optimize_mongodb.js`
-3. Run `npm run optimize:db` to create indexes
-
-### Testing Authorization
-```bash
-# This should fail with 403 (no token):
-curl -X GET http://localhost:5000/api/v1/student/me
-
-# This should fail with 401 (invalid token):
-curl -H "Authorization: Bearer invalid" http://localhost:5000/api/v1/student/me
-
-# This should fail with 403 (wrong role):
-# Login as student, try to access /admin route
-```
-
-## Deployment
-
-1. Set production environment variables
-2. Use strong JWT_SECRET (32+ characters)
-3. Enable HTTPS/TLS
-4. Set `NODE_ENV=production`
-5. Use process manager (PM2, systemd, etc.)
-6. Monitor error logs
-7. Set up automated backups for MongoDB
-
-## License
-
-ISC
+This repository is licensed under the [ISC License](LICENSE).
