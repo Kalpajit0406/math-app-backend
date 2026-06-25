@@ -246,23 +246,30 @@ const updateQuestion = async (req, res) => {
 const deleteQuestion = async (req, res) => {
   try {
     const { id } = req.params;
-    const deleted = await Question.findByIdAndUpdate(id, {
+    
+    // Find the question first to verify existence and cache fields for audit log
+    const question = await Question.findById(id);
+    if (!question) {
+      return res.status(404).json({ success: false, message: "Question not found" });
+    }
+
+    // This update triggers the mongoose pre-hook which hard-deletes the question
+    await Question.updateOne({ _id: id }, {
       isDeleted: true,
       deletedAt: new Date(),
       deletedBy: req.user?.id
-    }, { returnDocument: 'after' });
-    if (!deleted) return res.status(404).json({ success: false, message: "Question not found" });
+    });
 
-    // Log audit action
+    // Log audit action using cached question details
     const auditLogService = require('../services/auditLogService');
     await auditLogService.log({
       actorId: req.user?.id,
       action: 'question_delete',
       targetType: 'Question',
-      targetId: deleted._id,
+      targetId: question._id,
       metadata: {
-        classNo: deleted.classNo,
-        chapterId: deleted.chapterId
+        classNo: question.classNo,
+        chapterId: question.chapterId
       }
     });
 
