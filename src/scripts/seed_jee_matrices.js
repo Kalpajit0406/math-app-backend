@@ -42,7 +42,7 @@ const easyCoords = [
 
 easyCoords.forEach((item, index) => {
   easyQuestions.push({
-    question: `Evaluate the determinant of the $2 \\times 2$ matrix $A = \\begin{bmatrix} ${item.a} & ${item.b} \\\\ ${item.c} & ${item.d} \\end{bmatrix}$. [JEE Practice ${index + 1}]`,
+    question: `Evaluate the determinant of the $2 \\times 2$ matrix $A = \\begin{bmatrix} ${item.a} & ${item.b} \\\\ ${item.c} & ${item.d} \\end{bmatrix}.`,
     correctAnswer: `${item.ans}`,
     wrongAnswers: [`${item.w1}`, `${item.w2}`, `${item.w3}`]
   });
@@ -69,7 +69,7 @@ const easyTriangular = [
 
 easyTriangular.forEach((item, index) => {
   easyQuestions.push({
-    question: `Find the determinant of the upper triangular matrix $A = \\begin{bmatrix} ${item.a} & 5 & 9 \\\\ 0 & ${item.b} & -2 \\\\ 0 & 0 & ${item.c} \\end{bmatrix}$. [JEE Practice ${index + 16}]`,
+    question: `Find the determinant of the upper triangular matrix $A = \\begin{bmatrix} ${item.a} & 5 & 9 \\\\ 0 & ${item.b} & -2 \\\\ 0 & 0 & ${item.c} \\end{bmatrix}.`,
     correctAnswer: `${item.ans}`,
     wrongAnswers: [`${item.w1}`, `${item.w2}`, `${item.w3}`]
   });
@@ -96,7 +96,7 @@ const easyEquality = [
 
 easyEquality.forEach((item, index) => {
   easyQuestions.push({
-    question: `If $\\begin{bmatrix} 2x+1 & 5 \\\\ 0 & y-2 \\end{bmatrix} = \\begin{bmatrix} ${2*item.xVal + 1} & 5 \\\\ 0 & ${item.yVal - 2} \\end{bmatrix}$, find the value of $x + y$. [JEE Practice ${index + 31}]`,
+    question: `If $\\begin{bmatrix} 2x+1 & 5 \\\\ 0 & y-2 \\end{bmatrix} = \\begin{bmatrix} ${2*item.xVal + 1} & 5 \\\\ 0 & ${item.yVal - 2} \\end{bmatrix}$, find the value of $x + y$.`,
     correctAnswer: `${item.ans}`,
     wrongAnswers: [`${item.w1}`, `${item.w2}`, `${item.w3}`]
   });
@@ -128,7 +128,7 @@ const mediumAdj = [
 
 mediumAdj.forEach((item, index) => {
   mediumQuestions.push({
-    question: `If $A$ is a square matrix of order 3 and the determinant of $A$ is $|A| = ${item.detA}$, find the determinant of its adjoint matrix $|\\text{adj}(A)|$. [JEE Practice ${index + 46}]`,
+    question: `If $A$ is a square matrix of order 3 and the determinant of $A$ is $|A| = ${item.detA}$, find the determinant of its adjoint matrix $|\\text{adj}(A)|$.`,
     correctAnswer: `${item.ans}`,
     wrongAnswers: [`${item.w1}`, `${item.w2}`, `${item.w3}`]
   });
@@ -155,7 +155,7 @@ const mediumAdjScalar = [
 
 mediumAdjScalar.forEach((item, index) => {
   mediumQuestions.push({
-    question: `Let $A$ be a $3 \\times 3$ square matrix. If $|A| = ${item.detA}$, evaluate the determinant $|\\text{adj}(${item.k}A)|$. [JEE Practice ${index + 61}]`,
+    question: `Let $A$ be a $3 \\times 3$ square matrix. If $|A| = ${item.detA}$, evaluate the determinant $|\\text{adj}(${item.k}A)|$.`,
     correctAnswer: `${item.ans}`,
     wrongAnswers: [`${item.w1}`, `${item.w2}`, `${item.w3}`]
   });
@@ -182,7 +182,7 @@ const mediumArea = [
 
 mediumArea.forEach((item, index) => {
   mediumQuestions.push({
-    question: `Find the area of the triangle with vertices at $P(${item.x1}, ${item.y1})$, $Q(${item.x2}, ${item.y2})$, and $R(${item.x3}, ${item.y3})$ using determinant properties. [JEE Practice ${index + 76}]`,
+    question: `Find the area of the triangle with vertices at $P(${item.x1}, ${item.y1})$, $Q(${item.x2}, ${item.y2})$, and $R(${item.x3}, ${item.y3})$ using determinant properties.`,
     correctAnswer: `${item.ans}`,
     wrongAnswers: [`${item.w1}`, `${item.w2}`, `${item.w3}`]
   });
@@ -219,7 +219,7 @@ const hardSystem = [
 
 hardSystem.forEach((item, index) => {
   hardQuestions.push({
-    question: `Consider the system of linear equations: $x + y + z = 6$, $x + ${item.a}y + ${item.b}z = 10$, and $x + ${item.a}y + \\lambda z = \\mu$. Find the condition under which the system has infinitely many solutions. [JEE Main PYQ Variant ${index + 1}]`,
+    question: `Consider the system of linear equations: $x + y + z = 6$, $x + ${item.a}y + ${item.b}z = 10$, and $x + ${item.a}y + \\lambda z = \\mu$. Find the condition under which the system has infinitely many solutions.`,
     correctAnswer: `${item.ans}`,
     wrongAnswers: [`${item.w1}`, `${item.w2}`, `${item.w3}`]
   });
@@ -251,7 +251,7 @@ const hardDoubleAdj = [
 
 hardDoubleAdj.forEach((item, index) => {
   hardQuestions.push({
-    question: `Let $A$ be a non-singular square matrix of order 3. If the determinant value is $|A| = ${item.detA}$, determine the value of the double adjoint determinant $|\\text{adj}(\\text{adj}(A))|$. [JEE Main PYQ Variant ${index + 21}]`,
+    question: `Let $A$ be a non-singular square matrix of order 3. If the determinant value is $|A| = ${item.detA}$, determine the value of the double adjoint determinant $|\\text{adj}(\\text{adj}(A))|$.`,
     correctAnswer: `${item.ans}`,
     wrongAnswers: [`${item.w1}`, `${item.w2}`, `${item.w3}`]
   });
@@ -283,7 +283,7 @@ const hardPowerTrace = [
 
 hardPowerTrace.forEach((item, index) => {
   hardQuestions.push({
-    question: `Let $A = \\begin{bmatrix} 1 & ${item.b} \\\\ 0 & 1 \\end{bmatrix}$. Deduce the matrix expression representing the power $A^{${item.n}}$. [JEE Main PYQ Variant ${index + 41}]`,
+    question: `Let $A = \\begin{bmatrix} 1 & ${item.b} \\\\ 0 & 1 \\end{bmatrix}$. Deduce the matrix expression representing the power $A^{${item.n}}$.`,
     correctAnswer: `${item.ans}`,
     wrongAnswers: [`${item.w1}`, `${item.w2}`, `${item.w3}`]
   });
