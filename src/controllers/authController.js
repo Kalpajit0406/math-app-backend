@@ -264,27 +264,14 @@ const blacklistStudent = async (req, res) => {
 };
 
 const updateAccountStatus = async (req, res) => {
-  const mongoose = require('mongoose');
-  const session = await mongoose.startSession();
-  let transactionStarted = false;
   try {
     const { id, accountType, isJoint, resetTrialLimits } = req.body;
     if (!id) {
       return res.status(400).json({ success: false, message: 'Student id is required' });
     }
 
-    try {
-      await session.startTransaction();
-      transactionStarted = true;
-    } catch (err) {
-      // Replica sets not enabled
-    }
-
-    const opts = transactionStarted ? { session } : {};
-
-    const student = await Student.findById(id).session(transactionStarted ? session : undefined);
+    const student = await Student.findById(id);
     if (!student) {
-      if (transactionStarted) await session.abortTransaction();
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
@@ -293,7 +280,6 @@ const updateAccountStatus = async (req, res) => {
 
     if (accountType !== undefined) {
       if (!['NORMAL', 'TRIAL', 'JOINT', 'JOINT_ENTRANCE', 'PREMIUM', 'ADMIN', 'BLOCKED'].includes(accountType)) {
-        if (transactionStarted) await session.abortTransaction();
         return res.status(400).json({ success: false, message: 'Invalid account type' });
       }
       student.accountType = accountType;
@@ -317,26 +303,23 @@ const updateAccountStatus = async (req, res) => {
     if (resetTrialLimits === true) {
       const SelfAssessmentUsage = require('../models/selfAssessmentUsageModel');
       await SelfAssessmentUsage.deleteMany(
-        { studentId: student._id },
-        opts
+        { studentId: student._id }
       );
       
       await PhoneRecord.findOneAndUpdate(
         { phone: student.studentPhone },
-        { $set: { attemptCount: 0, blacklisted: false, blacklistedAt: undefined } },
-        opts
+        { $set: { attemptCount: 0, blacklisted: false, blacklistedAt: undefined } }
       );
       if (student.deviceFingerprint) {
         await PhoneRecord.findOneAndUpdate(
           { deviceFingerprint: student.deviceFingerprint },
-          { $set: { attemptCount: 0, blacklisted: false, blacklistedAt: undefined } },
-          opts
+          { $set: { attemptCount: 0, blacklisted: false, blacklistedAt: undefined } }
         );
       }
       student.requestAttempts = 0;
     }
 
-    await student.save({ session: transactionStarted ? session : undefined });
+    await student.save();
 
     const auditLogService = require('../services/auditLogService');
     await auditLogService.log({
@@ -352,20 +335,11 @@ const updateAccountStatus = async (req, res) => {
         isJointChanged: isJoint !== undefined,
         resetTrialLimits: resetTrialLimits
       }
-    }, transactionStarted ? session : null);
-
-    if (transactionStarted) {
-      await session.commitTransaction();
-    }
+    });
 
     res.json({ success: true, message: 'Student status updated successfully', data: student });
   } catch (error) {
-    if (transactionStarted && session.inTransaction()) {
-      await session.abortTransaction();
-    }
     res.status(500).json({ success: false, message: error.message });
-  } finally {
-    session.endSession();
   }
 };
 
