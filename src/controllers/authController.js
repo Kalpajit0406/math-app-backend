@@ -297,24 +297,28 @@ const updateAccountStatus = async (req, res) => {
         return res.status(400).json({ success: false, message: 'Invalid account type' });
       }
       student.accountType = accountType;
-      if (accountType === 'BLOCKED') {
-        student.accountStatus = 'SUSPENDED';
-      }
-      if (accountType === 'NORMAL' || accountType === 'PREMIUM' || accountType === 'JOINT' || accountType === 'JOINT_ENTRANCE') {
-        student.accountStatus = 'APPROVED';
-      }
     }
 
     if (isJoint !== undefined) {
       student.isJoint = !!isJoint;
     }
 
+    if (student.accountType === 'BLOCKED') {
+      student.accountStatus = 'SUSPENDED';
+    } else if (['NORMAL', 'TRIAL', 'JOINT', 'JOINT_ENTRANCE', 'PREMIUM'].includes(student.accountType)) {
+      student.accountStatus = 'APPROVED';
+    }
+
+    // Force re-login when account type changes to refresh client profile
+    if (student.accountType !== oldAccountType) {
+      student.jwtVersion = (student.jwtVersion || 0) + 1;
+    }
+
     if (resetTrialLimits === true) {
       const SelfAssessmentUsage = require('../models/selfAssessmentUsageModel');
-      await SelfAssessmentUsage.findOneAndUpdate(
+      await SelfAssessmentUsage.deleteMany(
         { studentId: student._id },
-        { $set: { dailyGenerationCount: 0, lastGenerationDate: new Date() } },
-        { upsert: true, ...opts }
+        opts
       );
       
       await PhoneRecord.findOneAndUpdate(
