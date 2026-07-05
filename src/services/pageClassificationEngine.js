@@ -105,10 +105,13 @@ const SECTION_ROUTING_MAP = [
 ];
 
 // ─── ANSWER KEY DETECTION SIGNALS ────────────────────────────────────────────
-// Line pattern that matches a compact answer: "5. (B)" or "12. C" or "3. খ"
+// Line pattern that matches a COMPACT standalone answer: "5. (B)" or "12. C" or "3. খ"
+// Must NOT have additional text after the label (e.g. option content text)
 const SINGLE_ANSWER_LINE = /^\d{1,3}\s*[.):\s]\s*\(?[A-Da-dকখগঘ১২৩৪i-ivI-IV]\)?\s*$/;
-// Row with multiple inline answers: "1. A  2. B  3. C"
-const MULTI_ANSWER_LINE  = /(?:\d{1,3}\s*[.):\s]\s*\(?[A-Da-dকখগঘ১২৩৪i-ivI-IV]\)?\s*){2,}/;
+// Row with multiple inline answers: "1. A  2. B  3. C" — must have 3+ pairs to count
+const MULTI_ANSWER_LINE  = /(?:\d{1,3}\s*[.):\s]\s*\(?[A-Da-dকখগঘ১২৩৪i-ivI-IV]\)?\s*){3,}/;
+// "Ans: (A)" inline badge — this is NOT an answer key page signal when embedded in question text
+const INLINE_ANS_BADGE   = /^(?:Ans(?:wer)?|উত্তর)\s*[.:\-]\s*\(?[A-Da-dকখগঘ১২৩৪i-ivI-IV]\)?\s*$/i;
 
 // ─── TABLE / COLUMN MATCHING SIGNALS ─────────────────────────────────────────
 const TABLE_SIGNALS = [
@@ -177,20 +180,34 @@ class PageClassificationEngine {
     const fillSignalLines  = countLines(lines, l => matchesAny(l, FILL_SIGNALS));
 
     // ── Explicit heading keywords ─────────────────────────────────────────────
-    const hasExplicitAnswerHeading = /(?:answer\s*key|answers|answer\s*sheet|উত্তরমালা|উত্তর|সংক্ষিপ্ত\s*উত্তরমালা|conventional\s*type\s*answers?|correct\s*options?|key\s*answers?)/i.test(text);
+    // Only count heading if it appears on its OWN line (standalone heading, not inline)
+    const hasExplicitAnswerHeading = lines.some(line => {
+      const t = line.trim();
+      // Must be a short standalone heading, not an inline "Ans: (A)" badge
+      if (t.length > 80) return false;  // too long to be a heading
+      return /^(?:answer\s*key|answers?\s*(?:key|sheet|section)?|উত্তরমালা|সংক্ষিপ্ত\s*উত্তরমালা|conventional\s*type\s*answers?|correct\s*options?|key\s*answers?)\s*[:–]?\s*$/i.test(t);
+    });
     const hasTableHeading          = matchesAny(text, [/column\s*(a|b)/i, /স্তম্ভ/i, /match\s*the\s*column/i]);
     const hasFillHeading           = matchesAny(text, [/fill\s*in\s*the\s*blank/i, /শূন্যস্থান/i, /रिक्त\s*स्थान/i]);
 
+    // Count standalone answer lines (excluding inline Ans: badges)
+    const standaloneAnswerLines = countLines(lines, l =>
+      (SINGLE_ANSWER_LINE.test(l) || MULTI_ANSWER_LINE.test(l)) &&
+      !INLINE_ANS_BADGE.test(l)
+    );
+
     // ── Ratios ────────────────────────────────────────────────────────────────
-    const answerKeyRatio = total > 0 ? answerKeyLines / total : 0;
+    // Use standaloneAnswerLines for the ratio — not answerKeyLines which includes inline badges
+    const answerKeyRatio = total > 0 ? standaloneAnswerLines / total : 0;
 
     // ── Classification logic (priority order) ─────────────────────────────────
 
     // 1. Answer Key Page – strict
-    if (hasExplicitAnswerHeading || answerKeyRatio > 0.20 || answerKeyLines >= 4) {
+    // Require: explicit standalone heading OR very dense answer-only lines
+    if (hasExplicitAnswerHeading || answerKeyRatio > 0.35 || standaloneAnswerLines >= 6) {
       return this._buildResult(PAGE_TYPES.ANSWER_KEY_PAGE, PARSER_TYPES.ANSWER_KEY, 0.95, {
-        answerKeyLines,
-        answerKeyRatio: answerKeyRatio.toFixed(2),
+        answerKeyLines:         standaloneAnswerLines,
+        answerKeyRatio:         answerKeyRatio.toFixed(2),
         hasExplicitAnswerHeading,
       });
     }
@@ -224,9 +241,13 @@ class PageClassificationEngine {
     }
 
     // 4. MCQ
-    if (mcqOptionLines >= 4) {
+    // Require: 2+ option lines OR 2+ question headers with at least 1 MCQ option
+    if (mcqOptionLines >= 4 ||
+        (mcqOptionLines >= 2 && questionHeaderLines >= 1) ||
+        (mcqOptionLines >= 1 && questionHeaderLines >= 2)) {
       return this._buildResult(PAGE_TYPES.MCQ_PAGE, PARSER_TYPES.MCQ, 0.85, {
         mcqOptionLines,
+        questionHeaderLines,
       });
     }
 

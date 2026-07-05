@@ -1,125 +1,244 @@
 /**
- * MCQOptionParser — Production-Grade MCQ Extraction Engine
+ * MCQOptionParser — Phase 5: Option Extraction
  *
- * CAPABILITIES:
- *   - Standard (A)(B)(C)(D) inline MCQs
- *   - Line-separated A. B. C. D. options
- *   - Bengali labels: ক. খ. গ. ঘ. / ১. ২. ৩. ৪.
- *   - Roman numeral options: (i)(ii)(iii)(iv)
- *   - Multi-line wrapped options
- *   - Math-only and text+math mixed questions
- *   - Inline option layouts (all options on one line)
- *   - Vertical option layouts (each option on its own line)
+ * HANDLES:
+ *   - Standard:         (A) (B) (C) (D)  — inline or line-separated
+ *   - Dotted:           A. B. C. D.
+ *   - Bracketed:        [A] [B] [C] [D]
+ *   - Bengali alpha:    ক. খ. গ. ঘ.  /  (ক) (খ) (গ) (ঘ)
+ *   - Bengali numeric:  ১. ২. ৩. ৪.  /  (১) (২) (৩) (৪)
+ *   - Roman numerals:   (i) (ii) (iii) (iv)
+ *   - Mixed-script:     Any of the above in the SAME question
+ *   - OCR spacing:      ( A )  [  B  ]  A .  (spaced variants)
  *
- * PREVENTS:
- *   - Option bleed across questions
- *   - Cross-question contamination
- *   - Merged question detection
- *   - Placeholder question text fallback
+ * GUARANTEES:
+ *   - Exactly FOUR labelled slots (A B C D) — empty string if not found
+ *   - Duplicate option detection
+ *   - No option bleed between questions (truncates at next question header)
+ *   - Math content inside options is preserved
+ *   - No fabricated options — missing → empty string
  *
- * ARCHITECTURE:
- *   Three specialized parsers tried in priority order:
- *     1. detectInlineParen  — (A) text (B) text inline format
- *     2. detectLineBased    — line-by-line A. / A) / (A) format
- *     3. detectStructured   — explicit key:value format
- *
- *   Each parser returns { question, options, format } or null.
- *   The first non-null result with >= 2 valid options wins.
+ * VALIDATION:
+ *   - filledCount: number of options with actual content
+ *   - hasDuplicates: true if any two options share identical text
+ *   - isComplete: true only if all 4 options have content
  */
 
 'use strict';
 
-// ─── LABEL NORMALISATION MAP ──────────────────────────────────────────────────
-// Maps any option label variant → canonical index 0–3
-const LABEL_INDEX_MAP = {
-  // Latin
+// ─── LABEL → INDEX MAP ───────────────────────────────────────────────────────
+const LABEL_TO_IDX = {
+  // Latin uppercase/lowercase
   'A': 0, 'B': 1, 'C': 2, 'D': 3,
   'a': 0, 'b': 1, 'c': 2, 'd': 3,
-  // Numeric
-  '1': 0, '2': 1, '3': 2, '4': 3,
-  // Roman
-  'i': 0, 'ii': 1, 'iii': 2, 'iv': 3,
-  'I': 0, 'II': 1, 'III': 2, 'IV': 3,
   // Bengali alphabetic
   'ক': 0, 'খ': 1, 'গ': 2, 'ঘ': 3,
   // Bengali numeric
   '১': 0, '২': 1, '৩': 2, '৪': 3,
+  // ASCII numeric
+  '1': 0, '2': 1, '3': 2, '4': 3,
+  // Roman
+  'i': 0, 'ii': 1, 'iii': 2, 'iv': 3,
+  'I': 0, 'II': 1, 'III': 2, 'IV': 3,
 };
 
-const CANONICAL_LABELS = ['A', 'B', 'C', 'D'];
+const CANONICAL = ['A', 'B', 'C', 'D'];
 
-// ─── OPTION DETECTION PATTERNS ────────────────────────────────────────────────
-
-// Matches an option start label at the beginning of a string:
-//   (A)  A.  A)  [A]  ক.  ক)  (ক)  i.  (i)  1.  (1)
-// IMPORTANT: For numeric labels [1-4], we add a lookahead to prevent matching
-// question headers like "3. What is..." — those start with uppercase + full word.
-const OPT_START = /^[\(\[]?\s*(A|B|C|D|a|b|c|d|i{1,4}|I{1,4}|IV|iv|[ক-ঘ১-৪])\s*[\)\]\.\:](?!\d)\s*|^[\(\[]?\s*([1-4])\s*[\)\]\.\:](?!\d)\s*(?![A-Z\u0980-\u09FF][a-zA-Z\u0980-\u09FF]{3,})/;
-
-// Matches lines that are clearly question headers (number + sentence)
-// Used to prevent option parser from consuming question lines
-const QUESTION_LINE_RE = /^\d{1,3}[\.):]\s+[A-Z\u0980-\u09FF].{5,}/;
-
-// Inline: (A) ... (B) ... — captured as groups
-const INLINE_PAREN = /(?<![A-Za-z0-9\\])[\(\[]\s*([ABCDabcdকখগঘ১২৩৪i-ivI-IV]{1,3})\s*[\)\]]\s*([\s\S]*?)(?=\s*(?<![A-Za-z0-9\\])[\(\[]\s*[ABCDabcdকখগঘ১২৩৪i-ivI-IV]{1,3}\s*[\)\]]|$)/g;
-
-// Internal header: looks like the start of a new question (number + text) INSIDE a segment
-// Used to truncate option bleed
-const INTERNAL_Q_HEADER = /\n\s*(?:Question\s+\d+|Q\s*\d+|Q\d+|(?:[5-9]|\d{2,})\.)\s+/;
-
-// ─── UTILITIES ────────────────────────────────────────────────────────────────
-
-function bengaliToEnglish(str) {
-  if (!str) return str;
-  return str.replace(/[০-৯]/g, ch => String(ch.codePointAt(0) - 0x09E6));
+function canonicalize(raw) {
+  if (!raw) return null;
+  return LABEL_TO_IDX[raw] !== undefined ? CANONICAL[LABEL_TO_IDX[raw]] : null;
 }
 
-/**
- * Normalize a raw option label to its canonical form (A/B/C/D).
- */
-function canonicalize(rawLabel) {
-  const idx = LABEL_INDEX_MAP[rawLabel] ?? LABEL_INDEX_MAP[rawLabel.toLowerCase()];
-  return idx !== undefined ? CANONICAL_LABELS[idx] : null;
+// ─── ANSWER BADGE STRIP PATTERN ───────────────────────────────────────────────
+// Strip inline answer badges from option text (Ans: / উত্তর: / Correct:)
+// The letter after "Ans:" may or may not be captured — both forms handled
+const ANSWER_BADGE_SUFFIX = /\s*(?:Ans(?:wer)?\.?|উত্তর[ঃ:]?|Correct\s*(?:option|answer)?\.?)\s*[:：]?\s*(?:[\(\[]?[A-Da-dকখগঘ১-৪i-ivI-IV]{1,3}[\)\]]?)?\s*$/i;
+
+// ─── OPTION START PATTERN ─────────────────────────────────────────────────────
+// Matches option labels at the beginning of a string, handling OCR spacing.
+// Captures the label in group 1 or 2.
+const OPT_START = /^[\(\[]?\s*(A|B|C|D|a|b|c|d|ক|খ|গ|ঘ|১|২|৩|৪|i{1,3}|iv|I{1,3}|IV)\s*[\)\]\.:\-]\s*|^[\(\[]?\s*([1-4])\s*[\)\]\.:\-]\s*(?![A-Z\u0980-\u09FF][a-zA-Z\u0980-\u09FF]{3,})/;
+
+// ─── INLINE PAREN PATTERN ─────────────────────────────────────────────────────
+// Matches "(A) option text (B) option text ..." on a single line
+const INLINE_PAREN = /(?<![A-Za-z0-9\\])[\(\[]\s*(A|B|C|D|a|b|c|d|ক|খ|গ|ঘ|১|২|৩|৪|i{1,3}|iv|I{1,3}|IV)\s*[\)\]]\s*([\s\S]*?)(?=\s*(?<![A-Za-z0-9\\])[\(\[]\s*(?:A|B|C|D|a|b|c|d|ক|খ|গ|ঘ|১|২|৩|৪|i{1,3}|iv|I{1,3}|IV)\s*[\)\]]|$)/g;
+
+// Question header pattern (to detect bleed-in of next question)
+const NEXT_Q_HEADER = /\n\s*(?:Question|Q\.?\s*|প্রশ্ন\s*|No\.?\s*)\d{1,3}[\s\.):\-]|\n\s*\d{1,3}[\.):\-]\s+[A-Z\u0980-\u09FF]/;
+
+// ─── MATH RANGE FINDER ───────────────────────────────────────────────────────
+function getMathRanges(text) {
+  const ranges = [];
+  const re = /\$\$[\s\S]*?\$\$|\$[^$\n]*?\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)/gs;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    ranges.push({ start: m.index, end: m.index + m[0].length });
+  }
+  return ranges;
 }
 
-/**
- * Check if an option text has actual semantic content (not just symbols/whitespace).
- */
+function insideMath(idx, ranges) {
+  return ranges.some(r => idx >= r.start && idx < r.end);
+}
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+
 function hasContent(text) {
   if (!text) return false;
   const t = text.trim();
-  if (t.length < 1) return false;
-  // Must contain at least one alphanumeric, math symbol, or LaTeX command
-  return /[a-zA-Z0-9\u0080-\uFFFF\$\\+\-\=]/.test(t);
+  return t.length >= 1 && /[a-zA-Z0-9\u0080-\uFFFF$\\+\-=]/.test(t);
 }
 
-/**
- * Build a normalized 4-element options array from a map of {label → text}.
- * Fills missing entries with empty string.
- */
-function buildOptionsArray(optMap) {
-  return CANONICAL_LABELS.map(label => ({
+function buildOptions(optMap) {
+  return CANONICAL.map(label => ({
     label,
-    text: (optMap[label] || '').trim(),
+    text: ((optMap[label] || '').trim()).replace(ANSWER_BADGE_SUFFIX, '').trim(),
   }));
 }
 
-/**
- * Count the number of option slots that have actual content.
- */
-function countFilledOptions(opts) {
+function countFilled(opts) {
   return opts.filter(o => hasContent(o.text)).length;
 }
 
-function getMathRanges(text) {
-  const ranges = [];
-  if (!text) return ranges;
-  const mathRegex = /\$\$.*?\$\$|\\\[.*?\\\]|\\\(.*?\\\)|(?<!\$)\$.*?\$(?!\$)/gs;
-  let match;
-  while ((match = mathRegex.exec(text)) !== null) {
-    ranges.push({ start: match.index, end: match.index + match[0].length });
+function hasDuplicates(opts) {
+  const filled = opts.filter(o => hasContent(o.text)).map(o => o.text.trim().toLowerCase());
+  return new Set(filled).size < filled.length;
+}
+
+// ─── QUESTION PREAMBLE EXTRACTOR ─────────────────────────────────────────────
+
+function extractPreamble(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const preamble = [];
+  for (const line of lines) {
+    if (OPT_START.test(line)) break;
+    preamble.push(line);
   }
-  return ranges;
+  // Remove leading question number from preamble
+  const raw = preamble.join(' ').replace(/^\d{1,3}[\.):\-]\s+/, '').trim();
+  return raw || null;
+}
+
+// ─── PARSER 1: INLINE PARENTHESIS FORMAT ─────────────────────────────────────
+
+function parseInlineParen(text) {
+  const mathRanges = getMathRanges(text);
+  const optMap = {};
+  let firstIdx = -1;
+
+  INLINE_PAREN.lastIndex = 0;
+  const pattern = new RegExp(INLINE_PAREN.source, 'g');
+  let m;
+
+  while ((m = pattern.exec(text)) !== null) {
+    if (insideMath(m.index, mathRanges)) continue;
+    const canonical = canonicalize(m[1]);
+    if (!canonical) continue;
+    const optText = (m[2] || '').trim()
+      .replace(ANSWER_BADGE_SUFFIX, '')  // strip trailing Ans: badge
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!optMap[canonical] && hasContent(optText)) {
+      optMap[canonical] = optText;
+      if (firstIdx === -1) firstIdx = m.index;
+    }
+  }
+
+  if (Object.keys(optMap).length < 2) return null;
+
+  const questionText = firstIdx > 0
+    ? text.slice(0, firstIdx).replace(/^\d{1,3}[\.):\-]\s*/, '').trim()
+    : '';
+
+  const options = buildOptions(optMap);
+  return { question: questionText, options, format: 'inline-paren' };
+}
+
+// ─── PARSER 2: LINE-BASED FORMAT ─────────────────────────────────────────────
+
+function parseLineBased(text) {
+  const lines = text.split('\n').map(l => l.trimEnd()).filter(l => l.trim());
+  const optMap  = {};
+  const qLines  = [];
+  let curLabel  = null;
+  let firstOptIdx = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    const m = trimmed.match(OPT_START);
+
+    // Only treat as option start if it's NOT a question header like "3. What is..."
+    const isQHeader = /^\d{1,3}[\.):\-]\s+[A-Z\u0980-\u09FF].{5,}/.test(trimmed);
+
+    if (m && !isQHeader) {
+      const rawLabel = m[1] || m[2];
+      const canonical = canonicalize(rawLabel);
+      if (!canonical) {
+        // Unknown label — treat as continuation
+        if (curLabel !== null) optMap[curLabel] += ' ' + trimmed;
+        continue;
+      }
+
+      curLabel = canonical;
+      const rest = trimmed.slice(m[0].length).trim();
+      optMap[curLabel] = rest;
+      if (firstOptIdx === -1) firstOptIdx = i;
+    } else if (curLabel !== null) {
+      // Continuation of current option
+      // Stop if it looks like a new question
+      if (/^\d{1,3}[\.):\-]\s+[A-Z\u0980-\u09FF]/.test(trimmed)) break;
+      optMap[curLabel] += ' ' + trimmed;
+    } else {
+      qLines.push(line);
+    }
+  }
+
+  if (Object.keys(optMap).length < 2) return null;
+
+  const questionText = qLines
+    .join('\n')
+    .replace(/^\d{1,3}[\.):\-]\s*/, '')
+    .trim();
+
+  // Trim trailing whitespace and answer badges from options
+  for (const k of Object.keys(optMap)) {
+    optMap[k] = optMap[k].trim().replace(ANSWER_BADGE_SUFFIX, '').trim();
+  }
+
+  const options = buildOptions(optMap);
+  return { question: questionText, options, format: 'line-based' };
+}
+
+// ─── PARSER 3: STRUCTURED KEY-VALUE FORMAT ───────────────────────────────────
+
+function parseStructured(text) {
+  const patterns = [
+    /question\s*[:\-]?\s*(.+?)\s*(?:options?|choices?)\s*[:\-]?\s*(.*)/is,
+    /(\d+\.\s+.+?)\s*option\s*a\s*[:\-]?\s*(.+?)(?=option|choice|$)/is,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+
+    const qText   = match[1].trim();
+    const optPart = match[2].trim();
+    const optMap  = {};
+
+    for (const line of optPart.split('\n').filter(l => l.trim())) {
+      const om = line.match(/^[\(\[]?\s*([A-Da-dক-ঘ১-৪i-ivI-IV]{1,3})\s*[\)\]\.:]+\s*(.+)$/);
+      if (om) {
+        const canonical = canonicalize(om[1]);
+        if (canonical && !optMap[canonical]) optMap[canonical] = om[2].trim();
+      }
+    }
+
+    if (Object.keys(optMap).length < 2) continue;
+    return { question: qText, options: buildOptions(optMap), format: 'structured' };
+  }
+
+  return null;
 }
 
 // ─── MAIN CLASS ───────────────────────────────────────────────────────────────
@@ -130,205 +249,78 @@ class MCQOptionParser {
    * Parse MCQ options from an isolated question segment.
    *
    * @param {string} segmentText
-   * @returns {{ question: string, options: OptionObj[], format: string } | null}
+   * @returns {ParsedMCQ | null}
+   *   {
+   *     question: string,
+   *     options: [{label, text}] × 4,
+   *     format: string,
+   *     filledCount: number,
+   *     isComplete: boolean,
+   *     hasDuplicates: boolean,
+   *   }
    */
   static parse(segmentText) {
     if (!segmentText || typeof segmentText !== 'string') return null;
 
+    // Truncate if a next question header leaked in
     let text = segmentText.trim();
-
-    // ── Defensive: truncate if a subsequent question header leaked in ─────────
-    const internalHeader = text.match(INTERNAL_Q_HEADER);
-    if (internalHeader && internalHeader.index != null && internalHeader.index > 10) {
-      text = text.substring(0, internalHeader.index).trim();
+    const bleedMatch = text.match(NEXT_Q_HEADER);
+    if (bleedMatch && bleedMatch.index > 10) {
+      text = text.slice(0, bleedMatch.index).trim();
     }
 
-    // ── Try parsers in priority order ──────────────────────────────────────
-    const result =
-      this._detectInlineParen(text)   ||
-      this._detectLineBased(text)     ||
-      this._detectStructured(text);
+    // Try parsers in priority order
+    const result = parseInlineParen(text)
+                || parseLineBased(text)
+                || parseStructured(text);
 
     if (!result) return null;
 
-    // ── Post-processing: recover placeholder question text ────────────────
+    // Recover placeholder question text if parser returned empty
     if (!result.question || /^(?:Question\s*(?:Text)?|Q\.?No\.?)$/i.test(result.question.trim())) {
-      const recovered = this._extractQuestionPreamble(text);
+      const recovered = extractPreamble(text);
       if (recovered) result.question = recovered;
     }
 
-    // Require at least 2 filled options to be a valid MCQ
-    if (countFilledOptions(result.options) < 2) return null;
-
-    return result;
-  }
-
-  // ─── PARSER 1: INLINE PARENTHESIS FORMAT ─────────────────────────────────
-  // Handles: (A) first option (B) second option (C) third (D) fourth
-
-  static _detectInlineParen(text) {
-    const mathRanges = getMathRanges(text);
-    const optMap = {};
-    let firstMatchIndex = -1;
-
-    // Reset regex lastIndex
-    INLINE_PAREN.lastIndex = 0;
-    const pattern = new RegExp(INLINE_PAREN.source, 'g');
-    let m;
-
-    while ((m = pattern.exec(text)) !== null) {
-      const matchIndex = m.index;
-      // Skip if inside math block
-      const insideMath = mathRanges.some(r => matchIndex >= r.start && matchIndex < r.end);
-      if (insideMath) continue;
-
-      const canonical = canonicalize(m[1]);
-      if (!canonical) continue;
-      
-      const optText = m[2].trim().replace(/\s+/g, ' ');
-      if (!optMap[canonical] && hasContent(optText)) {
-        optMap[canonical] = optText;
-        if (firstMatchIndex === -1) firstMatchIndex = m.index;
-      }
-    }
-
-    if (Object.keys(optMap).length < 2) return null;
-
-    // Reconstruct question body from text before first option
-    const questionText = firstMatchIndex > 0
-      ? text.substring(0, firstMatchIndex).replace(/^\d{1,3}[\.\)]\s*/, '').trim()
-      : '';
+    // Require at least 2 filled options
+    const filled = countFilled(result.options);
+    if (filled < 2) return null;
 
     return {
-      question: questionText || '',
-      options:  buildOptionsArray(optMap),
-      format:   'inline-mcq',
+      question:      result.question || '',
+      options:       result.options,
+      format:        result.format,
+      filledCount:   filled,
+      isComplete:    filled === 4,
+      hasDuplicates: hasDuplicates(result.options),
     };
   }
-
-  // ─── PARSER 2: LINE-BASED FORMAT ─────────────────────────────────────────
-  // Handles:  A. text\nB. text\n  or  (A) text\n(B) text\n
-
-  static _detectLineBased(text) {
-    const lines = text
-      .split('\n')
-      .map(l => l.replace(/\r/g, '').trim())
-      .filter(Boolean);
-
-    const optMap  = {};
-    const questionLines = [];
-    let currentLabel = null;
-    let firstOptionLineIdx = -1;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const m = line.match(OPT_START);
-
-      if (m && !QUESTION_LINE_RE.test(line)) {
-        // Only treat as option label if it's NOT a question-header line
-        const rawLabel = m[1] || m[2]; // m[1] = letter/roman/bengali, m[2] = numeric
-        const canonical = canonicalize(rawLabel);
-        if (!canonical) {
-          // Can't map label — treat as continuation
-          if (currentLabel && optMap[currentLabel] !== undefined) {
-            optMap[currentLabel] += ' ' + line;
-          }
-          continue;
-        }
-
-        currentLabel = canonical;
-        const rest = line.slice(m[0].length).trim();
-        optMap[currentLabel] = rest;
-
-        if (firstOptionLineIdx === -1) firstOptionLineIdx = i;
-      } else if (currentLabel !== null) {
-        // Continuation of the current option (multi-line option)
-        // Stop if it looks like a question header or section title
-        if (/^\d{1,3}[\.\)]\s+[A-Z\u0980-\u09FF]/.test(line)) {
-          // Looks like a new question — stop
-          break;
-        }
-        optMap[currentLabel] += ' ' + line;
-      } else {
-        questionLines.push(line);
-      }
-    }
-
-    if (Object.keys(optMap).length < 2) return null;
-
-    // Reconstruct question text from lines before first option
-    const questionText = questionLines
-      .slice(0, firstOptionLineIdx === -1 ? questionLines.length : undefined)
-      .join('\n')
-      .replace(/^\d{1,3}[\.\)]\s*/, '')
-      .trim();
-
-    // Trim trailing continuation noise from options
-    for (const k of Object.keys(optMap)) {
-      optMap[k] = optMap[k].trim();
-    }
-
-    return {
-      question: questionText,
-      options:  buildOptionsArray(optMap),
-      format:   'line-based',
-    };
-  }
-
-  // ─── PARSER 3: STRUCTURED KEY-VALUE FORMAT ─────────────────────────────────
-  // Handles rare: "question: ... options: A: ... B: ... C: ..."
-
-  static _detectStructured(text) {
-    const structured = [
-      /question\s*[:\-]?\s*(.+?)\s*(?:options?|choice|answer)\s*[:\-]?\s*(.*)/is,
-      /(\d+\.\s+.+?)\s*option\s*a\s*[:\-]?\s*(.+?)(?=option|choice|$)/is,
-    ];
-
-    for (const pattern of structured) {
-      const match = text.match(pattern);
-      if (!match) continue;
-
-      const qText   = match[1].trim();
-      const optPart = match[2].trim();
-      const optLines = optPart.split(/\n/).filter(l => l.trim());
-      const opts = [];
-      const labels = CANONICAL_LABELS;
-
-      for (const line of optLines) {
-        const om = line.match(/^[\(\[]?([A-Da-dক-ঘ১-৪i-ivI-IV]{1,3})[\)\]\.\:\-\s]+(.+)$/);
-        if (om) {
-          const canonical = canonicalize(om[1]);
-          if (canonical) opts.push({ label: canonical, text: om[2].trim() });
-        }
-      }
-
-      if (opts.length < 2) continue;
-
-      while (opts.length < 4) opts.push({ label: labels[opts.length], text: '' });
-
-      return { question: qText, options: opts.slice(0, 4), format: 'structured' };
-    }
-
-    return null;
-  }
-
-  // ─── UTILITIES ───────────────────────────────────────────────────────────
 
   /**
-   * Extract the preamble question text from the raw segment,
-   * ignoring any lines that start with option labels.
+   * Validate that options are well-formed.
+   * Returns list of validation errors (empty array = valid).
    */
-  static _extractQuestionPreamble(text) {
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-    const preamble = [];
-
-    for (const line of lines) {
-      if (OPT_START.test(line)) break; // hit first option — stop
-      preamble.push(line);
+  static validateOptions(options) {
+    const errors = [];
+    if (!Array.isArray(options) || options.length !== 4) {
+      errors.push('Expected exactly 4 options');
+      return errors;
     }
 
-    const raw = preamble.join(' ').replace(/^\d{1,3}[\.\)]\s*/, '').trim();
-    return raw || null;
+    const labels = options.map(o => o.label);
+    const expectedLabels = ['A', 'B', 'C', 'D'];
+    for (const expected of expectedLabels) {
+      if (!labels.includes(expected)) {
+        errors.push(`Missing option ${expected}`);
+      }
+    }
+
+    const texts = options.filter(o => hasContent(o.text)).map(o => o.text.trim().toLowerCase());
+    if (new Set(texts).size < texts.length) {
+      errors.push('Duplicate option texts detected');
+    }
+
+    return errors;
   }
 }
 

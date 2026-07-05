@@ -1,186 +1,234 @@
-const { OCRNormalizer } = require('./ocrNormalizer');
-const { ContentClassificationEngine } = require('./contentClassificationEngine');
+/**
+ * QuestionSegmenter — Phase 2: Question Boundary Detection
+ *
+ * DESIGN PRINCIPLES:
+ *   - Never let question NUMBER become part of questionText.
+ *   - Never merge content from two different questions.
+ *   - Support Bengali and English numbering concurrently.
+ *   - Preserve LaTeX blocks intact across line joins.
+ *   - Handle OCR line-breaks mid-sentence gracefully.
+ *   - Three-pass strategy: pre-split → header detection → paragraph assembly.
+ *
+ * SUPPORTS:
+ *   Standard:  1.  1)  1:  Q1.  Q.1  No. 1  Question 1
+ *   Bengali:   ১.  ১)  প্রশ্ন ১  প্র. ১
+ *   Mixed:     1–20 as ASCII (Bengali digits normalised before matching)
+ */
 
-// Converts Bengali Unicode digits (০-৯) to their ASCII equivalents
-function bengaliToEnglishDigits(str) {
+'use strict';
+
+// ─── BENGALI DIGIT NORMALIZER ─────────────────────────────────────────────────
+function bengaliToAscii(str) {
   if (!str) return str;
-  return str.replace(/[০-৯]/g, (ch) => String(ch.codePointAt(0) - 0x09E6));
+  return str.replace(/[০-৯]/g, ch => String(ch.codePointAt(0) - 0x09E6));
 }
 
-// Helper for finding math ranges to preserve LaTeX blocks
+// ─── MATH RANGE FINDER ───────────────────────────────────────────────────────
+// Finds all LaTeX inline/display blocks so we never split inside them.
 function getMathRanges(text) {
   const ranges = [];
   if (!text) return ranges;
-  const mathRegex = /\$\$.*?\$\$|\\\[.*?\\\]|\\\(.*?\\\)|(?<!\$)\$.*?\$(?!\$)/gs;
-  let match;
-  while ((match = mathRegex.exec(text)) !== null) {
-    ranges.push({ start: match.index, end: match.index + match[0].length });
+  const re = /\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|(?<!\$)\$[^$\n]*?\$(?!\$)/gs;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    ranges.push({ start: m.index, end: m.index + m[0].length });
   }
   return ranges;
 }
 
-class QuestionSegmenter {
-  static _isQuestionHeader(line, current = null) {
-    if (!line) return null;
+function isInsideMath(pos, ranges) {
+  return ranges.some(r => pos >= r.start && pos < r.end);
+}
 
-    // Normalise Bengali digits before matching
-    const trimmed = bengaliToEnglishDigits(line.trim());
-    
-    // Strict question header patterns:
-    // 1. "Question 12:" or "Q.12 -" or "No. 12"
-    // 2. "Question 12 of 20"
-    // 3. "12. Evaluate ..." or "12) Evaluate ..." (number followed by delimiter and meaningful text)
-    // 4. Bengali: "প্রশ্ন 12" or "প্র. 12" (Bengali prefix with English/Bengali digits)
-    const headerPatterns = [
-      /^(?:Question|Q\.?|No\.?|প্রশ্ন|প্র\.?)\s*[\.:]?\s*(\d+)\s*(.+)$/i,
-      /^Question\s*(\d+)\s*[\.:]?\s*of\s*\d+\s*(.+)?$/i,
-      /^([0-9]{1,3})[\.)\:]\s+(\S.+)$/,
-    ];
+// ─── QUESTION HEADER PATTERNS ─────────────────────────────────────────────────
+// Order matters: most specific first.
+const HEADER_PATTERNS = [
+  // "Question 12:"  "Q. 12 -"  "Q12."
+  /^(?:Question|Ques\.?|Q\.?\s*)(\d{1,3})[\s\.):\-]/i,
+  // Bengali prefix: "প্রশ্ন 12"  "প্র. 12"
+  /^(?:প্রশ্ন|প্র\.?)\s*\.?\s*(\d{1,3})[\s\.):\-]?/,
+  // "No. 12"
+  /^No\.?\s*(\d{1,3})[\s\.):\-]/i,
+  // "12. text"  "12) text"  "12: text"  (number followed by delimiter then non-digit)
+  /^(\d{1,3})[\.):\-]\s+(?!\d)/,
+];
 
-    for (const pattern of headerPatterns) {
-      const match = trimmed.match(pattern);
-      if (match) {
-        const numStr = match[1];
-        const num = parseInt(numStr, 10);
-        
-        // Defensive: Check if it's an option label instead of a question header
-        const isOption = /^[\(\[]?(?:[A-Da-d1-4কখগঘ১২৩৪]|i{1,4}|I{1,4})[\)\]\.\:]\s*/.test(trimmed);
-        if (isOption) {
-          // If it is a letter option (A-D, ক-ঘ), it is ALWAYS an option, never a question
-          if (/^[A-Da-dকখগঘ][\.\)\]]/i.test(trimmed.replace(/^[\(\[]/, ''))) {
-            continue;
-          }
-          // If it is a number or Roman option:
-          // Check if it is the successor of the current question number.
-          if (current && current.number) {
-            const currentNum = parseInt(current.number, 10);
-            if (!isNaN(currentNum) && num === currentNum + 1) {
-              // Successor question: treat as question header
-              return {
-                number: numStr,
-                text: (match[2] || '').trim(),
-              };
-            }
-            // If current exists but is not the successor, treat as option (skip)
-            continue;
-          }
-        }
-        return {
-          number: numStr,
-          text: (match[2] || '').trim(),
-        };
+// Option label pattern — lines starting this way are NEVER question headers
+const OPTION_LINE_RE = /^[\(\[]?\s*(?:[A-Da-dকখগঘ১-৪i]{1,4}|I{1,4}|IV|vi{0,2})\s*[\)\]\.:](?!\d)/;
+
+/**
+ * Try to detect a question header at the start of `line`.
+ * Returns { number: string } or null.
+ * `currentNumber` is the last known question number (for successor validation).
+ */
+function detectHeader(line, currentNumber) {
+  const norm = bengaliToAscii(line.trim());
+
+  // Never treat option lines as headers
+  if (OPTION_LINE_RE.test(norm)) return null;
+
+  for (const pattern of HEADER_PATTERNS) {
+    const m = norm.match(pattern);
+    if (m) {
+      const num = parseInt(m[1], 10);
+      // Sanity: question numbers are 1–999
+      if (num < 1 || num > 999) continue;
+      // If we have a current number and this is neither successor nor a later number, skip
+      if (currentNumber !== null) {
+        if (num < currentNumber && num !== 1) continue;  // going backwards (not a page restart)
       }
+      return { number: String(num) };
     }
-
-    return null;
   }
+  return null;
+}
+
+// ─── PRE-SPLIT LOOKAHEAD PATTERN ──────────────────────────────────────────────
+// Splits text at positions where a new question header starts,
+// even mid-line (e.g. after a closing '$' in Mathpix output).
+const LOOKAHEAD_SPLIT = /(?:\n|[.?!]\s+|(?<=\$))(?=(?:(?:Question|Ques\.?|Q\.?\s*|প্রশ্ন\s*|প্র\.?\s*|No\.?\s*)\d{1,3}[\s\.):\-]|\d{1,3}[\.):\-]\s+)(?!\d))/gi;
+
+// ─── MAIN CLASS ───────────────────────────────────────────────────────────────
+
+class QuestionSegmenter {
 
   /**
-   * Segments text into individual question blocks.
-   * 
-   * Uses a two-pass approach:
-   *  Pass 1 (Lookahead Split): Split the text wherever a question number
-   *          boundary appears, even inline (e.g. "...answer$12. Next...").
-   *          This mirrors the reference backend (mmdHandling.ts line 424).
-   *  Pass 2 (Line-by-line): Process each pre-split block with the existing
-   *          header detector for numbering and structure extraction.
+   * Segment pre-cleaned text into individual question blocks.
    *
-   * @param {string} text
+   * @param {string} text - Clean, noise-filtered text (output of PageLayoutAnalyzer)
+   * @returns {Segment[]}  Each: { text, number, rawHeader, startIndex, endIndex }
    */
   static segment(text) {
-    if (!text) return [];
+    if (!text || !text.trim()) return [];
 
-    // Normalize text first using OCRNormalizer
-    const normalized = OCRNormalizer.normalizeText(text);
+    // Normalise Bengali digits so patterns match consistently
+    const normalized = bengaliToAscii(text);
 
-    // Filter out page numbers, brandings, metadata headers, levels, etc.
-    const filteredText = ContentClassificationEngine.filterNoise(normalized);
+    // ── PASS 1: Pre-split at question boundaries ───────────────────────────
+    const rawBlocks = normalized.split(LOOKAHEAD_SPLIT).filter(b => b && b.trim());
 
-    // ── PASS 1: LOOKAHEAD PRE-SPLIT ──────────────────────────────────────────
-    // Split at any position where a question number header starts, even if
-    // it appears mid-line (e.g. after a closing "$" in Mathpix inline output).
-    const lookaheadPattern = /(?:\n|[.?!]\s+|(?<=\$))(?=(?:(?:\b(?:Question|No\.)\s+|\bQ\.?\s*|(?:প্রশ্ন|প্র\.?)\s*)\d{1,3}[\.\)\:]?\s+|\d{1,3}[\.\)\:]\s+)(?!\d))/gi;
-    const rawBlocks = filteredText.split(lookaheadPattern);
-
-    // ── PASS 2: LINE-BY-LINE HEADER EXTRACTION PER BLOCK ────────────────────
     const segments = [];
-    let current = null;
+    let currentSeg = null;
+    let charCursor  = 0;
+    let lastQNum    = null;
 
-    const flushCurrent = (endIndex) => {
-      if (!current) return;
-      const segmentText = current.lines.join('\n').trim();
-      if (segmentText) {
+    const flushSegment = (endIdx) => {
+      if (!currentSeg) return;
+      const segText = currentSeg.lines.join('\n').trim();
+      if (segText.length > 3) {  // discard tiny fragments
         segments.push({
-          text: segmentText,
-          number: current.number,
-          startIndex: current.startIndex,
-          endIndex,
-          rawHeader: current.rawHeader,
+          text:       segText,
+          number:     currentSeg.number,
+          rawHeader:  currentSeg.rawHeader,
+          startIndex: currentSeg.startIndex,
+          endIndex:   endIdx,
         });
       }
-      current = null;
+      currentSeg = null;
     };
 
+    // ── PASS 2: Line-by-line header detection per block ────────────────────
     for (const block of rawBlocks) {
-      if (!block.trim()) continue;
+      if (!block.trim()) { charCursor += block.length + 1; continue; }
 
       const mathRanges = getMathRanges(block);
       const lines = block.split('\n');
-      let cursor = 0;
+      let blockCursor = 0;
 
       for (const line of lines) {
-        const lineStart = cursor;
-        cursor += line.length + 1;
+        const lineStart = charCursor + blockCursor;
+        blockCursor += line.length + 1;
 
-        // Skip lines inside multi-line LaTeX blocks
-        const withinMath = mathRanges.some(r => lineStart >= r.start && lineStart < r.end);
-        if (withinMath) {
-          if (current) current.lines.push(line);
+        // Never split inside a LaTeX block
+        if (isInsideMath(lineStart, mathRanges)) {
+          if (currentSeg) currentSeg.lines.push(line);
           continue;
         }
 
-        const header = QuestionSegmenter._isQuestionHeader(line, current);
+        const header = detectHeader(line, lastQNum !== null ? parseInt(lastQNum, 10) : null);
 
         if (header) {
-          const hasQuestionBody = current && current.lines.some(l => l.trim().length > 0);
-          const hasOptionContent = current && current.lines.some(l =>
-            /^\s*\(?[A-Da-d1-4ivxIVX]{1,4}[\)\.\s]+/.test(l.trim())
-          );
+          // A new question begins — flush the previous
+          const hasContent = currentSeg &&
+            currentSeg.lines.some(l => l.trim().length > 0);
+          const hasOptions = currentSeg &&
+            currentSeg.lines.some(l => OPTION_LINE_RE.test(l.trim()));
 
-          if (!current || hasQuestionBody || hasOptionContent) {
-            flushCurrent(lineStart - 1);
-            current = {
-              number: header.number,
-              rawHeader: line.trim(),
+          if (!currentSeg || hasContent || hasOptions) {
+            flushSegment(lineStart - 1);
+            currentSeg = {
+              number:     header.number,
+              rawHeader:  line.trim(),
               startIndex: lineStart,
-              lines: [line],
+              lines:      [line],
             };
+            lastQNum = header.number;
             continue;
           }
         }
 
-        if (!current) {
-          current = {
-            number: null,
-            rawHeader: '',
+        // Continuation line — append to current segment
+        if (!currentSeg) {
+          currentSeg = {
+            number:     null,
+            rawHeader:  '',
             startIndex: lineStart,
-            lines: [line],
+            lines:      [line],
           };
         } else {
-          current.lines.push(line);
+          currentSeg.lines.push(line);
         }
       }
+
+      charCursor += block.length + 1;
     }
 
-    if (current) {
-      flushCurrent(filteredText.length);
+    // Flush last segment
+    if (currentSeg) {
+      flushSegment(text.length);
     }
 
+    // Fallback: return entire text as one segment if nothing was parsed
     if (segments.length === 0) {
-      return [{ text: filteredText, number: null, startIndex: 0, endIndex: filteredText.length, rawHeader: '' }];
+      return [{
+        text:       text.trim(),
+        number:     null,
+        rawHeader:  '',
+        startIndex: 0,
+        endIndex:   text.length,
+      }];
     }
 
-    return segments;
+    // ── PASS 3: Strip question number from question text ──────────────────
+    // The number is already stored in seg.number, remove it from the text body.
+    return segments.map(seg => {
+      const cleaned = this._stripQuestionNumber(seg.text, seg.number);
+      return { ...seg, text: cleaned };
+    });
+  }
+
+  /**
+   * Remove the leading question number/header from the text body.
+   * The number is stored separately in seg.number.
+   */
+  static _stripQuestionNumber(text, number) {
+    if (!text || !number) return text;
+    // Match the same header patterns at the very start
+    const norm = bengaliToAscii(text.trimStart());
+    const stripPatterns = [
+      new RegExp(`^(?:Question|Ques\\.?|Q\\.?\\s*)${number}[\\s\\.\\):\\-]+`, 'i'),
+      new RegExp(`^(?:প্রশ্ন|প্র\\.?)\\s*\\.?\\s*${number}[\\s\\.\\):\\-]*`, ''),
+      new RegExp(`^No\\.?\\s*${number}[\\s\\.\\):\\-]+`, 'i'),
+      new RegExp(`^${number}[\\.):\\-]\\s+`),
+    ];
+    for (const p of stripPatterns) {
+      const m = norm.match(p);
+      if (m) {
+        // Remove matched prefix from original text (preserve original casing/script)
+        return text.slice(m[0].length).trim();
+      }
+    }
+    return text;
   }
 }
 
