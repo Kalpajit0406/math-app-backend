@@ -92,7 +92,7 @@ class GeminiExtractionService {
         }
       ],
       generationConfig: {
-        responseMimeType: 'application/json',
+        response_mime_type: 'application/json',
         temperature: 0.1
       }
     };
