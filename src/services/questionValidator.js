@@ -142,9 +142,13 @@ class QuestionValidator {
     }
 
     // ── 8. OCR confidence threshold ───────────────────────────────────────
-    if (confidence < 0.30) {
-      errors.push(`OCR confidence critically low (${(confidence * 100).toFixed(0)}%).`);
-      quarantineReasons.push('OCR_CONFIDENCE_CRITICAL');
+    // NOTE: Mathpix confidence scores are NOT reliable.
+    // Values like 0.002 are commonly returned for complex Bengali math pages
+    // that are perfectly extracted. We log a warning but NEVER quarantine
+    // based on confidence alone. Other structural checks (options, text quality)
+    // are far more reliable signals.
+    if (confidence < 0.10) {
+      warnings.push(`Very low OCR confidence (${(confidence * 100).toFixed(1)}%) — Mathpix may have struggled with this page.`);
     } else if (confidence < 0.60) {
       warnings.push(`Low OCR confidence (${(confidence * 100).toFixed(0)}%). Review recommended.`);
     }

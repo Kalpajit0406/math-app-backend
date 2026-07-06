@@ -79,7 +79,13 @@ class ConfidenceScorer {
     hasDuplicateOptions = false,
   } = {}) {
 
-    const ocr = ocrConfidence != null ? Math.max(0, Math.min(1, ocrConfidence)) : 0.80;
+    // ── OCR confidence — Mathpix-adjusted ─────────────────────────────────
+    // Mathpix sometimes returns near-zero confidence (0.001–0.01) even for
+    // pages it extracts perfectly well (4000+ chars). We treat any confidence
+    // below 0.10 as "unreliable" and substitute a neutral floor of 0.70
+    // so it doesn't destroy the composite score for otherwise good extractions.
+    const rawOcr = ocrConfidence != null ? Math.max(0, Math.min(1, ocrConfidence)) : 0.80;
+    const ocr = rawOcr < 0.10 ? 0.70 : rawOcr;
 
     // ── Question text confidence ───────────────────────────────────────────
     const qText = (questionText || '').trim();

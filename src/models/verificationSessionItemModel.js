@@ -12,6 +12,7 @@ const verificationSessionItemSchema = new mongoose.Schema({
     type: String,
     enum: [
       'mcq', 'line-based', 'inline-mcq', 'structured',
+      'inline-paren', 'mcq_incomplete',
       'fill_in_blank', 'fill',
       'column_matching', 'table',
       'descriptive', 'other'
