@@ -54,15 +54,27 @@ const HEADER_PATTERNS = [
   // Bengali keyword prefix: "প্রশ্ন ১২"  "প্র. ১২"
   /^(?:প্রশ্ন|প্র\.?)\s*\.?\s*(\d{1,3})[\s\.):\-]?/,
 
+  // ── REAL BOOK FORMAT (Math Saha / WB board books) ─────────────────────
+  // ›)1  ›) 1  >)1  >） 1  — arrow + paren prefix before number
+  // Mathpix OCRs the Bengali angular bracket ›) as one of: ›) >) »)
+  /^[›»>\u203a]\)?\s*(\d{1,3})(?:[\s\.):\-]|$)/,
+
+  // ›)১  Bengali digit version of the above
+  /^[›»>\u203a]\)?\s*([০-৯]{1,3})(?:[\s\.):\-]|$)/,
+
+  // )1  — just closing-paren + number (when the › is dropped by OCR)
+  /^\)\s*(\d{1,3})(?:[\s\.):\-]|$)/,
+
+  // ── STANDARD FORMATS ──────────────────────────────────────────────────
   // "No. 12"  "No.12"  — full word boundary so "Not" doesn't match
   /^No\.?\s+(\d{1,3})[\s\.):\-]/i,
 
   // (12)  text — parenthesised number
-  // Requires \d inside parens so (A) (B) (ক) don't match
+  // Requires \d inside parens so (A) (B) (a) (ক) don't match
   /^\((\d{1,3})\)\s+(?!\d)/,
 
   // 12. text   12) text   12: text
-  // Must be followed by space + non-digit (not a decimal like 3.14 or a ratio like 1/2)
+  // Must be followed by space + non-digit (not a decimal like 3.14 or ratio like 1/2)
   /^(\d{1,3})[\.)\:]\s+(?!\d)/,
 
   // 12. at end-of-line (question number alone on a line before the question body)
@@ -70,7 +82,7 @@ const HEADER_PATTERNS = [
 ];
 
 // Option label pattern — these lines must NEVER be treated as question headers
-// Matches: (A) (B) (ক) (খ) A. B. i. ii. etc.
+// Matches: (A) (B) (C) (D)  (a) (b) (c) (d)  (ক) (খ) (গ) (ঘ)  A. B.  i. ii.
 const OPTION_LINE_RE = /^[\(\[]?\s*(?:[A-Da-dকখগঘi]{1,2}|I{1,3}|IV)\s*[\)\]\.\:](?!\d)(?=\s|$|[^\d])/;
 
 /**
@@ -306,6 +318,8 @@ class QuestionSegmenter {
     const norm = bengaliToAscii(text.trimStart());
 
     const stripPatterns = [
+      // Real WB book: "›)N"  ">)N"  "»)N"  ")N"  (arrow + paren + number)
+      new RegExp(`^[›»>\\u203a]\\)?\\s*${number}[\\s\\.\\):\\-]*`),
       // "Question N"  "Q. N"  "Q N"
       new RegExp(`^(?:Question|Ques\\.?|Q\\.?\\s*)${number}[\\s\\.\\):\\-]+`, 'i'),
       // Bengali: "প্রশ্ন N"  "প্র. N"

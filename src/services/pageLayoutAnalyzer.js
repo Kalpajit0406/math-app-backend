@@ -170,8 +170,12 @@ function groupIntoParagraphs(sortedLines) {
     const gap = line.y - prev.bottom;
     const avgH = (prev.h + line.h) / 2;
     const isNewBlock = gap > avgH * 1.5 ||
+      // Standard: "1." "2)" "Q1." "প্রশ্ন 1"
       /^(?:Question|Q|No|প্রশ্ন|প্র)?\s*\d{1,3}[\.):]/.test(line.text) ||
-      /^[\(\[]?\s*[A-Da-dকখগঘ১২৩৪]\s*[\)\]\.:]/.test(line.text);
+      // Real WB book format: "›)1" ">)1" "»)1" or just ")1"
+      /^[›»>)\u203a]\)?\s*\d{1,3}[\s\.):\-]?/.test(line.text) ||
+      /^[›»>)\u203a]\)?\s*[০-৯]{1,3}[\s\.):\-]?/.test(line.text) ||
+      /^[\(\[]?\s*[A-Da-dকখগঘ১২৩৪]\s*[\)\]\.\:]/.test(line.text);
 
     if (isNewBlock) {
       paragraphs.push(cur);

@@ -36,6 +36,10 @@ const PUBLISHER_PATTERNS = [
   /\bPearson\b/gi,
   /\bKundu\s+Publication\b/gi,
   /\bHS\s+CORNER\b/gi,
+  // Math Saha (real book publisher seen in images)
+  /\bMath\s+Saha\b/gi,
+  /\bMath\s+Saha\s*\d+\s*\(Sem[^)]*\)/gi,
+  /\bSem[-–]\d+\b/gi,
 ];
 
 // Exam board references
@@ -72,11 +76,39 @@ const SECTION_HEADER_PATTERNS = [
   /^(?:Multiple\s*Choice\s*Questions|MCQ\s*Section|Objective\s*Type)\s*$/i,
   /^(?:Answer\s*Key|Answers?|উত্তরমালা)\s*$/i,
   /^(?:Fill\s+in\s+the\s+Blank|Column\s+Match(?:ing)?)\s*$/i,
+  // WB board Bengali section headers (seen in real images)
+  /^বহুবিকল্পভিত্তিক\s*প্রশ্নোত্তর\s*$/,
+  /^সঠিক\s*বিকল্প\s*নির্বাচন\s*করো\s*$/,
+  /^বহুবিকল্পধর্মী\s*প্রশ্ন\s*$/,
+  /^অতিসংক্ষিপ্ত\s*উত্তরভিত্তিক\s*প্রশ্ন\s*$/,
+  /^সংক্ষিপ্ত\s*উত্তরভিত্তিক\s*প্রশ্ন\s*$/,
+  /^রচনাধর্মী\s*প্রশ্ন\s*$/,
+  // Sub-section label: A, B, C as standalone lines
+  /^\(?[A-C]\)?\s*$/,
 ];
 
 // QR code references
 const QR_PATTERNS = [
   /(?:scan\s+(?:this\s+)?(?:qr\s+code?|code)|qr\s+code\s+for)/gi,
+  // Bengali QR text seen in real images
+  /(?:এই\s*Page[^।\n]*Detailed\s*Solution)/gi,
+  /(?:জন্য\s*QR\s*কোড\s*SCAN\s*করো)/gi,
+];
+
+// Footer / header lines unique to WB board books (full-line match → discard entirely)
+const FOOTER_LINE_PATTERNS = [
+  // "গুরুত্বপূর্ণ প্রশ্নাবলি '★' দ্বারা চিহ্নিত।" (Important questions marked by star)
+  /গুরুত্বপূর্ণ\s*প্রশ্নাবলি/,
+  // "Math Saha 11 (Sem-1)-(2)" footer
+  /Math\s+Saha\s*\d+/i,
+  // Page-level answer badge lines like "(a) ও (b) উভয়ই"
+  // NOT removed — these are valid option texts
+  // WBCHSE exam year citation line, e.g. "[WBCHSE (XI) '23]"
+  /^\[(?:WBCHSE|WBBSE|HS|Madhyamik)[^\]]*\]\s*$/i,
+  // Source school citation line (entire line is just school reference in brackets)
+  /^\[[A-Za-z\s,.']+(?:School|College|Institution|Vidyalaya|Institution|Girls|Boys|Academy)[^\]]*\]\s*$/i,
+  // Bengali institution reference (entire line)
+  /^\[[\u0980-\u09FF\s]+(?:বিদ্যালয়|মহাবিদ্যালয়|স্কুল|কলেজ)[^\]]*\]\s*$/,
 ];
 
 // Lines that are PURE metadata (entire line is discarded)
@@ -89,7 +121,8 @@ function isMetadataLine(line) {
     SCHOOL_PATTERNS.some(p => p.test(t)) ||
     DIFFICULTY_PATTERNS.some(p => p.test(t)) ||
     SECTION_HEADER_PATTERNS.some(p => p.test(t)) ||
-    QR_PATTERNS.some(p => p.test(t))
+    QR_PATTERNS.some(p => p.test(t)) ||
+    FOOTER_LINE_PATTERNS.some(p => p.test(t))
   );
 }
 
