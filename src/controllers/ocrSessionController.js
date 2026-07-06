@@ -62,28 +62,53 @@ async function processOCRAndUpdateSession(source, sessionId, userId) {
     }
 
     // OCRPipeline.runFromBuffer returns:
-    //   { parsedQuestions, pageType, sections, totalRejected, rawText, latex, confidence, ... }
-    const parsedQuestions = ocrResult.parsedQuestions || [];
+    //   { parsedQuestions, pageType, sections, totalRejected, rawText, latex, confidence,
+    //     manualReviewArtifacts, ... }
+    const allItems        = ocrResult.parsedQuestions || [];
     const pageType        = ocrResult.pageType || 'UNKNOWN_PAGE';
     const sections        = ocrResult.sections || [];
     const totalRejected   = ocrResult.totalRejected || 0;
     const processingTimeMs = Date.now() - startedAt;
+    const manualReviewArtifacts = ocrResult.manualReviewArtifacts || [];
+
+    // ── CRITICAL SAFETY GATE ────────────────────────────────────────────────
+    // Filter out any manual-review artifacts that may have accidentally ended up
+    // in parsedQuestions. These must NEVER be saved to the database.
+    const safeQuestions = allItems.filter(q => q.type !== 'MANUAL_REVIEW_ARTIFACT');
+    const leaked = allItems.length - safeQuestions.length;
+    if (leaked > 0) {
+      console.error(`[ocrSessionController] SAFETY: Blocked ${leaked} manual-review artifact(s) from session items!`);
+    }
+
+    if (manualReviewArtifacts.length > 0) {
+      console.warn(`[ocrSessionController] ${manualReviewArtifacts.length} page(s) routed to manual review for session ${sessionId}:`,
+        manualReviewArtifacts.map(a => a.failureReason).join('; ')
+      );
+    }
 
     await VerificationQueueManager.updateSession(sessionId, {
-      items: parsedQuestions,
+      items: safeQuestions,
       status: 'completed',
       progress: 100,
       pipelineMetadata: {
         pageType,
         sectionsFound: sections.length,
-        totalExtracted: parsedQuestions.length,
+        totalExtracted: safeQuestions.length,
         totalRejected,
+        manualReviewCount: manualReviewArtifacts.length,
         sourceUsed: source.type,
         processingTimeMs,
+        // Store artifact summaries for UI display (not the full raw text)
+        manualReviewSummaries: manualReviewArtifacts.map(a => ({
+          failureReason: a.failureReason,
+          pageType:      a.pageType,
+          textLength:    a.textLength,
+          ocrConfidence: a.ocrConfidence,
+        })),
       },
     });
 
-    console.log(`[ocrSessionController] Inline OCR done for session ${sessionId}: ${parsedQuestions.length} questions in ${processingTimeMs}ms`);
+    console.log(`[ocrSessionController] Inline OCR done for session ${sessionId}: ${safeQuestions.length} questions, ${manualReviewArtifacts.length} manual-review in ${processingTimeMs}ms`);
   } catch (err) {
     console.error(`[ocrSessionController] Inline OCR failed for session ${sessionId}:`, err.message);
     await VerificationQueueManager.updateSession(sessionId, {

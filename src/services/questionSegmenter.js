@@ -1,30 +1,34 @@
 /**
  * QuestionSegmenter — Phase 2: Question Boundary Detection
  *
- * DESIGN PRINCIPLES:
- *   - Never let question NUMBER become part of questionText.
- *   - Never merge content from two different questions.
- *   - Support Bengali and English numbering concurrently.
- *   - Preserve LaTeX blocks intact across line joins.
- *   - Handle OCR line-breaks mid-sentence gracefully.
- *   - Three-pass strategy: pre-split → header detection → paragraph assembly.
+ * ══════════════════════════════════════════════════════════════════════════
+ * REDESIGN GOALS (v3):
+ *   - Recognize Bengali numerals (১২৩...) AND English numerals (123...)
+ *   - Recognize all numbering styles: '1)', '1.', '(1)', '১)', '১.', '(১)'
+ *   - Support multi-column page layouts (left column then right column)
+ *   - Support indented question starts
+ *   - Provide verbose diagnostic logging
+ *   - NEVER return the entire page as one question
+ *   - NEVER let question number bleed into questionText
+ *   - Preserve LaTeX blocks intact
  *
- * SUPPORTS:
- *   Standard:  1.  1)  1:  Q1.  Q.1  No. 1  Question 1
- *   Bengali:   ১.  ১)  প্রশ্ন ১  প্র. ১
- *   Mixed:     1–20 as ASCII (Bengali digits normalised before matching)
+ * SUPPORTED NUMBERING FORMATS:
+ *   English:  1.  1)  1:  (1)  Q1.  Q.1  No.1  Question 1
+ *   Bengali:  ১.  ১)  (১)  প্রশ্ন ১  প্র.১
+ *   Mixed:    OCR may produce Bengali digits as ASCII — both are matched
+ * ══════════════════════════════════════════════════════════════════════════
  */
 
 'use strict';
 
-// ─── BENGALI DIGIT NORMALIZER ─────────────────────────────────────────────────
+// ─── BENGALI ↔ ASCII DIGIT CONVERSION ─────────────────────────────────────────
 function bengaliToAscii(str) {
   if (!str) return str;
   return str.replace(/[০-৯]/g, ch => String(ch.codePointAt(0) - 0x09E6));
 }
 
 // ─── MATH RANGE FINDER ───────────────────────────────────────────────────────
-// Finds all LaTeX inline/display blocks so we never split inside them.
+// Returns ranges of LaTeX math spans so we never split inside them.
 function getMathRanges(text) {
   const ranges = [];
   if (!text) return ranges;
@@ -41,52 +45,79 @@ function isInsideMath(pos, ranges) {
 }
 
 // ─── QUESTION HEADER PATTERNS ─────────────────────────────────────────────────
-// Order matters: most specific first.
+// Each pattern must capture group 1 = the question number.
+// Ordered most-specific first to avoid premature matching.
 const HEADER_PATTERNS = [
-  // "Question 12:"  "Q. 12 -"  "Q12."
+  // "Question 12:"  "Q. 12"  "Q12."
   /^(?:Question|Ques\.?|Q\.?\s*)(\d{1,3})[\s\.):\-]/i,
-  // Bengali prefix: "প্রশ্ন 12"  "প্র. 12"
+
+  // Bengali keyword prefix: "প্রশ্ন ১২"  "প্র. ১২"
   /^(?:প্রশ্ন|প্র\.?)\s*\.?\s*(\d{1,3})[\s\.):\-]?/,
-  // "No. 12"
-  /^No\.?\s*(\d{1,3})[\s\.):\-]/i,
-  // "12. text"  "12) text"  "12: text"  (number followed by delimiter then non-digit)
-  /^(\d{1,3})[\.):\-]\s+(?!\d)/,
+
+  // "No. 12"  "No.12"  — full word boundary so "Not" doesn't match
+  /^No\.?\s+(\d{1,3})[\s\.):\-]/i,
+
+  // (12)  text — parenthesised number
+  // Requires \d inside parens so (A) (B) (ক) don't match
+  /^\((\d{1,3})\)\s+(?!\d)/,
+
+  // 12. text   12) text   12: text
+  // Must be followed by space + non-digit (not a decimal like 3.14 or a ratio like 1/2)
+  /^(\d{1,3})[\.)\:]\s+(?!\d)/,
+
+  // 12. at end-of-line (question number alone on a line before the question body)
+  /^(\d{1,3})[\.):]?\s*$/,
 ];
 
-// Option label pattern — lines starting this way are NEVER question headers
-const OPTION_LINE_RE = /^[\(\[]?\s*(?:[A-Da-dকখগঘ১-৪i]{1,4}|I{1,4}|IV|vi{0,2})\s*[\)\]\.:](?!\d)/;
+// Option label pattern — these lines must NEVER be treated as question headers
+// Matches: (A) (B) (ক) (খ) A. B. i. ii. etc.
+const OPTION_LINE_RE = /^[\(\[]?\s*(?:[A-Da-dকখগঘi]{1,2}|I{1,3}|IV)\s*[\)\]\.\:](?!\d)(?=\s|$|[^\d])/;
 
 /**
- * Try to detect a question header at the start of `line`.
- * Returns { number: string } or null.
- * `currentNumber` is the last known question number (for successor validation).
+ * Try to detect a question header at the start of a line.
+ * Returns { number: string, style: string } or null.
+ * `currentNumber` prevents accepting numbers that jump backwards.
  */
 function detectHeader(line, currentNumber) {
   const norm = bengaliToAscii(line.trim());
+  if (!norm) return null;
 
   // Never treat option lines as headers
   if (OPTION_LINE_RE.test(norm)) return null;
 
+  // Must start with a digit (after bengaliToAscii), 'Q', 'N', '(', or Bengali keyword
+  const startsLike = /^[\d\(QNqnপপ্র]/.test(norm);
+  if (!startsLike) return null;
+
   for (const pattern of HEADER_PATTERNS) {
     const m = norm.match(pattern);
-    if (m) {
-      const num = parseInt(m[1], 10);
-      // Sanity: question numbers are 1–999
-      if (num < 1 || num > 999) continue;
-      // If we have a current number and this is neither successor nor a later number, skip
-      if (currentNumber !== null) {
-        if (num < currentNumber && num !== 1) continue;  // going backwards (not a page restart)
-      }
-      return { number: String(num) };
+    if (!m) continue;
+
+    const num = parseInt(m[1], 10);
+    if (num < 1 || num > 500) continue;  // sanity range
+
+    // Validate continuity: reject if the number jumps backward by more than 1
+    // (unless it's the very first question, number 1, or the page starts fresh)
+    if (currentNumber !== null) {
+      if (num < currentNumber && num !== 1) continue;
+      // Allow same number (OCR duplication) or any forward jump
     }
+
+    return { number: String(num), style: pattern.toString().slice(0, 30) };
   }
   return null;
 }
 
 // ─── PRE-SPLIT LOOKAHEAD PATTERN ──────────────────────────────────────────────
-// Splits text at positions where a new question header starts,
-// even mid-line (e.g. after a closing '$' in Mathpix output).
-const LOOKAHEAD_SPLIT = /(?:\n|[.?!]\s+|(?<=\$))(?=(?:(?:Question|Ques\.?|Q\.?\s*|প্রশ্ন\s*|প্র\.?\s*|No\.?\s*)\d{1,3}[\s\.):\-]|\d{1,3}[\.):\-]\s+)(?!\d))/gi;
+// Splits text at positions where a new question header starts.
+// We ONLY split at newlines or after math block end ($).
+// We do NOT split at [.?!]\s+ because that breaks "No. 3 ..." style headers.
+const LOOKAHEAD_SPLIT = /(?:\n|(?<=\$))(?=(?:(?:Question|Ques\.?|Q\.?\s*|প্রশ্ন\s*|প্র\.?\s*|No\.?\s+)?\(?(?:\d{1,3})\)?[\.):\s](?!\d)))/gi;
+
+// ─── VERBOSE LOGGER ───────────────────────────────────────────────────────────
+function log(tag, msg) {
+  console.log(`[QuestionSegmenter:${tag}] ${msg}`);
+}
 
 // ─── MAIN CLASS ───────────────────────────────────────────────────────────────
 
@@ -95,27 +126,39 @@ class QuestionSegmenter {
   /**
    * Segment pre-cleaned text into individual question blocks.
    *
-   * @param {string} text - Clean, noise-filtered text (output of PageLayoutAnalyzer)
+   * @param {string} text  - Clean, noise-filtered text (output of PageLayoutAnalyzer)
+   * @param {object} opts
+   * @param {string} opts.columnLayout  - '1-col' | '2-col' | 'multi-col'
+   * @param {boolean} opts.verbose      - Enable diagnostic logging
    * @returns {Segment[]}  Each: { text, number, rawHeader, startIndex, endIndex }
    */
-  static segment(text) {
+  static segment(text, opts = {}) {
+    const { columnLayout = '1-col', verbose = false } = opts;
+
     if (!text || !text.trim()) return [];
 
-    // Normalise Bengali digits so patterns match consistently
+    if (verbose) log('ENTRY', `Input length=${text.length}, columnLayout=${columnLayout}`);
+
+    // Normalize Bengali digits so all patterns work uniformly
     const normalized = bengaliToAscii(text);
 
-    // ── PASS 1: Pre-split at question boundaries ───────────────────────────
-    const rawBlocks = normalized.split(LOOKAHEAD_SPLIT).filter(b => b && b.trim());
+    // ── PASS 1: Pre-split at likely question boundaries ────────────────────
+    const rawBlocks = normalized
+      .split(LOOKAHEAD_SPLIT)
+      .filter(b => b && b.trim());
 
-    const segments = [];
-    let currentSeg = null;
-    let charCursor  = 0;
-    let lastQNum    = null;
+    if (verbose) log('PASS1', `Pre-split produced ${rawBlocks.length} raw block(s)`);
+
+    const segments   = [];
+    let currentSeg   = null;
+    let charCursor   = 0;
+    let lastQNum     = null;
+    let headerCount  = 0;
 
     const flushSegment = (endIdx) => {
       if (!currentSeg) return;
       const segText = currentSeg.lines.join('\n').trim();
-      if (segText.length > 3) {  // discard tiny fragments
+      if (segText.length > 3) {
         segments.push({
           text:       segText,
           number:     currentSeg.number,
@@ -123,11 +166,12 @@ class QuestionSegmenter {
           startIndex: currentSeg.startIndex,
           endIndex:   endIdx,
         });
+        if (verbose) log('FLUSH', `Seg #${currentSeg.number ?? '?'}, chars=${segText.length}`);
       }
       currentSeg = null;
     };
 
-    // ── PASS 2: Line-by-line header detection per block ────────────────────
+    // ── PASS 2: Line-by-line header detection ─────────────────────────────
     for (const block of rawBlocks) {
       if (!block.trim()) { charCursor += block.length + 1; continue; }
 
@@ -139,7 +183,7 @@ class QuestionSegmenter {
         const lineStart = charCursor + blockCursor;
         blockCursor += line.length + 1;
 
-        // Never split inside a LaTeX block
+        // Never split inside a LaTeX math block
         if (isInsideMath(lineStart, mathRanges)) {
           if (currentSeg) currentSeg.lines.push(line);
           continue;
@@ -148,23 +192,17 @@ class QuestionSegmenter {
         const header = detectHeader(line, lastQNum !== null ? parseInt(lastQNum, 10) : null);
 
         if (header) {
-          // A new question begins — flush the previous
-          const hasContent = currentSeg &&
-            currentSeg.lines.some(l => l.trim().length > 0);
-          const hasOptions = currentSeg &&
-            currentSeg.lines.some(l => OPTION_LINE_RE.test(l.trim()));
-
-          if (!currentSeg || hasContent || hasOptions) {
-            flushSegment(lineStart - 1);
-            currentSeg = {
-              number:     header.number,
-              rawHeader:  line.trim(),
-              startIndex: lineStart,
-              lines:      [line],
-            };
-            lastQNum = header.number;
-            continue;
-          }
+          headerCount++;
+          flushSegment(lineStart - 1);
+          currentSeg = {
+            number:     header.number,
+            rawHeader:  line.trim(),
+            startIndex: lineStart,
+            lines:      [line],
+          };
+          lastQNum = header.number;
+          if (verbose) log('HEADER', `Detected Q#${header.number} at char ${lineStart} (${header.style})`);
+          continue;
         }
 
         // Continuation line — append to current segment
@@ -184,12 +222,57 @@ class QuestionSegmenter {
     }
 
     // Flush last segment
-    if (currentSeg) {
-      flushSegment(text.length);
+    if (currentSeg) flushSegment(text.length);
+
+    if (verbose) {
+      log('PASS2', `Headers detected: ${headerCount}, Segments after PASS2: ${segments.length}`);
     }
 
-    // Fallback: return entire text as one segment if nothing was parsed
-    if (segments.length === 0) {
+    // ── PASS 3: Fallback — attempt alternative splitting by empty-line groups
+    if (segments.length <= 1 && text.trim().length > 400) {
+      if (verbose) log('PASS3', 'Fewer than 2 segments detected — attempting paragraph split fallback');
+      const fallback = this._paragraphFallback(text, verbose);
+      if (fallback.length > 1) {
+        if (verbose) log('PASS3', `Paragraph fallback produced ${fallback.length} segments`);
+        return fallback;
+      }
+    }
+
+    // ── Final: strip question number prefix from text body ─────────────────
+    const stripped = segments.map(seg => {
+      const cleaned = this._stripQuestionNumber(seg.text, seg.number);
+      return { ...seg, text: cleaned };
+    });
+
+    if (verbose) {
+      log('RESULT', `${stripped.length} segment(s) produced`);
+      stripped.forEach((s, i) =>
+        log('SEG', `  [${i}] Q#${s.number ?? 'null'}, chars=${s.text.length}, preview="${s.text.slice(0, 60).replace(/\n/g,' ')}..."`)
+      );
+    }
+
+    return stripped;
+  }
+
+  // ─── PARAGRAPH-BASED FALLBACK SPLITTER ─────────────────────────────────────
+  // Used when the primary header detector finds 0–1 questions on a page that
+  // clearly has multiple paragraphs. Tries to split by double-newline or
+  // MCQ option boundaries.
+  static _paragraphFallback(text, verbose = false) {
+    const paragraphs = text
+      .split(/\n{2,}/)
+      .map(p => p.trim())
+      .filter(p => p.length > 20);
+
+    if (verbose) log('PARA_FALLBACK', `${paragraphs.length} paragraph(s) from double-newline split`);
+
+    // If paragraphs contain option patterns, use them as question boundaries
+    const hasOptions = paragraphs.some(p =>
+      /[\(\[]?\s*[ABCDabcd]\s*[\)\]\.]/.test(p)
+    );
+
+    if (!hasOptions || paragraphs.length < 2) {
+      // Return whole text as single unnumbered segment (with number=null)
       return [{
         text:       text.trim(),
         number:     null,
@@ -199,36 +282,76 @@ class QuestionSegmenter {
       }];
     }
 
-    // ── PASS 3: Strip question number from question text ──────────────────
-    // The number is already stored in seg.number, remove it from the text body.
-    return segments.map(seg => {
-      const cleaned = this._stripQuestionNumber(seg.text, seg.number);
-      return { ...seg, text: cleaned };
+    // Each paragraph with options is treated as its own question
+    let offset = 0;
+    return paragraphs.map((p, i) => {
+      const start = text.indexOf(p, offset);
+      const end   = start + p.length;
+      offset = end;
+      return {
+        text:       p,
+        number:     String(i + 1),
+        rawHeader:  p.split('\n')[0].slice(0, 60),
+        startIndex: start,
+        endIndex:   end,
+      };
     });
   }
 
-  /**
-   * Remove the leading question number/header from the text body.
-   * The number is stored separately in seg.number.
-   */
+  // ─── STRIP QUESTION NUMBER PREFIX ───────────────────────────────────────────
+  // The number is stored in seg.number — remove it from the text body.
   static _stripQuestionNumber(text, number) {
     if (!text || !number) return text;
-    // Match the same header patterns at the very start
+
     const norm = bengaliToAscii(text.trimStart());
+
     const stripPatterns = [
+      // "Question N"  "Q. N"  "Q N"
       new RegExp(`^(?:Question|Ques\\.?|Q\\.?\\s*)${number}[\\s\\.\\):\\-]+`, 'i'),
+      // Bengali: "প্রশ্ন N"  "প্র. N"
       new RegExp(`^(?:প্রশ্ন|প্র\\.?)\\s*\\.?\\s*${number}[\\s\\.\\):\\-]*`, ''),
+      // "No. N"
       new RegExp(`^No\\.?\\s*${number}[\\s\\.\\):\\-]+`, 'i'),
-      new RegExp(`^${number}[\\.):\\-]\\s+`),
+      // "(N) "
+      new RegExp(`^\\(${number}\\)\\s+`),
+      // "N. "  "N) "  "N: "
+      new RegExp(`^${number}[\\.\\)\\:]\\s+`),
+      // "N." alone at start (question number on its own line)
+      new RegExp(`^${number}[\\.):]?\\s*\\n`),
     ];
+
     for (const p of stripPatterns) {
       const m = norm.match(p);
       if (m) {
-        // Remove matched prefix from original text (preserve original casing/script)
         return text.slice(m[0].length).trim();
       }
     }
-    return text;
+
+    return text.trim();
+  }
+
+  /**
+   * Diagnostic: count how many question boundaries can be detected in text.
+   * Useful for pre-validation before running the full segment().
+   */
+  static countDetectableBoundaries(text) {
+    if (!text) return 0;
+    const norm = bengaliToAscii(text);
+    const lines = norm.split('\n');
+    let count = 0;
+    let lastNum = null;
+    const boundaries = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const header = detectHeader(lines[i], lastNum);
+      if (header) {
+        count++;
+        lastNum = parseInt(header.number, 10);
+        boundaries.push({ lineIndex: i, number: header.number, line: lines[i].slice(0, 80) });
+      }
+    }
+
+    return { count, boundaries };
   }
 }
 
