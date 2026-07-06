@@ -76,13 +76,29 @@ const SECTION_HEADER_PATTERNS = [
   /^(?:Multiple\s*Choice\s*Questions|MCQ\s*Section|Objective\s*Type)\s*$/i,
   /^(?:Answer\s*Key|Answers?|উত্তরমালা)\s*$/i,
   /^(?:Fill\s+in\s+the\s+Blank|Column\s+Match(?:ing)?)\s*$/i,
-  // WB board Bengali section headers (seen in real images)
+
+  // ── WB board Bengali section headers ─────────────────────────────────────
+  // Pure Bengali (exact match on full line)
   /^বহুবিকল্পভিত্তিক\s*প্রশ্নোত্তর\s*$/,
   /^সঠিক\s*বিকল্প\s*নির্বাচন\s*করো\s*$/,
   /^বহুবিকল্পধর্মী\s*প্রশ্ন\s*$/,
   /^অতিসংক্ষিপ্ত\s*উত্তরভিত্তিক\s*প্রশ্ন\s*$/,
   /^সংক্ষিপ্ত\s*উত্তরভিত্তিক\s*প্রশ্ন\s*$/,
   /^রচনাধর্মী\s*প্রশ্ন\s*$/,
+
+  // Fuzzy: Mathpix often OCRs Bengali section headers with Devanagari mixed in.
+  // Match on partial Bengali keywords that are unique to section headers.
+  // "সঠিক বিকল্প" / "সঠিক বিকল্ব" / "সठिक विकल्ब" style mixed
+  /সঠ[িiী]\s*[কk]\s*বি\s*কল/,
+  /সঠ.{0,4}বিক.{0,4}নির\u09CD/,
+  // "বহুবিকল্প" partial — only appears in section headers
+  /বহুবিকল্প/,
+  // "নির্বাচন করো" — unique to section header
+  /নির্বাচন\s*করো/,
+  // Devanagari script mixed with Bengali — a dead giveaway of OCR section header confusion
+  // (real question text would be consistently Bengali or English, not mixed Devanagari)
+  /[\u0900-\u097F]{3,}.*[\u0980-\u09FF]{3,}|[\u0980-\u09FF]{3,}.*[\u0900-\u097F]{3,}/,
+
   // Sub-section label: A, B, C as standalone lines
   /^\(?[A-C]\)?\s*$/,
 ];

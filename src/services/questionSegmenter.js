@@ -86,6 +86,19 @@ const HEADER_PATTERNS = [
 const OPTION_LINE_RE = /^[\(\[]?\s*(?:[A-Da-dকখগঘi]{1,2}|I{1,3}|IV)\s*[\)\]\.\:](?!\d)(?=\s|$|[^\d])/;
 
 /**
+ * Detect if a number looks like an OCR misread of a Roman numeral.
+ * II → 11, III → 111, IIII → 1111, etc.
+ * These appear when OCR sees thin vertical strokes as "1".
+ */
+function isRomanNumeralFalsePositive(num) {
+  // All-ones numbers: 1, 11, 111, 1111 look like I, II, III, IIII
+  // But 1 is always valid (could be question #1)
+  const s = String(num);
+  if (s.length > 1 && /^1+$/.test(s)) return true;
+  return false;
+}
+
+/**
  * Try to detect a question header at the start of a line.
  * Returns { number: string, style: string } or null.
  * `currentNumber` prevents accepting numbers that jump backwards.
@@ -97,8 +110,8 @@ function detectHeader(line, currentNumber) {
   // Never treat option lines as headers
   if (OPTION_LINE_RE.test(norm)) return null;
 
-  // Must start with a digit (after bengaliToAscii), 'Q', 'N', '(', or Bengali keyword
-  const startsLike = /^[\d\(QNqnপপ্র]/.test(norm);
+  // Must start with a digit, 'Q', 'N', '(', Bengali keyword, or ›/>/» arrow
+  const startsLike = /^[\d\(QNqn›»>পপ্র]/.test(norm);
   if (!startsLike) return null;
 
   for (const pattern of HEADER_PATTERNS) {
@@ -108,11 +121,21 @@ function detectHeader(line, currentNumber) {
     const num = parseInt(m[1], 10);
     if (num < 1 || num > 500) continue;  // sanity range
 
-    // Validate continuity: reject if the number jumps backward by more than 1
-    // (unless it's the very first question, number 1, or the page starts fresh)
+    // Reject Roman numeral false positives (11=II, 111=III, etc.)
+    if (isRomanNumeralFalsePositive(num)) {
+      console.log(`[QuestionSegmenter:ROMAN_FILTER] Rejected num=${num} — looks like OCR misread of Roman numeral`);
+      continue;
+    }
+
+    // Validate continuity
     if (currentNumber !== null) {
+      // Reject backward jumps (unless wrapping back to 1)
       if (num < currentNumber && num !== 1) continue;
-      // Allow same number (OCR duplication) or any forward jump
+      // Reject impossible forward jumps (>30 at once — likely OCR garbage)
+      if (num > currentNumber + 30) {
+        console.log(`[QuestionSegmenter:JUMP_FILTER] Rejected num=${num} — impossible jump from ${currentNumber}`);
+        continue;
+      }
     }
 
     return { number: String(num), style: pattern.toString().slice(0, 30) };

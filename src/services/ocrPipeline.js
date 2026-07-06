@@ -240,9 +240,12 @@ function structuralValidationGate(parsedBlock, ocrConf) {
     reasons.push(`EMPTY_QUESTION: question text is "${qText.slice(0, 30)}"`);
   }
 
-  // 2. Question must not exceed page-length (single-segment full-page detection)
-  if (qText.length > MCQ_MAX_TEXT_FOR_SINGLE_QUESTION * 2) {
-    reasons.push(`QUESTION_TOO_LONG: ${qText.length} chars — likely entire page text in one segment`);
+  // 2. Question must not exceed typical single-question length
+  // A single MCQ question body (Bengali/English math) should be < 800 chars.
+  // If it's longer, it's likely the entire page or multiple questions merged.
+  const MAX_SINGLE_QUESTION_CHARS = 800;
+  if (qText.length > MAX_SINGLE_QUESTION_CHARS) {
+    reasons.push(`QUESTION_TOO_LONG: ${qText.length} chars > ${MAX_SINGLE_QUESTION_CHARS} — likely multi-question merge or full page segment`);
   }
 
   // 3. MCQ: must have exactly 4 options, each non-empty
@@ -264,9 +267,15 @@ function structuralValidationGate(parsedBlock, ocrConf) {
     }
   }
 
-  // 4. OCR confidence
-  if (ocrConf < 0.30) {
-    reasons.push(`LOW_CONFIDENCE: OCR confidence ${(ocrConf * 100).toFixed(0)}% < 30% threshold`);
+  // 4. OCR confidence — NOTE: Mathpix confidence scores are unreliable.
+  // We do NOT hard-gate on confidence here; it's used for routing (PREVIEW vs ACCEPTED)
+  // but should never silently drop all questions from a page.
+  // Very low confidence is logged as a warning only.
+  if (ocrConf < 0.10) {
+    // Only reject if confidence is near-zero AND question is very short (likely garbage)
+    if (qText.length < 15) {
+      reasons.push(`LIKELY_GARBAGE: confidence=${(ocrConf * 100).toFixed(1)}% and text too short`);
+    }
   }
 
   return { pass: reasons.length === 0, reasons };
