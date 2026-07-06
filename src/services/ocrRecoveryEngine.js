@@ -38,8 +38,13 @@ class OCRRecoveryEngine {
     // No usable content at all → recovery needed
     if (!hasText && !hasLatex) return true;
 
-    // Critically low confidence (< 15%) → recovery needed
-    if (ocrResult.confidence !== null && ocrResult.confidence < 0.15) return true;
+    const textLen = ocrResult.rawText ? ocrResult.rawText.length : (ocrResult.latex ? ocrResult.latex.length : 0);
+
+    // Critically low confidence (< 15%) AND very little text → recovery needed
+    // (Mathpix sometimes returns very low confidence scores for long complex documents that are actually fine)
+    if (ocrResult.confidence !== null && ocrResult.confidence < 0.15 && textLen < 50) {
+        return true;
+    }
 
     return false;
   }
