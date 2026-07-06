@@ -21,6 +21,7 @@ const analyticsRoutes = require('./routes/analyticsRoutes');
 const healthRoutes = require('./routes/healthRoutes');
 const selfAssessmentRoutes = require('./routes/selfAssessmentRoutes');
 const importRoutes = require('./routes/importRoutes');
+const geminiImportRoutes = require('./routes/geminiImportRoutes');
 const errorHandler = require('./middleware/errorHandler');
 
 // Startup validation for OCR Provider Adapter
@@ -135,6 +136,7 @@ app.use('/api/v1/pdf', pdfRoutes);
 app.use('/api/v1/self-assessment', selfAssessmentRoutes);
 app.use('/api/v1/import', importRoutes);
 app.use('/api/v1/imports', importRoutes);
+app.use('/api/v1/admin/gemini', geminiImportRoutes);
 app.use('/api/v1/scan', ocrRoutes); // Backward compatibility for legacy frontend constants
 
 // Health probe for service discovery
