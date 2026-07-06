@@ -86,21 +86,12 @@ const SECTION_HEADER_PATTERNS = [
   /^সংক্ষিপ্ত\s*উত্তরভিত্তিক\s*প্রশ্ন\s*$/,
   /^রচনাধর্মী\s*প্রশ্ন\s*$/,
 
-  // Fuzzy: Mathpix often OCRs Bengali section headers with Devanagari mixed in.
-  // Match on partial Bengali keywords that are unique to section headers.
-  // "সঠিক বিকল্প" / "সঠিক বিকল্ব" / "সठिक विकल्ब" style mixed
-  /সঠ[িiী]\s*[কk]\s*বি\s*কল/,
-  /সঠ.{0,4}বিক.{0,4}নির\u09CD/,
-  // "বহুবিকল্প" partial — only appears in section headers
-  /বহুবিকল্প/,
-  // "নির্বাচন করো" — unique to section header
-  /নির্বাচন\s*করো/,
-  // Devanagari script mixed with Bengali — a dead giveaway of OCR section header confusion
-  // (real question text would be consistently Bengali or English, not mixed Devanagari)
-  /[\u0900-\u097F]{3,}.*[\u0980-\u09FF]{3,}|[\u0980-\u09FF]{3,}.*[\u0900-\u097F]{3,}/,
-
-  // Sub-section label: A, B, C as standalone lines
-  /^\(?[A-C]\)?\s*$/,
+  // Fuzzy: Mathpix sometimes OCRs section headers with mixed scripts.
+  // Only match lines that are SHORT (< 60 chars) and contain known section header keywords.
+  // We must NOT match long lines — those are question bodies.
+  /^সঠ.{0,10}বিক.{0,10}নির.{0,4}$/,
+  /^বহুবিকল.{0,20}$/,
+  /^নির্বাচনসকল.{0,10}করো.{0,5}$/,
 ];
 
 // QR code references

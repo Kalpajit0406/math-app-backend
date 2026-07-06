@@ -102,16 +102,33 @@ function isRomanNumeralFalsePositive(num) {
  * Try to detect a question header at the start of a line.
  * Returns { number: string, style: string } or null.
  * `currentNumber` prevents accepting numbers that jump backwards.
+ *
+ * IMPORTANT: Mathpix sometimes prepends Devanagari/garbage chars before
+ * the actual question number. We scan the first 25 chars for a number.
  */
 function detectHeader(line, currentNumber) {
-  const norm = bengaliToAscii(line.trim());
+  let norm = bengaliToAscii(line.trim());
   if (!norm) return null;
 
   // Never treat option lines as headers
   if (OPTION_LINE_RE.test(norm)) return null;
 
+  // Strip leading non-Bengali, non-English, non-digit garbage (e.g. Devanagari)
+  // This handles OCR prepending like "अठिक 1. question..." → "1. question..."
+  // Only strip if there's a digit within the first 25 chars
+  const earlyDigit = norm.match(/^.{0,24}?(\d{1,3}[\.):\s])/);
+  if (earlyDigit && earlyDigit.index > 0) {
+    // Check if the prefix is all non-useful characters (Devanagari, symbols, spaces)
+    const prefix = norm.slice(0, earlyDigit.index);
+    const hasUsefulBengali = /[\u0980-\u09FF]{3,}/.test(prefix);
+    if (!hasUsefulBengali) {
+      // Strip the garbage prefix — the real line starts at the digit
+      norm = norm.slice(earlyDigit.index);
+    }
+  }
+
   // Must start with a digit, 'Q', 'N', '(', Bengali keyword, or ›/>/» arrow
-  const startsLike = /^[\d\(QNqn›»>পপ্র]/.test(norm);
+  const startsLike = /^[\d\(QNqn›»>\u203aপপ্র]/.test(norm);
   if (!startsLike) return null;
 
   for (const pattern of HEADER_PATTERNS) {
