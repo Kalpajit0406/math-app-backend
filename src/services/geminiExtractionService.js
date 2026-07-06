@@ -72,7 +72,8 @@ class GeminiExtractionService {
     }
 
     const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const apiVersion = process.env.GEMINI_API_VERSION || 'v1';
+    const apiUrl = `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:generateContent?key=${apiKey}`;
 
     const requestBody = {
       contents: [
