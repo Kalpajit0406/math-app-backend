@@ -42,9 +42,9 @@ class MathpixService {
       console.log(`[MathpixService] Processing buffer: ${filename} (${(fileLength / 1024).toFixed(1)} KB, ${mimetype})`);
     }
 
-    // Only BASIC compatible options — avoids 400 from unsupported data_options
+    // Request json format too — gives us line bounding boxes for column detection
     const optionsJson = JSON.stringify({
-      formats: ['text', 'html'],
+      formats: ['text', 'html', 'json'],
       math_inline_delimiters: ['$', '$'],
       rm_spaces: true,
     });
@@ -127,8 +127,11 @@ class MathpixService {
         const rawText = result.text || strippedHtml;
         const latex = result.latex_styled || result.text || '';
 
-        console.log(`[MathpixService] Success — rawText: ${rawText.length} chars, latex: ${latex.length} chars`);
-        return { rawText, latex, confidence: result.confidence ?? null };
+        // Pass full json result through for geometry-aware column detection
+        const jsonLines = result.json?.pages?.[0]?.lines || result.lines || null;
+
+        console.log(`[MathpixService] Success — rawText: ${rawText.length} chars, latex: ${latex.length} chars, jsonLines: ${jsonLines?.length ?? 0}`);
+        return { rawText, latex, confidence: result.confidence ?? null, jsonLines, fullResult: result };
 
       } catch (err) {
         if (err.name === 'AbortError') {

@@ -318,22 +318,99 @@ class PageLayoutAnalyzer {
       .filter(l => DIAGRAM_LABEL_RE.test(l.trim()))
       .map(l => ({ label: l.trim(), boundingBox: null, lineId: null }));
 
-    const cleanText = cleanLines.join('\n');
+    // ── Text-based 2-column heuristic ────────────────────────────────────────
+    // When Mathpix OCRs a 2-column page without geometry data, it reads across
+    // columns interleaving left & right lines. This shows up as question numbers
+    // that jump forward by a large amount then come back (e.g. 1,2,10,3,11,4,12...).
+    // We detect this and re-split into [left-col lines] + [right-col lines].
+    const columnLayout = this._detectTextColumnLayout(cleanLines);
+    let cleanText;
+    if (columnLayout === '2-col') {
+      cleanText = this._reconstructTwoColumnText(cleanLines);
+    } else {
+      cleanText = cleanLines.join('\n');
+    }
 
     return {
       cleanText,
-      columnLayout: '1-col',
-      columnCount: 1,
+      columnLayout,
+      columnCount: columnLayout === '2-col' ? 2 : 1,
       diagramRegions,
       strippedLines,
       layoutMetadata: {
         strategy:       'text-only',
+        columnLayout,
         totalLines:     lines.length,
         cleanLineCount: cleanLines.length,
         strippedCount:  strippedLines.length,
         hasDiagrams:    diagramRegions.length > 0,
       },
     };
+  }
+
+  /**
+   * Detect if a text-only page is likely 2-column by analysing
+   * question number sequences. 2-column OCR produces large forward jumps
+   * in question numbers (left col Q1-9 interleaved with right col Q10-20).
+   */
+  static _detectTextColumnLayout(lines) {
+    const Q_NUM_RE = /^(?:[›»>)\u203a]\)?|(?:Question|Q\.?)\s*)?\s*(\d{1,3})[.):\s]/;
+    const nums = [];
+    for (const line of lines) {
+      const m = line.trim().match(Q_NUM_RE);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (n >= 1 && n <= 100) nums.push(n);
+      }
+    }
+    if (nums.length < 4) return '1-col';
+
+    // Count how many times the number jumps forward by more than 5
+    let bigJumps = 0;
+    for (let i = 1; i < nums.length; i++) {
+      if (nums[i] - nums[i - 1] > 5) bigJumps++;
+    }
+    // If >=2 big jumps among first 10 numbers → likely 2-column
+    if (bigJumps >= 2) {
+      console.log(`[PageLayoutAnalyzer] Text-heuristic: ${bigJumps} large number jumps → 2-col`);
+      return '2-col';
+    }
+    return '1-col';
+  }
+
+  /**
+   * Reconstruct reading order for a 2-column text page.
+   * Splits lines at the point where the right column starts
+   * (detected as a large forward jump in question numbering)
+   * and concatenates left-col block + right-col block.
+   */
+  static _reconstructTwoColumnText(lines) {
+    const Q_NUM_RE = /^(?:[›»>)\u203a]\)?|(?:Question|Q\.?)\s*)?\s*(\d{1,3})[.):\s]/;
+
+    // Find the line index where the right column starts (first big jump)
+    let splitIdx = -1;
+    let lastNum = null;
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].trim().match(Q_NUM_RE);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (lastNum !== null && n - lastNum > 5) {
+          splitIdx = i;
+          break;
+        }
+        lastNum = n;
+      }
+    }
+
+    if (splitIdx === -1) return lines.join('\n');
+
+    // Left column: lines before the jump
+    // Right column: lines after the jump
+    // We merge them so left col questions come first, then right col
+    const leftLines  = lines.slice(0, splitIdx);
+    const rightLines = lines.slice(splitIdx);
+    console.log(`[PageLayoutAnalyzer] 2-col split: left=${leftLines.length} lines, right=${rightLines.length} lines`);
+    return leftLines.join('\n') + '\n\n' + rightLines.join('\n');
   }
 }
 
