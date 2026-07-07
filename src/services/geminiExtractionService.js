@@ -84,7 +84,7 @@ class GeminiExtractionService {
             },
             {
               inlineData: {
-                mimeType: mimetype || 'image/jpeg',
+                mimeType: (mimetype === 'application/octet-stream' || !mimetype) ? 'image/jpeg' : mimetype,
                 data: buffer.toString('base64')
               }
             }

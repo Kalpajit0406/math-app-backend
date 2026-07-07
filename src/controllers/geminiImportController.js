@@ -27,9 +27,25 @@ const createImport = async (req, res) => {
     }
 
     const { classNo = '12', chapter = 'General' } = req.body;
-    const fileMime = req.file.mimetype;
+    let fileMime = req.file.mimetype;
     const originalFilename = req.file.originalname;
     const size = req.file.size;
+
+    // Sanitize fileMime if it is generic application/octet-stream
+    if (fileMime === 'application/octet-stream' || !fileMime) {
+      const ext = path.extname(originalFilename).toLowerCase();
+      if (ext === '.pdf') {
+        fileMime = 'application/pdf';
+      } else if (ext === '.png') {
+        fileMime = 'image/png';
+      } else if (ext === '.webp') {
+        fileMime = 'image/webp';
+      } else if (ext === '.gif') {
+        fileMime = 'image/gif';
+      } else {
+        fileMime = 'image/jpeg'; // Default fallback for image scans
+      }
+    }
 
     console.log(`[GeminiImportController] Upload finished. File: ${originalFilename} (${size} bytes, ${fileMime}) in ${Date.now() - uploadStartedAt}ms`);
 
