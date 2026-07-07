@@ -200,7 +200,7 @@ exports.getJobItems = async (req, res) => {
 exports.updateItem = async (req, res) => {
   try {
     const itemId = req.params.id || req.params.itemId;
-    const { question, questionText, options, correctAnswer, className, classNo, chapterName, language, explanation, diagram } = req.body;
+    const { question, questionText, options, correctAnswer, className, classNo, chapterName, language, diagram } = req.body;
 
     if (!isValidObjectId(itemId)) {
       return res.status(400).json({ success: false, message: 'Invalid itemId.' });
@@ -229,21 +229,17 @@ exports.updateItem = async (req, res) => {
     else if (classNo !== undefined) item.className = String(classNo).trim();
     if (chapterName !== undefined) item.chapterName = chapterName.trim();
     if (language !== undefined) item.language = language;
-    if (explanation !== undefined) item.explanation = explanation.trim();
     if (diagram !== undefined) item.diagram = diagram;
 
-    // Run normalization pipeline
     const normalized = ImportNormalizerService.normalizeQuestion({
       question: item.question,
       options: item.options,
-      correctAnswer: item.correctAnswer,
-      explanation: item.explanation
+      correctAnswer: item.correctAnswer
     });
 
     item.question = normalized.question;
     item.options = normalized.options;
     item.correctAnswer = normalized.correctAnswer;
-    item.explanation = normalized.explanation;
 
     // Resolve class/chapter
     const resolved = await resolveClassAndChapter(item.className || 12, item.chapterName || 'General');
@@ -328,7 +324,6 @@ exports.approveItem = async (req, res) => {
     // Resolve class & chapter dynamically to be absolutely sure
     const resolved = await resolveClassAndChapter(item.className || 12, item.chapterName || 'General');
 
-    // Create production Question
     const question = new Question({
       language: item.language,
       classId: resolved.classId,
@@ -336,7 +331,6 @@ exports.approveItem = async (req, res) => {
       question: item.question,
       options: item.options,
       correctAnswer: item.correctAnswer,
-      explanation: item.explanation,
       diagram: item.diagram,
       questionHash: item.questionHash,
       contentHash: item.contentHash
@@ -484,7 +478,6 @@ exports.confirmJobItems = async (req, res) => {
           question: item.question,
           options: item.options,
           correctAnswer: item.correctAnswer,
-          explanation: item.explanation,
           diagram: item.diagram,
           questionHash: item.questionHash,
           contentHash: item.contentHash

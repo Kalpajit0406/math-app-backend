@@ -61,7 +61,6 @@ class MathpixEngine extends ExtractionEngine {
         options: q.options || ['', '', '', ''],
         correctOption: q.correctOption || null,
         correctAnswer: q.correctAnswer || '',
-        explanation: q.explanation || '',
         language: q.language || 'English',
         confidence: q.confidence || 1.0,
         latex: q.latex || false,

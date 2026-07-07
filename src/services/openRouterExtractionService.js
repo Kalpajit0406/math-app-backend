@@ -177,7 +177,6 @@ class OpenRouterExtractionService {
         options: optionsArray,
         correctOption: q.correctOption || null,
         correctAnswer: q.correctAnswer || '',
-        explanation: q.explanation || '',
         language: q.language || 'English',
         className: String(resolvedClassChapter.classNo),
         chapterName: resolvedClassChapter.chapterName,

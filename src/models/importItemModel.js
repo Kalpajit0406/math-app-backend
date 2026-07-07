@@ -29,10 +29,6 @@ const importItemSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-  explanation: {
-    type: String,
-    default: '',
-  },
   language: {
     type: String,
     enum: ["Bengali", "English", "Both"],

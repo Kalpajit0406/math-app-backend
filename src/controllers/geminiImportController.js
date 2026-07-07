@@ -100,6 +100,9 @@ const createImport = async (req, res) => {
 
         console.log(`[GeminiImportController] ${engine} request finished in ${Date.now() - processStartedAt}ms. Extracted ${extracted.length} items.`);
         job.progress = 50;
+        if (extracted.backupKeyUsed === true) {
+          job.backupKeyUsed = true;
+        }
         await job.save();
 
         let savedCount = 0;
@@ -126,7 +129,6 @@ const createImport = async (req, res) => {
             question: item.questionText,
             options: item.options,
             correctAnswer: item.correctAnswer || item.correctOption || '',
-            explanation: item.explanation || '',
             language: item.language || 'English',
             className: String(resolved.classNo),
             chapterName: resolved.chapterName,
@@ -305,7 +307,6 @@ const confirmImport = async (req, res) => {
           question: item.question,
           options: item.options,
           correctAnswer: item.correctAnswer,
-          explanation: item.explanation,
           diagram: item.diagram,
           questionHash: item.questionHash,
           contentHash: item.contentHash

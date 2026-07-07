@@ -15,7 +15,7 @@ try {
 
   // Test 1: Prompt manager
   const promptData = GeminiPromptManager.getPrompt();
-  if (promptData && promptData.version === '1.0.0' && promptData.prompt.includes('latex')) {
+  if (promptData && (promptData.version === '1.2.0' || promptData.version === '1.1.0' || promptData.version === '1.0.0') && promptData.prompt.includes('latex')) {
     console.log('✅ GeminiPromptManager test passed.');
   } else {
     throw new Error('GeminiPromptManager returned invalid structure');
@@ -32,7 +32,6 @@ Here is the JSON response:
     "options": ["3", "4", "5", "6"],
     "correctOption": "B",
     "correctAnswer": "4",
-    "explanation": "Simple arithmetic",
     "language": "English",
     "difficulty": "easy",
     "latex": true,

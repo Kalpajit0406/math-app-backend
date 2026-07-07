@@ -99,15 +99,10 @@ class ImportNormalizerService {
     );
     const options = this.normalizeOptions(questionObj.options);
     const correctAnswer = this.normalizeAnswerFormat(questionObj.correctAnswer);
-    const explanation = this.removeExtraWhitespace(
-      this.normalizeUnicode(questionObj.explanation || '')
-    );
-    
     return {
       question: questionText,
       options,
-      correctAnswer,
-      explanation
+      correctAnswer
     };
   }
 }

@@ -65,8 +65,8 @@ class GeminiExtractionService {
    * @param {string} prompt - Gemini prompt instructions
    * @returns {Promise<string>} Response text from Gemini
    */
-  static async callGeminiAPI(buffer, mimetype, prompt) {
-    const apiKey = process.env.GEMINI_API_KEY;
+  static async callGeminiAPI(buffer, mimetype, prompt, apiKeyToUse = null) {
+    const apiKey = apiKeyToUse || process.env.GEMINI_API_KEY;
     if (!apiKey) {
       throw new Error('GEMINI_API_KEY is not configured on the backend. Please add it to your environment variables.');
     }
@@ -133,7 +133,27 @@ class GeminiExtractionService {
    */
   static async extractFromBuffer(buffer, mimetype, classNo = 12, chapterName = 'General') {
     const { prompt } = GeminiPromptManager.getPrompt();
-    const rawResponse = await this.callGeminiAPI(buffer, mimetype, prompt);
+    
+    let rawResponse;
+    let backupKeyUsed = false;
+
+    try {
+      rawResponse = await this.callGeminiAPI(buffer, mimetype, prompt);
+    } catch (err) {
+      console.warn(`[GeminiExtractionService] Primary Gemini API key failed: ${err.message}. Trying backup API key...`);
+      const backupKey = process.env.GEMINI_API_KEY_BACKUP;
+      if (!backupKey) {
+        throw new Error(`Primary API key failed (${err.message}) and no backup key (GEMINI_API_KEY_BACKUP) is configured.`);
+      }
+      try {
+        rawResponse = await this.callGeminiAPI(buffer, mimetype, prompt, backupKey);
+        backupKeyUsed = true;
+        console.log(`[GeminiExtractionService] Backup Gemini API key call succeeded.`);
+      } catch (backupErr) {
+        console.error(`[GeminiExtractionService] Backup Gemini API key also failed: ${backupErr.message}`);
+        throw new Error(`Both primary API key (${err.message}) and backup API key (${backupErr.message}) failed.`);
+      }
+    }
     
     const parsedQuestions = GeminiResponseParser.parse(rawResponse);
     const validatedQuestions = [];
@@ -172,7 +192,6 @@ class GeminiExtractionService {
         options: optionsArray,
         correctOption: q.correctOption || null,
         correctAnswer: q.correctAnswer || '',
-        explanation: q.explanation || '',
         language: q.language || 'English',
         className: String(resolvedClassChapter.classNo),
         chapterName: resolvedClassChapter.chapterName,
@@ -191,6 +210,7 @@ class GeminiExtractionService {
       });
     }
 
+    validatedQuestions.backupKeyUsed = backupKeyUsed;
     return validatedQuestions;
   }
 
@@ -202,16 +222,37 @@ class GeminiExtractionService {
       throw new Error('PDF file path not found or invalid.');
     }
 
+    try {
+      console.log(`[GeminiExtractionService] Attempting native PDF extraction for: ${pdfPath}`);
+      const buffer = fs.readFileSync(pdfPath);
+      // Process PDF natively via direct Gemini call (mimeType: 'application/pdf')
+      const questions = await this.extractFromBuffer(buffer, 'application/pdf', classNo, chapterName);
+      console.log(`[GeminiExtractionService] Native PDF extraction succeeded. Found ${questions.length} questions.`);
+      return questions;
+    } catch (nativeErr) {
+      console.warn(`[GeminiExtractionService] Native PDF extraction failed: ${nativeErr.message}. Falling back to page-by-page pdftoppm rendering...`);
+      return this.extractFromPdfPathFallback(pdfPath, classNo, chapterName);
+    }
+  }
+
+  /**
+   * Extract questions from a multi-page PDF document using pdftoppm fallback
+   */
+  static async extractFromPdfPathFallback(pdfPath, classNo = 12, chapterName = 'General') {
     const pageCount = await getPdfPageCount(pdfPath);
-    console.log(`[GeminiExtractionService] Processing PDF: ${pdfPath} (${pageCount} pages)`);
+    console.log(`[GeminiExtractionService] Processing PDF fallback: ${pdfPath} (${pageCount} pages)`);
     
     let allQuestions = [];
+    let backupKeyUsed = false;
     
     for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
       console.log(`[GeminiExtractionService] Processing page ${pageNum}/${pageCount}`);
       try {
         const pageBuffer = await extractPageAsBuffer(pdfPath, pageNum);
         const pageQuestions = await this.extractFromBuffer(pageBuffer, 'image/jpeg', classNo, chapterName);
+        if (pageQuestions.backupKeyUsed) {
+          backupKeyUsed = true;
+        }
         
         // Merge & adjust sequence numbering
         for (const q of pageQuestions) {
@@ -229,6 +270,7 @@ class GeminiExtractionService {
       q.detectionOrder = idx + 1;
     });
 
+    allQuestions.backupKeyUsed = backupKeyUsed;
     return allQuestions;
   }
 }

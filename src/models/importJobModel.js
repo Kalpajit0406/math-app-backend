@@ -55,6 +55,10 @@ const importJobSchema = new mongoose.Schema({
   errorMessage: {
     type: String,
   },
+  backupKeyUsed: {
+    type: Boolean,
+    default: false,
+  },
   startedAt: {
     type: Date,
   },

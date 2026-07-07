@@ -21,7 +21,6 @@ Answer: B
 Class: 12
 Chapter: Continuity and Differentiability
 Language: English
-Explanation: Using power rule, d/dx(x^n) = n*x^(n-1).
 
 ### Question 2
 What is the integration of sin(x)?
@@ -33,7 +32,6 @@ Answer: B
 Class: 12
 Chapter: Integrals
 Language: English
-Explanation: Integral of sin(x) is -cos(x) + C.
 `;
 
 async function runTest() {

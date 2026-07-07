@@ -160,8 +160,7 @@ class ImportParserService {
         const normalized = ImportNormalizerService.normalizeQuestion({
           question: textToNormalize,
           options: item.options,
-          correctAnswer: item.correctAnswer,
-          explanation: item.explanation
+          correctAnswer: item.correctAnswer
         });
 
         // Resolve class and chapter IDs dynamically
@@ -201,7 +200,6 @@ class ImportParserService {
           question: normalized.question,
           options: normalized.options,
           correctAnswer: normalized.correctAnswer,
-          explanation: normalized.explanation || '',
           language: item.language || 'English',
           className: String(resolved.classNo),
           chapterName: resolved.chapterName,
@@ -320,7 +318,6 @@ class ImportParserService {
           classNo: 12, // default
           chapterName: 'General',
           language: 'English',
-          explanation: '',
           rawItemData: { ocrChunk: q.rawChunk }
         });
       }
@@ -351,7 +348,6 @@ class ImportParserService {
         classNo: 12,
         chapterName: 'General',
         language: 'English',
-        explanation: '',
         rawItemData: { ocrChunk: q.rawChunk }
       });
     }
@@ -398,7 +394,6 @@ class ImportParserService {
           classNo: 12,
           chapterName: 'General',
           language: 'English',
-          explanation: '',
           rawItemData: { segmentText: seg.text }
         });
       }
@@ -444,7 +439,6 @@ class ImportParserService {
       let chapterName = 'General';
       let language = 'English';
       let correctAnswer = 'A';
-      let explanation = '';
 
       for (const line of blockLines) {
         const trimmed = line.trim();
@@ -453,7 +447,6 @@ class ImportParserService {
         const chapMatch = trimmed.match(/^(?:chapter|chapterName)\s*:\s*(.+)/i);
         const langMatch = trimmed.match(/^(?:language|lang)\s*:\s*(.+)/i);
         const ansMatch = trimmed.match(/^(?:correctAnswer|answer|correct)\s*:\s*(.+)/i);
-        const expMatch = trimmed.match(/^(?:explanation|exp)\s*:\s*(.+)/i);
 
         if (classMatch) {
           classNo = parseInt(classMatch[1], 10);
@@ -466,8 +459,6 @@ class ImportParserService {
           else language = 'English';
         } else if (ansMatch) {
           correctAnswer = ansMatch[1].trim().toUpperCase();
-        } else if (expMatch) {
-          explanation = expMatch[1].trim();
         } else {
           // If it's a heading line (starts with ### or similar), we can strip the heading prefix
           // to make question text cleaner.
@@ -506,7 +497,6 @@ class ImportParserService {
         classNo,
         chapterName,
         language,
-        explanation,
         rawItemData: { rawSegment: text }
       });
     }
@@ -549,8 +539,6 @@ class ImportParserService {
       if (languageVal.toLowerCase() === 'bengali') language = 'Bengali';
       else if (languageVal.toLowerCase() === 'both') language = 'Both';
 
-      const explanation = cols[9] || '';
-
       items.push({
         questionText,
         options,
@@ -558,7 +546,6 @@ class ImportParserService {
         classNo,
         chapterName,
         language,
-        explanation,
         rawItemData: { rawCsvLine: line }
       });
     }

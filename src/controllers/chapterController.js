@@ -145,17 +145,97 @@ const editChapter = async (req, res) => {
       }
 
       const normalized = normalizeChapterName(chapterName);
-      // Check if another chapter has this name
+      // Check if another active chapter has this name
       const duplicate = await Chapter.findOne({
         classId,
         normalizedChapterName: normalized,
-        _id: { $ne: id }
+        _id: { $ne: id },
+        isDeleted: { $ne: true }
       });
+
       if (duplicate) {
-        return res.status(400).json({ success: false, message: 'Another chapter with this name already exists for this class.' });
+        if (req.body.confirmMerge !== true) {
+          return res.status(200).json({
+            success: false,
+            code: 'CHAPTER_ALREADY_EXISTS',
+            message: `Another chapter named "${duplicate.chapterName}" already exists for this class. Proceeding will merge all questions from "${oldChapterName}" into it. Do you want to proceed?`
+          });
+        }
+
+        // Proceed to merge!
+        let transactionStarted = false;
+        try {
+          await session.startTransaction();
+          transactionStarted = true;
+        } catch (err) {
+          // Replica sets not enabled, proceed without transaction
+        }
+
+        // 1. Move all questions from old chapter to target chapter
+        await Question.updateMany(
+          { chapterId: id },
+          { chapterId: duplicate._id },
+          { session: transactionStarted ? session : undefined }
+        );
+
+        // 2. Update all Exams referencing old chapter
+        const exams = await Exam.find({ chapterIds: id });
+        for (const exam of exams) {
+          const filtered = exam.chapterIds.filter(chId => chId.toString() !== id.toString());
+          if (!filtered.some(chId => chId.toString() === duplicate._id.toString())) {
+            filtered.push(duplicate._id);
+          }
+          exam.chapterIds = filtered;
+          await exam.save({ session: transactionStarted ? session : undefined });
+        }
+
+        // 3. Update all TestConfigs referencing old chapter
+        const configs = await TestConfig.find({ chapterIds: id });
+        for (const config of configs) {
+          const filtered = config.chapterIds.filter(chId => chId.toString() !== id.toString());
+          if (!filtered.some(chId => chId.toString() === duplicate._id.toString())) {
+            filtered.push(duplicate._id);
+          }
+          config.chapterIds = filtered;
+          await config.save({ session: transactionStarted ? session : undefined });
+        }
+
+        // 4. Soft delete the source chapter
+        chapter.isDeleted = true;
+        chapter.deletedAt = new Date();
+        chapter.deletedBy = req.user?.id;
+        chapter.chapterName = `${chapter.chapterName} (merged)`;
+        await chapter.save({ session: transactionStarted ? session : undefined });
+
+        if (transactionStarted) {
+          await session.commitTransaction();
+        }
+
+        await incrementSyncVersion();
+
+        // Log audit log for merge action
+        const auditLogService = require('../services/auditLogService');
+        await auditLogService.log({
+          actorId: req.user.id,
+          action: 'chapter_merge',
+          targetType: 'Chapter',
+          targetId: duplicate._id,
+          metadata: {
+            sourceChapterId: id,
+            sourceChapterName: oldChapterName,
+            targetChapterName: duplicate.chapterName,
+            classId
+          }
+        });
+
+        return res.json({
+          success: true,
+          message: 'Chapters merged successfully.',
+          data: duplicate
+        });
       }
 
-      // Start transaction if replica set is available, else fallback to standard execution
+      // No duplicate: perform regular rename
       let transactionStarted = false;
       try {
         await session.startTransaction();
