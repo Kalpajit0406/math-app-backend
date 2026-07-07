@@ -26,7 +26,7 @@ const createImport = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Upload file is required.' });
     }
 
-    const { classNo = '12', chapter = 'General' } = req.body;
+    const { classNo = '12', chapter = 'General', engine = 'gemini' } = req.body;
     let fileMime = req.file.mimetype;
     const originalFilename = req.file.originalname;
     const size = req.file.size;
@@ -55,20 +55,22 @@ const createImport = async (req, res) => {
       sourceType = 'pdf';
     }
 
+    const isOpenRouter = engine === 'openrouter';
+
     const job = new ImportJob({
       uploadedBy: req.user?.id || req.user?._id || new mongoose.Types.ObjectId(),
       status: 'queued',
       sourceType,
       originalFilename,
       rawSourceData: req.file.path, // Store absolute path to uploaded temp file
-      parserVersion: 'gemini-v1.0',
+      parserVersion: isOpenRouter ? 'openrouter-v1.0' : 'gemini-v1.0',
       progress: 0
     });
     await job.save();
 
-    console.log(`[GeminiImportController] Queued Gemini job ${job._id} for source type ${sourceType}`);
+    console.log(`[GeminiImportController] Queued ${engine} job ${job._id} for source type ${sourceType}`);
 
-    // Asynchronously process the import job with Gemini in the background
+    // Asynchronously process the import job in the background
     setImmediate(async () => {
       const processStartedAt = Date.now();
       try {
@@ -77,16 +79,26 @@ const createImport = async (req, res) => {
         job.progress = 10;
         await job.save();
 
-        console.log(`[GeminiImportController] Gemini request started for job ${job._id}`);
+        console.log(`[GeminiImportController] ${engine} request started for job ${job._id}`);
         let extracted = [];
-        if (sourceType === 'pdf') {
-          extracted = await GeminiExtractionService.extractFromPdfPath(job.rawSourceData, parseInt(classNo), chapter);
+        if (isOpenRouter) {
+          const { OpenRouterExtractionService } = require('../services/openRouterExtractionService');
+          if (sourceType === 'pdf') {
+            extracted = await OpenRouterExtractionService.extractFromPdfPath(job.rawSourceData, parseInt(classNo), chapter);
+          } else {
+            const buffer = fs.readFileSync(job.rawSourceData);
+            extracted = await OpenRouterExtractionService.extractFromBuffer(buffer, fileMime, parseInt(classNo), chapter);
+          }
         } else {
-          const buffer = fs.readFileSync(job.rawSourceData);
-          extracted = await GeminiExtractionService.extractFromBuffer(buffer, fileMime, parseInt(classNo), chapter);
+          if (sourceType === 'pdf') {
+            extracted = await GeminiExtractionService.extractFromPdfPath(job.rawSourceData, parseInt(classNo), chapter);
+          } else {
+            const buffer = fs.readFileSync(job.rawSourceData);
+            extracted = await GeminiExtractionService.extractFromBuffer(buffer, fileMime, parseInt(classNo), chapter);
+          }
         }
 
-        console.log(`[GeminiImportController] Gemini request finished in ${Date.now() - processStartedAt}ms. Extracted ${extracted.length} items.`);
+        console.log(`[GeminiImportController] ${engine} request finished in ${Date.now() - processStartedAt}ms. Extracted ${extracted.length} items.`);
         job.progress = 50;
         await job.save();
 
