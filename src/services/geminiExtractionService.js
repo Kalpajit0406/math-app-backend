@@ -71,8 +71,8 @@ class GeminiExtractionService {
       throw new Error('GEMINI_API_KEY is not configured on the backend. Please add it to your environment variables.');
     }
 
-    const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
-    const apiVersion = process.env.GEMINI_API_VERSION || 'v1';
+    const model = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+    const apiVersion = process.env.GEMINI_API_VERSION || 'v1beta';
     const apiUrl = `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:generateContent?key=${apiKey}`;
 
     const requestBody = {
@@ -92,7 +92,7 @@ class GeminiExtractionService {
         }
       ],
       generationConfig: {
-        response_mime_type: 'application/json',
+        responseMimeType: 'application/json',
         temperature: 0.1
       }
     };
