@@ -51,40 +51,151 @@ const resolveSource = (req) => {
 /**
  * Run OCR pipeline and update session with results (used inline when no Redis worker available)
  */
-async function processOCRAndUpdateSession(source, sessionId, userId) {
+async function processOCRAndUpdateSession(source, sessionId, userId, language = 'English', engine = 'Mathpix') {
   const startedAt = Date.now();
+  console.log(`[ocrSessionController] processOCRAndUpdateSession: Starting OCR processing. Session: ${sessionId}, Language: ${language}, Engine: ${engine}`);
+  const mongoose = require('mongoose');
   try {
-    let ocrResult;
-    if (source.type === 'buffer') {
-      ocrResult = await OCRPipeline.runFromBuffer(source.buffer, source.mimetype, source.filename);
+    let safeQuestions = [];
+    let pageType = 'UNKNOWN_PAGE';
+    let sections = [];
+    let totalRejected = 0;
+    let manualReviewArtifacts = [];
+
+    const isGeminiSelected = String(engine).toLowerCase() === 'gemini';
+    const isGemmaSelected = String(engine).toLowerCase() === 'gemma';
+    const isMathpixSelected = String(engine).toLowerCase() === 'mathpix';
+
+    const useGeminiDirect = isGeminiSelected || (isMathpixSelected && String(language).toLowerCase() !== 'english');
+    const useGemmaDirect = isGemmaSelected;
+
+    if (useGeminiDirect || useGemmaDirect) {
+      console.log(`[ocrSessionController] Using direct API extraction (Gemini=${useGeminiDirect}, Gemma=${useGemmaDirect})...`);
+      let extractedQuestions = [];
+      if (useGemmaDirect) {
+        const { OpenRouterExtractionService } = require('../services/openRouterExtractionService');
+        extractedQuestions = await OpenRouterExtractionService.extractFromBuffer(source.buffer, source.mimetype);
+      } else {
+        const { GeminiExtractionService } = require('../services/geminiExtractionService');
+        extractedQuestions = await GeminiExtractionService.extractFromBuffer(source.buffer, source.mimetype);
+      }
+      
+      safeQuestions = extractedQuestions.map((gQ, idx) => {
+        const _id = new mongoose.Types.ObjectId();
+        return {
+          _id,
+          questionText: gQ.questionText,
+          options: gQ.options,
+          questionNumber: gQ.questionNumber || String(idx + 1),
+          detectionOrder: idx + 1,
+          format: gQ.format || 'mcq',
+          columnA: gQ.columnA || [],
+          columnB: gQ.columnB || [],
+          matchingChoices: gQ.matchingChoices || [],
+          blanks: gQ.blanks || [],
+          blankCount: gQ.blankCount || 0,
+          confidenceScores: {
+            ocrConfidence: gQ.confidence ?? 0.90,
+            parserConfidence: gQ.confidence ?? 0.90,
+            overallConfidence: gQ.confidence ?? 0.90,
+            rating: (gQ.confidence || 0.90) > 0.8 ? 'high' : ((gQ.confidence || 0.90) > 0.5 ? 'medium' : 'low')
+          },
+          validationErrors: gQ.validationErrors || [],
+          quarantineReasons: gQ.quarantineReasons || [],
+          extractionState: gQ.isValid ? 'ACCEPTED' : 'MANUAL_REVIEW',
+          duplicateInfo: {
+            detected: gQ.duplicateFound || false,
+            similarity: gQ.duplicateFound ? 1.0 : 0.0,
+            rating: gQ.duplicateFound ? 'Block duplicate' : 'Allow normally',
+            existingQuestionId: gQ.duplicateQuestionId || null,
+            existingQuestionText: ''
+          },
+          rawOcrData: {
+            rawChunk: gQ.questionText,
+            ocrConfidence: gQ.confidence ?? 0.90,
+            pageType: 'MCQ_PAGE',
+            effectiveParserType: 'mcq',
+            layoutMetadata: { strategy: 'text-only' }
+          }
+        };
+      });
+      pageType = 'MCQ_PAGE';
     } else {
-      throw new Error('Unsupported source type for inline processing: ' + source.type);
+      // English Mathpix (via OCRPipeline)
+      console.log(`[ocrSessionController] Using Mathpix/OCRPipeline for English OCR...`);
+      let ocrResult = null;
+      let pipelineError = null;
+
+      try {
+        if (source.type === 'buffer') {
+          ocrResult = await OCRPipeline.runFromBuffer(source.buffer, source.mimetype, source.filename);
+        } else {
+          throw new Error('Unsupported source type for inline processing: ' + source.type);
+        }
+      } catch (err) {
+        pipelineError = err;
+        console.error(`[ocrSessionController] English OCRPipeline error: ${err.message}`);
+      }
+
+      const allItems = ocrResult?.parsedQuestions || [];
+      const unfilteredSafeQuestions = allItems.filter(q => q.type !== 'MANUAL_REVIEW_ARTIFACT');
+
+      if (pipelineError || unfilteredSafeQuestions.length === 0) {
+        console.warn(`[ocrSessionController] Mathpix/OCRPipeline failed or returned 0 questions. Falling back to Gemini...`);
+        const { GeminiExtractionService } = require('../services/geminiExtractionService');
+        const geminiQuestions = await GeminiExtractionService.extractFromBuffer(source.buffer, source.mimetype);
+        
+        safeQuestions = geminiQuestions.map((gQ, idx) => {
+          const _id = new mongoose.Types.ObjectId();
+          return {
+            _id,
+            questionText: gQ.questionText,
+            options: gQ.options,
+            questionNumber: gQ.questionNumber || String(idx + 1),
+            detectionOrder: idx + 1,
+            format: gQ.format || 'mcq',
+            columnA: gQ.columnA || [],
+            columnB: gQ.columnB || [],
+            matchingChoices: gQ.matchingChoices || [],
+            blanks: gQ.blanks || [],
+            blankCount: gQ.blankCount || 0,
+            confidenceScores: {
+              ocrConfidence: gQ.confidence ?? 0.90,
+              parserConfidence: gQ.confidence ?? 0.90,
+              overallConfidence: gQ.confidence ?? 0.90,
+              rating: (gQ.confidence || 0.90) > 0.8 ? 'high' : ((gQ.confidence || 0.90) > 0.5 ? 'medium' : 'low')
+            },
+            validationErrors: gQ.validationErrors || [],
+            quarantineReasons: gQ.quarantineReasons || [],
+            extractionState: gQ.isValid ? 'ACCEPTED' : 'MANUAL_REVIEW',
+            duplicateInfo: {
+              detected: gQ.duplicateFound || false,
+              similarity: gQ.duplicateFound ? 1.0 : 0.0,
+              rating: gQ.duplicateFound ? 'Block duplicate' : 'Allow normally',
+              existingQuestionId: gQ.duplicateQuestionId || null,
+              existingQuestionText: ''
+            },
+            rawOcrData: {
+              rawChunk: gQ.questionText,
+              ocrConfidence: gQ.confidence ?? 0.90,
+              pageType: 'MCQ_PAGE',
+              effectiveParserType: 'mcq',
+              layoutMetadata: { strategy: 'text-only' }
+            }
+          };
+        });
+        pageType = 'MCQ_PAGE';
+      } else {
+        // Success with Mathpix
+        safeQuestions = unfilteredSafeQuestions;
+        pageType = ocrResult.pageType || 'UNKNOWN_PAGE';
+        sections = ocrResult.sections || [];
+        totalRejected = ocrResult.totalRejected || 0;
+        manualReviewArtifacts = ocrResult.manualReviewArtifacts || [];
+      }
     }
 
-    // OCRPipeline.runFromBuffer returns:
-    //   { parsedQuestions, pageType, sections, totalRejected, rawText, latex, confidence,
-    //     manualReviewArtifacts, ... }
-    const allItems        = ocrResult.parsedQuestions || [];
-    const pageType        = ocrResult.pageType || 'UNKNOWN_PAGE';
-    const sections        = ocrResult.sections || [];
-    const totalRejected   = ocrResult.totalRejected || 0;
     const processingTimeMs = Date.now() - startedAt;
-    const manualReviewArtifacts = ocrResult.manualReviewArtifacts || [];
-
-    // ── CRITICAL SAFETY GATE ────────────────────────────────────────────────
-    // Filter out any manual-review artifacts that may have accidentally ended up
-    // in parsedQuestions. These must NEVER be saved to the database.
-    const safeQuestions = allItems.filter(q => q.type !== 'MANUAL_REVIEW_ARTIFACT');
-    const leaked = allItems.length - safeQuestions.length;
-    if (leaked > 0) {
-      console.error(`[ocrSessionController] SAFETY: Blocked ${leaked} manual-review artifact(s) from session items!`);
-    }
-
-    if (manualReviewArtifacts.length > 0) {
-      console.warn(`[ocrSessionController] ${manualReviewArtifacts.length} page(s) routed to manual review for session ${sessionId}:`,
-        manualReviewArtifacts.map(a => a.failureReason).join('; ')
-      );
-    }
 
     await VerificationQueueManager.updateSession(sessionId, {
       items: safeQuestions,
@@ -98,7 +209,6 @@ async function processOCRAndUpdateSession(source, sessionId, userId) {
         manualReviewCount: manualReviewArtifacts.length,
         sourceUsed: source.type,
         processingTimeMs,
-        // Store artifact summaries for UI display (not the full raw text)
         manualReviewSummaries: manualReviewArtifacts.map(a => ({
           failureReason: a.failureReason,
           pageType:      a.pageType,
@@ -143,6 +253,7 @@ const startSession = async (req, res) => {
       });
     }
 
+    const { language = 'English', engine = 'Mathpix' } = req.body;
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const userId = req.user?.id || req.user?._id;
 
@@ -192,7 +303,9 @@ const startSession = async (req, res) => {
         sessionId: session.sessionId,
         sourceType: source.type,
         mimetype: source.mimetype,
-        filename: source.filename
+        filename: source.filename,
+        language,
+        engine
       });
 
       console.log(`[ocrSessionController] Job enqueued: jobId=${job._id}, sessionId=${session.sessionId}`);
@@ -213,7 +326,7 @@ const startSession = async (req, res) => {
       // ── INLINE MODE: process directly, no separate worker needed ──
       // Run OCR in background (non-blocking), respond immediately with pending
       // The Flutter app polls GET /session/:id until status=completed
-      setImmediate(() => processOCRAndUpdateSession(source, session.sessionId, userId));
+      setImmediate(() => processOCRAndUpdateSession(source, session.sessionId, userId, language, engine));
 
       console.log(`[ocrSessionController] Inline OCR started for session ${session.sessionId}`);
 

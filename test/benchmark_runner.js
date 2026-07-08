@@ -291,7 +291,11 @@ async function runBenchmark() {
     if (optCorrect && detectedQuestions.length > 0) correctOptionExtractionCount++;
 
     // 5. LaTeX Preservation Check: Verify backslashes are preserved inside math blocks
-    const latexIntact = !detectedQuestions.some(q => q.rawChunk.includes('\\') && !q.question.includes('\\') && !q.options.some(o => o.text.includes('\\')));
+    const latexIntact = !detectedQuestions.some(q => {
+      const rawText = q.rawChunk || q.rawOcrData?.rawChunk || '';
+      const qText = q.question || q.questionText || '';
+      return rawText.includes('\\') && !qText.includes('\\') && !q.options.some(o => (o.text || '').includes('\\'));
+    });
     if (latexIntact) latexPreservedCount++;
 
     // 6. Section Parsing Check

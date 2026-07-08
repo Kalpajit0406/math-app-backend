@@ -2,8 +2,8 @@ const FormData = require('form-data');
 const fs = require('fs');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
-const OCR_TIMEOUT_MS = Number.parseInt(process.env.OCR_TIMEOUT_MS || '20000', 10);
-const OCR_MAX_RETRIES = Number.parseInt(process.env.OCR_MAX_RETRIES || '2', 10);
+const OCR_TIMEOUT_MS = Number.parseInt(process.env.OCR_TIMEOUT_MS || '15000', 10);
+const OCR_MAX_RETRIES = Number.parseInt(process.env.OCR_MAX_RETRIES || '1', 10);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

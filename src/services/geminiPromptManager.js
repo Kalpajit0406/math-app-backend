@@ -19,12 +19,10 @@ Return a JSON array of questions. Follow these guidelines:
    - correctOption: For MCQ questions, this must be a single standard uppercase letter (e.g. "A", "B", "C", "D"). Map Bengali option labels like "ক", "খ", "গ", "ঘ" to "A", "B", "C", "D" respectively. If not detectable, return null.
    - correctAnswer: The text/value of the correct option or the exact numerical/symbolic answer.
    - language: The language of the question text. Must be either "Bengali", "English", or "Both".
-   - difficulty: Estimated difficulty. Must be one of "easy", "medium", "hard".
    - latex: A boolean indicating if LaTeX equations are present in the question text.
    - diagramPresent: A boolean indicating if a diagram or figure is referenced or present in the question.
    - diagramDescription: A brief text description of the diagram if visible, otherwise empty.
    - tags: An array of strings representing math topics (e.g. "algebra", "calculus", "matrices").
-   - estimatedTime: The estimated time in minutes to solve the question (e.g. "2 mins").
    - confidence: Your confidence score from 0.0 to 1.0.
 
 2. Do NOT include markdown styling or the \`\`\`json wrappers in the response if possible, just return raw JSON content that conforms to the schema.
@@ -43,15 +41,13 @@ JSON structure must match this example exactly:
     "correctOption": "C",
     "correctAnswer": "\\{\\{\\}, \\{1\\}, \\{2\\}, \\{1, 2\\}\\}",
     "language": "English",
-    "difficulty": "easy",
     "latex": true,
     "diagramPresent": false,
     "diagramDescription": "",
     "tags": ["sets", "power set"],
-    "estimatedTime": "1",
     "confidence": 0.95
   }
-]`
+ ]`
     };
   }
 }

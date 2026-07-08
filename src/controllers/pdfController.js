@@ -411,96 +411,152 @@ class PdfController {
         throw new Error(`Cannot read PDF: ${e.message}. Make sure it is a valid PDF file.`);
       }
 
-      console.log(`[PdfController] Starting synchronous extraction: ${totalPages} pages`);
+      const mongoose = require('mongoose');
+      const { classNo = '12', chapter = 'General', engine = 'Mathpix' } = req.body;
+      const isGeminiSelected = String(engine).toLowerCase() === 'gemini';
+      const isGemmaSelected = String(engine).toLowerCase() === 'gemma' || String(engine).toLowerCase() === 'openrouter';
 
-      const { OCRProviderAdapter } = require('../services/ocrProviderAdapter');
-      const { PageClassificationEngine } = require('../services/pageClassificationEngine');
-
-      const rawPageTexts = [];
-      const ocrResults = [];
-      const failedPages = [];
-
-      // Loop over pages and run OCR Provider
-      for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-        console.log(`[PdfController] Running OCR on page ${pageNum}/${totalPages}`);
-        try {
-          const pageBuffer = await extractPageAsBuffer(pdfPath, pageNum);
-          const ocrResult = await OCRProviderAdapter.processImage(pageBuffer, 'image/jpeg', `page_${pageNum}.jpg`);
-          console.log(`[PdfController] OCR completed for page ${pageNum}/${totalPages}`);
-          ocrResults.push(ocrResult);
-          rawPageTexts.push(ocrResult.latex || ocrResult.rawText || '');
-        } catch (pageErr) {
-          console.error(`[PdfController] Page ${pageNum} failed:`, pageErr.message);
-          failedPages.push({
-            page: pageNum,
-            status: "FAILED",
-            reason: pageErr.message
-          });
-        }
-      }
-
-      // ── 3. Clean page texts & remove repeated lines ──────────────────
-      const cleanedPageTexts = removeHeadersFootersAndRepeatedLines(rawPageTexts);
-
-      const allAnswerKeys = [];
-      const nonAnsKeyPageTexts = [];
-      const nonAnsKeyOcrResults = [];
-
-      for (let i = 0; i < cleanedPageTexts.length; i++) {
-        const text = cleanedPageTexts[i];
-        const classification = PageClassificationEngine.classifyPage(text);
-
-        if (classification.pageType === 'ANSWER_KEY_PAGE') {
-          console.log(`[PdfController] Page ${i + 1} detected as ANSWER_KEY_PAGE. Extracting answer keys.`);
-          const keys = parseAnswerKeys(text);
-          allAnswerKeys.push(...keys);
-        } else {
-          nonAnsKeyPageTexts.push(text);
-          nonAnsKeyOcrResults.push(ocrResults[i]);
-        }
-      }
-
-      // ── 4. Count expected questions from non-answer-key pages ────────
+      let rawPageTexts = [];
       let expectedQuestionCount = 0;
-      nonAnsKeyPageTexts.forEach(text => {
-        expectedQuestionCount += countExpectedQuestions(text);
-      });
+      let allAnswerKeys = [];
+      let failedPages = [];
 
-      console.log(`[PdfController] Expected questions count: ${expectedQuestionCount}`);
-
-      // ── 5. Combine non-answer-key page texts for segmentation ────────
-      let finalQuestions = [];
-      if (nonAnsKeyOcrResults.length > 0) {
-        const combinedRawText = nonAnsKeyOcrResults.map(r => r.rawText || '').join('\n\n');
-        const combinedLatex = nonAnsKeyOcrResults.map(r => r.latex || r.rawText || '').join('\n\n');
-        const avgConfidence = nonAnsKeyOcrResults.reduce((sum, r) => sum + (r.confidence || 1.0), 0) / nonAnsKeyOcrResults.length;
-
-        const combinedOcrResult = {
-          rawText: combinedRawText,
-          latex: combinedLatex,
-          confidence: avgConfidence,
-          lines: nonAnsKeyOcrResults.flatMap(r => r.lines || [])
-        };
-
-        const parseResult = await OCRPipeline.runParsing(combinedOcrResult, req.file?.originalname || 'document.pdf');
-        
-        // Accumulate any answer keys found in sections
-        if (parseResult.answerKeys) {
-          allAnswerKeys.push(...parseResult.answerKeys);
+      if (isGeminiSelected || isGemmaSelected) {
+        console.log(`[PdfController] Direct API extraction requested: ${engine}`);
+        let extracted = [];
+        if (isGemmaSelected) {
+          const { OpenRouterExtractionService } = require('../services/openRouterExtractionService');
+          extracted = await OpenRouterExtractionService.extractFromPdfPath(pdfPath, parseInt(classNo), chapter);
+        } else {
+          const { GeminiExtractionService } = require('../services/geminiExtractionService');
+          extracted = await GeminiExtractionService.extractFromPdfPath(pdfPath, parseInt(classNo), chapter);
         }
 
-        const validationResult = await OCRPipeline.runValidation(
-          parseResult.parsedQuestions,
-          combinedOcrResult,
-          parseResult.pageType,
-          parseResult.sections,
-          parseResult.totalRejected,
-          null, // preprocessInfo
-          req.file?.originalname || 'document.pdf',
-          allAnswerKeys
-        );
+        finalQuestions = (extracted || []).map((gQ, idx) => {
+          const _id = new mongoose.Types.ObjectId();
+          return {
+            _id,
+            questionText: gQ.questionText,
+            options: gQ.options,
+            questionNumber: gQ.questionNumber || String(idx + 1),
+            detectionOrder: idx + 1,
+            format: gQ.format || 'mcq',
+            columnA: gQ.columnA || [],
+            columnB: gQ.columnB || [],
+            matchingChoices: gQ.matchingChoices || [],
+            blanks: gQ.blanks || [],
+            blankCount: gQ.blankCount || 0,
+            confidenceScores: {
+              ocrConfidence: gQ.confidence ?? 0.90,
+              parserConfidence: gQ.confidence ?? 0.90,
+              overallConfidence: gQ.confidence ?? 0.90,
+              rating: (gQ.confidence || 0.90) > 0.8 ? 'high' : ((gQ.confidence || 0.90) > 0.5 ? 'medium' : 'low')
+            },
+            validationErrors: gQ.validationErrors || [],
+            quarantineReasons: gQ.quarantineReasons || [],
+            extractionState: gQ.isValid ? 'ACCEPTED' : 'MANUAL_REVIEW',
+            duplicateInfo: {
+              detected: gQ.duplicateFound || false,
+              similarity: gQ.duplicateFound ? 1.0 : 0.0,
+              rating: gQ.duplicateFound ? 'Block duplicate' : 'Allow normally',
+              existingQuestionId: gQ.duplicateQuestionId || null,
+              existingQuestionText: ''
+            },
+            rawOcrData: {
+              rawChunk: gQ.questionText,
+              ocrConfidence: gQ.confidence ?? 0.90,
+              pageType: 'MCQ_PAGE',
+              effectiveParserType: 'mcq',
+              layoutMetadata: { strategy: 'text-only' }
+            }
+          };
+        });
+      } else {
+        console.log(`[PdfController] Running standard Mathpix pipeline...`);
+        const { OCRProviderAdapter } = require('../services/ocrProviderAdapter');
+        const { PageClassificationEngine } = require('../services/pageClassificationEngine');
 
-        finalQuestions = validationResult.parsedQuestions || [];
+        const ocrResults = [];
+
+        // Loop over pages and run OCR Provider
+        for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+          console.log(`[PdfController] Running OCR on page ${pageNum}/${totalPages}`);
+          try {
+            const pageBuffer = await extractPageAsBuffer(pdfPath, pageNum);
+            const ocrResult = await OCRProviderAdapter.processImage(pageBuffer, 'image/jpeg', `page_${pageNum}.jpg`);
+            console.log(`[PdfController] OCR completed for page ${pageNum}/${totalPages}`);
+            ocrResults.push(ocrResult);
+            rawPageTexts.push(ocrResult.latex || ocrResult.rawText || '');
+          } catch (pageErr) {
+            console.error(`[PdfController] Page ${pageNum} failed:`, pageErr.message);
+            failedPages.push({
+              page: pageNum,
+              status: "FAILED",
+              reason: pageErr.message
+            });
+          }
+        }
+
+        // ── 3. Clean page texts & remove repeated lines ──────────────────
+        const cleanedPageTexts = removeHeadersFootersAndRepeatedLines(rawPageTexts);
+
+        const nonAnsKeyPageTexts = [];
+        const nonAnsKeyOcrResults = [];
+
+        for (let i = 0; i < cleanedPageTexts.length; i++) {
+          const text = cleanedPageTexts[i];
+          const classification = PageClassificationEngine.classifyPage(text);
+
+          if (classification.pageType === 'ANSWER_KEY_PAGE') {
+            console.log(`[PdfController] Page ${i + 1} detected as ANSWER_KEY_PAGE. Extracting answer keys.`);
+            const keys = parseAnswerKeys(text);
+            allAnswerKeys.push(...keys);
+          } else {
+            nonAnsKeyPageTexts.push(text);
+            nonAnsKeyOcrResults.push(ocrResults[i]);
+          }
+        }
+
+        // ── 4. Count expected questions from non-answer-key pages ────────
+        nonAnsKeyPageTexts.forEach(text => {
+          expectedQuestionCount += countExpectedQuestions(text);
+        });
+
+        console.log(`[PdfController] Expected questions count: ${expectedQuestionCount}`);
+
+        // ── 5. Combine non-answer-key page texts for segmentation ────────
+        if (nonAnsKeyOcrResults.length > 0) {
+          const combinedRawText = nonAnsKeyOcrResults.map(r => r.rawText || '').join('\n\n');
+          const combinedLatex = nonAnsKeyOcrResults.map(r => r.latex || r.rawText || '').join('\n\n');
+          const avgConfidence = nonAnsKeyOcrResults.reduce((sum, r) => sum + (r.confidence || 1.0), 0) / nonAnsKeyOcrResults.length;
+
+          const combinedOcrResult = {
+            rawText: combinedRawText,
+            latex: combinedLatex,
+            confidence: avgConfidence,
+            lines: nonAnsKeyOcrResults.flatMap(r => r.lines || [])
+          };
+
+          const parseResult = await OCRPipeline.runParsing(combinedOcrResult, req.file?.originalname || 'document.pdf');
+          
+          // Accumulate any answer keys found in sections
+          if (parseResult.answerKeys) {
+            allAnswerKeys.push(...parseResult.answerKeys);
+          }
+
+          const validationResult = await OCRPipeline.runValidation(
+            parseResult.parsedQuestions,
+            combinedOcrResult,
+            parseResult.pageType,
+            parseResult.sections,
+            parseResult.totalRejected,
+            null, // preprocessInfo
+            req.file?.originalname || 'document.pdf',
+            allAnswerKeys
+          );
+
+          finalQuestions = validationResult.parsedQuestions || [];
+        }
       }
 
       // Add detectionOrder and traceable questionNumbers

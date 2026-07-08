@@ -75,57 +75,153 @@ class GeminiExtractionService {
     const apiVersion = process.env.GEMINI_API_VERSION || 'v1beta';
     const apiUrl = `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:generateContent?key=${apiKey}`;
 
-    const requestBody = {
-      contents: [
-        {
-          parts: [
-            {
-              text: prompt
+    const maxAttempts = 3;
+    let attempt = 0;
+    let delay = 1000;
+
+    while (attempt < maxAttempts) {
+      const startTime = Date.now();
+      console.log(`[GeminiExtractionService] Requesting Gemini API (${model}), attempt ${attempt + 1}/${maxAttempts}...`);
+      try {
+        let contentPart;
+
+        if (mimetype === 'application/pdf') {
+          console.log(`[GeminiExtractionService] Uploading PDF via Google Files API...`);
+          const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`;
+          const uploadResponse = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: {
+              'X-Goog-Upload-Protocol': 'raw',
+              'X-Goog-Upload-Header-Content-Length': buffer.length,
+              'X-Goog-Upload-Header-Content-Type': mimetype,
+              'Content-Type': mimetype,
             },
-            {
-              inlineData: {
-                mimeType: (mimetype === 'application/octet-stream' || !mimetype) ? 'image/jpeg' : mimetype,
-                data: buffer.toString('base64')
-              }
+            body: buffer,
+          });
+
+          if (!uploadResponse.ok) {
+            const uploadErr = await uploadResponse.text();
+            throw new Error(`Google Files API upload failed: ${uploadResponse.status} - ${uploadErr}`);
+          }
+
+          const uploadResult = await uploadResponse.json();
+          const fileUri = uploadResult.file?.uri;
+          const fileName = uploadResult.file?.name;
+
+          if (!fileUri || !fileName) {
+            throw new Error('Google Files API returned invalid file upload result.');
+          }
+
+          console.log(`[GeminiExtractionService] PDF uploaded. URI: ${fileUri}. Polling status...`);
+
+          let fileState = uploadResult.file?.state;
+          const fileStatusUrl = `https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${apiKey}`;
+          let pollAttempts = 0;
+          while (fileState === 'PROCESSING' && pollAttempts < 15) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            pollAttempts++;
+            const statusResponse = await fetch(fileStatusUrl);
+            if (statusResponse.ok) {
+              const statusData = await statusResponse.json();
+              fileState = statusData.state;
+              console.log(`[GeminiExtractionService] PDF status check: ${fileState}`);
+            } else {
+              break;
             }
-          ]
+          }
+
+          if (fileState !== 'ACTIVE') {
+            throw new Error(`PDF upload failed processing with state: ${fileState}`);
+          }
+
+          contentPart = {
+            fileData: {
+              mimeType: mimetype,
+              fileUri: fileUri
+            }
+          };
+        } else {
+          contentPart = {
+            inlineData: {
+              mimeType: (mimetype === 'application/octet-stream' || !mimetype) ? 'image/jpeg' : mimetype,
+              data: buffer.toString('base64')
+            }
+          };
         }
-      ],
-      generationConfig: {
-        responseMimeType: 'application/json',
-        temperature: 0.1
+
+        const requestBody = {
+          contents: [
+            {
+              parts: [
+                {
+                  text: prompt
+                },
+                contentPart
+              ]
+            }
+          ],
+          generationConfig: {
+            responseMimeType: 'application/json',
+            temperature: 0.1
+          }
+        };
+
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestBody)
+        });
+
+        const responseTime = Date.now() - startTime;
+        console.log(`[GeminiExtractionService] Gemini API responded in ${responseTime}ms`);
+
+        if (!response.ok) {
+          const errText = await response.text();
+          console.error(`[GeminiExtractionService] API failure (status ${response.status}):`, errText);
+          
+          if ([429, 500, 503].includes(response.status) && attempt < maxAttempts - 1) {
+            attempt++;
+            console.warn(`[GeminiExtractionService] Retriable status ${response.status}. Waiting ${delay}ms before retry ${attempt + 1}/${maxAttempts}...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            delay *= 2;
+            continue;
+          }
+          throw new Error(`Gemini API returned error: ${response.statusText} (${response.status}) - ${errText}`);
+        }
+
+        const resJson = await response.json();
+        const outputText = resJson?.candidates?.[0]?.content?.parts?.[0]?.text;
+        
+        if (!outputText) {
+          console.error('[GeminiExtractionService] Empty candidate response:', JSON.stringify(resJson));
+          throw new Error('Gemini API returned an empty completion result.');
+        }
+
+        // Clean up uploaded file in background (non-blocking)
+        if (mimetype === 'application/pdf' && fileName) {
+          const deleteUrl = `https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${apiKey}`;
+          fetch(deleteUrl, { method: 'DELETE' })
+            .then(res => {
+              if (res.ok) console.log(`[GeminiExtractionService] Successfully deleted temporary PDF file: ${fileName}`);
+            })
+            .catch(e => console.warn(`[GeminiExtractionService] Failed to delete temporary PDF file: ${e.message}`));
+        }
+
+        return outputText;
+
+      } catch (err) {
+        if (attempt < maxAttempts - 1) {
+          attempt++;
+          console.warn(`[GeminiExtractionService] Error during call: ${err.message}. Waiting ${delay}ms before retry ${attempt + 1}/${maxAttempts}...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay *= 2;
+          continue;
+        }
+        throw err;
       }
-    };
-
-    const startTime = Date.now();
-    console.log(`[GeminiExtractionService] Requesting Gemini API (${model})...`);
-
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(requestBody)
-    });
-
-    const responseTime = Date.now() - startTime;
-    console.log(`[GeminiExtractionService] Gemini API responded in ${responseTime}ms`);
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error('[GeminiExtractionService] API failure:', errText);
-      throw new Error(`Gemini API returned error: ${response.statusText} (${response.status}) - ${errText}`);
     }
-
-    const resJson = await response.json();
-    const outputText = resJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-    
-    if (!outputText) {
-      console.error('[GeminiExtractionService] Empty candidate response:', JSON.stringify(resJson));
-      throw new Error('Gemini API returned an empty completion result.');
-    }
-
-    return outputText;
   }
 
   /**

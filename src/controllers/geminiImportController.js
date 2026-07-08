@@ -81,7 +81,20 @@ const createImport = async (req, res) => {
 
         console.log(`[GeminiImportController] ${engine} request started for job ${job._id}`);
         let extracted = [];
-        if (isOpenRouter) {
+        if (String(engine).toLowerCase() === 'mathpix') {
+          const { OCRPipeline } = require('../services/ocrPipeline');
+          if (sourceType === 'pdf') {
+            const MathpixPdfService = require('../services/mathpixPdfService');
+            const pdfService = new MathpixPdfService();
+            const ocrResult = await pdfService.processPdf(job.rawSourceData);
+            const parseResult = await OCRPipeline.runParsing(ocrResult, job.originalFilename);
+            extracted = parseResult.parsedQuestions || [];
+          } else {
+            const buffer = fs.readFileSync(job.rawSourceData);
+            const ocrResult = await OCRPipeline.runFromBuffer(buffer, fileMime, job.originalFilename);
+            extracted = ocrResult.parsedQuestions || [];
+          }
+        } else if (isOpenRouter) {
           const { OpenRouterExtractionService } = require('../services/openRouterExtractionService');
           if (sourceType === 'pdf') {
             extracted = await OpenRouterExtractionService.extractFromPdfPath(job.rawSourceData, parseInt(classNo), chapter);
