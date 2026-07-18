@@ -1,6 +1,7 @@
 const Exam = require('../models/examModel');
 const Question = require('../models/questionModel');
 const mongoose = require('mongoose');
+const { getRedisClient } = require('../config/redis');
 
 const normalizeExamData = async (examData = {}, session = null) => {
   const title = examData.title || `Class ${examData.classNo} ${examData.language} Test`;
@@ -146,6 +147,28 @@ const examService = {
   },
 
   getExamsForStudent: async (classNo, language, isJoint = false) => {
+    const cacheKey = `exams:student:class:${classNo}:lang:${language}:joint:${isJoint}`;
+    const redis = getRedisClient();
+    try {
+      const cachedData = await redis.get(cacheKey);
+      if (cachedData) {
+        const plainExams = JSON.parse(cachedData);
+        // Attach id helper method to questions array for Mongoose compatibility
+        plainExams.forEach(exam => {
+          if (exam.questions) {
+            exam.questions.id = function(id) {
+              if (!id) return null;
+              const idStr = id.toString();
+              return this.find(q => (q.id || q._id) && (q.id || q._id).toString() === idStr);
+            };
+          }
+        });
+        return plainExams;
+      }
+    } catch (err) {
+      console.warn('[Cache] getExamsForStudent cache read error:', err.message);
+    }
+
     let testLanguageFilter;
     if (language === 'Both') {
       testLanguageFilter = { $in: ['Bengali', 'English', 'Both'] };
@@ -180,12 +203,47 @@ const examService = {
       query.classId = classIdObj;
     }
 
-    return await Exam.find(query).sort({ createdAt: -1 });
+    const exams = await Exam.find(query).sort({ createdAt: -1 });
+
+    try {
+      const serialized = exams.map(e => e.toJSON());
+      await redis.set(cacheKey, JSON.stringify(serialized), 'EX', 30); // 30 seconds TTL
+    } catch (err) {
+      console.warn('[Cache] getExamsForStudent cache write error:', err.message);
+    }
+
+    return exams;
   },
 
   getExamById: async (id) => {
+    const cacheKey = `exam:id:${id}`;
+    const redis = getRedisClient();
+    try {
+      const cachedData = await redis.get(cacheKey);
+      if (cachedData) {
+        const examObj = JSON.parse(cachedData);
+        if (examObj.questions) {
+          examObj.questions.id = function(id) {
+            if (!id) return null;
+            const idStr = id.toString();
+            return this.find(q => (q.id || q._id) && (q.id || q._id).toString() === idStr);
+          };
+        }
+        return examObj;
+      }
+    } catch (err) {
+      console.warn('[Cache] getExamById cache read error:', err.message);
+    }
+
     const exam = await Exam.findById(id);
     if (!exam) throw new Error('Exam not found');
+
+    try {
+      await redis.set(cacheKey, JSON.stringify(exam.toJSON()), 'EX', 300); // 5 minutes TTL
+    } catch (err) {
+      console.warn('[Cache] getExamById cache write error:', err.message);
+    }
+
     return exam;
   }
 };

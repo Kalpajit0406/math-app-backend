@@ -1,5 +1,6 @@
 const Attempt = require('../models/attemptModel');
 const Exam = require('../models/examModel');
+const examService = require('./examService');
 const {
   evaluateQuestionCorrectness,
   getExamEndTime,
@@ -32,7 +33,7 @@ const attemptService = {
   startAttempt: async (userId, examId) => {
     if (!examId) throw new Error('Exam id is required');
 
-    const exam = await Exam.findById(examId);
+    const exam = await examService.getExamById(examId);
     if (!exam) throw new Error('Exam not found');
 
     const Student = require('../models/studentModel');
@@ -129,7 +130,7 @@ const attemptService = {
         return attempt;
       }
 
-      const exam = await Exam.findById(attempt.examId);
+      const exam = await examService.getExamById(attempt.examId);
       if (!exam) throw new Error('Exam not found');
 
       // Check if the exam period (attempt window or scheduled slot) is over
@@ -267,7 +268,7 @@ const attemptService = {
     submissionLocks.add(lockKey);
 
     try {
-      const exam = await Exam.findById(examId);
+      const exam = await examService.getExamById(examId);
       if (!exam) throw new Error('Exam not found');
 
       const Student = require('../models/studentModel');
