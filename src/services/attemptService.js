@@ -70,38 +70,10 @@ const attemptService = {
       attemptObj.remainingSeconds = remainingSeconds;
       return attemptObj;
     }
-
-    // Check if there are other exams active/scheduled for this class at the same time
-    const { getExamStartTime, getExamEndTime } = require('../utils/examUtils');
-    const examStart = getExamStartTime(exam);
-    const examEnd = getExamEndTime(exam);
-
-    if (examStart && examEnd) {
-      // Find all attempts of this student
-      const userAttempts = await Attempt.find({ userId }).populate('examId');
-      
-      for (const att of userAttempts) {
-        if (!att.examId || att.examId.isDeleted) {
-          continue;
-        }
-        
-        // Skip current exam
-        if (String(att.examId._id) === String(examId)) {
-          continue;
-        }
-        
-        const otherExam = att.examId;
-        const otherStart = getExamStartTime(otherExam);
-        const otherEnd = getExamEndTime(otherExam);
-        
-        if (otherStart && otherEnd) {
-          // Check if the scheduled time windows overlap
-          const overlaps = (examStart < otherEnd) && (examEnd > otherStart);
-          if (overlaps) {
-            throw new Error('You have already attended another exam scheduled at the same time. You can only attend one exam per scheduled slot.');
-          }
-        }
-      }
+    // Verify the student hasn't already completed this particular exam
+    const completedAttempt = await Attempt.findOne({ userId, examId, endTime: { $exists: true } });
+    if (completedAttempt) {
+      throw new Error('You have already completed this exam.');
     }
 
     attempt = new Attempt({ userId, examId });
