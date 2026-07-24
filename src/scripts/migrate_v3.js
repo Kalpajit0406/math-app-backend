@@ -15,7 +15,6 @@ const VerificationSession = require('../models/verificationSessionModel');
 const VerificationSessionItem = require('../models/verificationSessionItemModel');
 const OcrArchive = require('../models/ocrArchiveModel');
 const Student = require('../models/studentModel');
-const User = require('../models/userModel');
 
 // In-memory backups
 let backupAnnouncements = [];
@@ -23,7 +22,6 @@ let backupSessions = [];
 let backupSessionItems = [];
 let backupArchives = [];
 let backupStudents = [];
-let backupUsers = [];
 
 async function createBackups() {
   console.log('--- Phase 1: Creating in-memory backups ---');
@@ -40,9 +38,8 @@ async function createBackups() {
     backupArchives = [];
   }
   backupStudents = await Student.collection.find({}).toArray();
-  backupUsers = await User.collection.find({}).toArray();
 
-  console.log(`Backups completed: Announcements(${backupAnnouncements.length}), Sessions(${backupSessions.length}), SessionItems(${backupSessionItems.length}), OcrArchives(${backupArchives.length}), Students(${backupStudents.length}), Users(${backupUsers.length})`);
+  console.log(`Backups completed: Announcements(${backupAnnouncements.length}), Sessions(${backupSessions.length}), SessionItems(${backupSessionItems.length}), OcrArchives(${backupArchives.length}), Students(${backupStudents.length})`);
 }
 
 async function rollback() {
@@ -71,11 +68,6 @@ async function rollback() {
   await Student.collection.deleteMany({});
   if (backupStudents.length > 0) {
     await Student.collection.insertMany(backupStudents);
-  }
-
-  await User.collection.deleteMany({});
-  if (backupUsers.length > 0) {
-    await User.collection.insertMany(backupUsers);
   }
 
   console.log('Rollback finished successfully.');
@@ -212,25 +204,7 @@ async function migratePasswordParameters() {
     }
   );
 
-  // User updates
-  const userResult = await User.collection.updateMany(
-    { 
-      $or: [
-        { passwordAlgorithm: { $exists: false } },
-        { failedLoginAttempts: { $exists: false } },
-        { lastFailedLoginAt: { $exists: false } }
-      ]
-    },
-    {
-      $set: {
-        passwordAlgorithm: 'bcrypt',
-        failedLoginAttempts: 0,
-        lastFailedLoginAt: null
-      }
-    }
-  );
-
-  console.log(`Password parameters migration finished: Updated ${studentResult.modifiedCount} student and ${userResult.modifiedCount} user documents.`);
+  console.log(`Password parameters migration finished: Updated ${studentResult.modifiedCount} student documents.`);
 }
 
 async function run() {

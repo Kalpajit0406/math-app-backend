@@ -6,7 +6,7 @@ require('../models/chapterModel');
 const ImportJob = require('../models/importJobModel');
 const ImportItem = require('../models/importItemModel');
 const Question = require('../models/questionModel');
-const User = require('../models/userModel');
+const Student = require('../models/studentModel');
 const { ImportParserService } = require('../services/importParserService');
 const { confirmJobItems } = require('../controllers/importController');
 
@@ -53,16 +53,21 @@ async function runTest() {
   await initCache();
 
   // Setup a dummy user to associate with the job
-  let user = await User.findOne({ role: 'teacher' });
+  let user = await Student.findOne({ role: 'teacher' });
   if (!user) {
-    user = new User({
-      name: 'Test Teacher',
-      email: 'test_teacher_import@example.com',
+    user = new Student({
+      firstName: 'Test',
+      lastName: 'Teacher',
+      classId: class12._id,
+      language: 'English',
+      studentPhone: '0000000000',
+      guardianPhone: '0000000000',
       password: 'password_placeholder_hash_longer_than_forty_characters',
-      role: 'teacher'
+      role: 'teacher',
+      accountStatus: 'APPROVED'
     });
     await user.save();
-    console.log('Created test teacher user');
+    console.log('Created test teacher student profile');
   }
 
   // Clear previous test records

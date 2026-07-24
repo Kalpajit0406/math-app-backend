@@ -1,7 +1,6 @@
 const bcrypt = require('bcrypt');
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
-const User = require('../models/userModel');
 const Student = require('../models/studentModel');
 const connectDB = require('../config/db');
 
@@ -41,20 +40,6 @@ async function seedTeacher() {
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     );
     console.log('Teacher student profile upserted successfully.');
-
-    if (email) {
-      await User.findOneAndUpdate(
-        { email },
-        {
-          $set: {
-            password: hashedPassword,
-            role,
-          },
-        },
-        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
-      );
-      console.log('Teacher user profile upserted successfully.');
-    }
 
     await mongoose.connection.close();
     process.exit(0);

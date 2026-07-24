@@ -200,7 +200,7 @@ studentSchema.virtual('role')
     return 'student';
   })
   .set(function(val) {
-    if (val === 'admin') {
+    if (val === 'admin' || val === 'teacher') {
       this.accountType = 'ADMIN';
     } else if (this.accountType === 'ADMIN') {
       this.accountType = 'NORMAL';

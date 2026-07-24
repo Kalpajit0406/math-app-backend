@@ -2,7 +2,6 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 const connectDB = require('../config/db');
 const Student = require('../models/studentModel');
-const User = require('../models/userModel');
 const Exam = require('../models/examModel');
 const Attempt = require('../models/attemptModel');
 const Announcement = require('../models/announcementModel');
@@ -14,10 +13,6 @@ const ensureIndexes = async () => {
       { key: { studentPhone: 1 }, name: 'studentPhone_1', unique: true },
       { key: { role: 1, verified: 1, isRejected: 1 }, name: 'role_verified_rejected_1' },
       { key: { classNo: 1, language: 1 }, name: 'class_language_1' },
-    ]),
-    User.collection.createIndexes([
-      { key: { email: 1 }, name: 'email_1', unique: true },
-      { key: { role: 1 }, name: 'role_1' },
     ]),
     Exam.collection.createIndexes([
       { key: { createdBy: 1, createdAt: -1 }, name: 'createdBy_createdAt_1' },

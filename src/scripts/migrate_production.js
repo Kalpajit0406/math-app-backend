@@ -7,7 +7,6 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
 const connectDB = require('../config/db');
 const Student = require('../models/studentModel');
-const User = require('../models/userModel');
 const Exam = require('../models/examModel');
 const Question = require('../models/questionModel');
 const Chapter = require('../models/chapterModel');
@@ -15,17 +14,15 @@ const { resolveChapterIds } = require('../utils/chapterNormalization');
 
 // In-memory backups
 let backupStudents = [];
-let backupUsers = [];
 let backupExams = [];
 let backupQuestions = [];
 
 async function createBackups() {
   console.log('--- Phase 1: Creating in-memory backups ---');
   backupStudents = await Student.collection.find({}).toArray();
-  backupUsers = await User.collection.find({}).toArray();
   backupExams = await Exam.collection.find({}).toArray();
   backupQuestions = await Question.collection.find({}).toArray();
-  console.log(`Backups created: Students(${backupStudents.length}), Users(${backupUsers.length}), Exams(${backupExams.length}), Questions(${backupQuestions.length})`);
+  console.log(`Backups created: Students(${backupStudents.length}), Exams(${backupExams.length}), Questions(${backupQuestions.length})`);
 }
 
 async function rollback() {
@@ -35,12 +32,6 @@ async function rollback() {
   if (backupStudents.length > 0) {
     await Student.collection.insertMany(backupStudents);
   }
-  
-  await User.collection.deleteMany({});
-  if (backupUsers.length > 0) {
-    await User.collection.insertMany(backupUsers);
-  }
-  
   await Exam.collection.deleteMany({});
   if (backupExams.length > 0) {
     await Exam.collection.insertMany(backupExams);
@@ -146,41 +137,7 @@ async function migrateStudents() {
   console.log(`Students migration finished: Normalised ${modifiedCount} students.`);
 }
 
-async function migrateUsers() {
-  console.log('--- Phase 5: Migrating Users (Password Hardening) ---');
-  const users = await User.collection.find({}).toArray();
-  let modifiedCount = 0;
-  for (const u of users) {
-    const updatePayload = {};
-    const unsetPayload = {};
 
-    if (u.password !== undefined) {
-      let hash = u.password;
-      if (typeof hash === 'string' && !hash.startsWith('$2a$') && !hash.startsWith('$2b$') && !hash.startsWith('$2y$')) {
-        hash = await bcrypt.hash(hash, 10);
-      }
-      updatePayload.passwordHash = hash;
-      updatePayload.passwordChangedAt = u.passwordChangedAt || new Date();
-      unsetPayload.password = "";
-    } else if (u.passwordHash) {
-      let hash = u.passwordHash;
-      if (typeof hash === 'string' && !hash.startsWith('$2a$') && !hash.startsWith('$2b$') && !hash.startsWith('$2y$')) {
-        hash = await bcrypt.hash(hash, 10);
-        updatePayload.passwordHash = hash;
-      }
-    }
-
-    if (Object.keys(updatePayload).length > 0 || Object.keys(unsetPayload).length > 0) {
-      const updateOp = {};
-      if (Object.keys(updatePayload).length > 0) updateOp.$set = updatePayload;
-      if (Object.keys(unsetPayload).length > 0) updateOp.$unset = unsetPayload;
-      
-      await User.collection.updateOne({ _id: u._id }, updateOp);
-      modifiedCount++;
-    }
-  }
-  console.log(`Users migration finished: Normalised ${modifiedCount} users.`);
-}
 
 async function run() {
   try {
@@ -190,7 +147,6 @@ async function run() {
     await migrateQuestions();
     await migrateExams();
     await migrateStudents();
-    await migrateUsers();
     
     console.log('--- Phase 6: Validation ---');
     // Ensure all students have passwordHash, no password field, fingerprint fields set
