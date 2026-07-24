@@ -153,7 +153,7 @@ const attemptService = {
           exam.marksPerQuestion || 1.0,
           exam.negativeMarking || 0.0
         );
-        score = evaluationSummary.correctQuestions;
+        score = evaluationSummary.marksObtained;
         marksObtained = evaluationSummary.marksObtained;
       }
 
@@ -171,7 +171,7 @@ const attemptService = {
       
       const savedAttempt = await attempt.save();
 
-      if (isExamEnded) {
+      if (isExamEnded && evaluationSummary) {
         try {
           const Student = require('../models/studentModel');
           const student = await Student.findById(userId);
@@ -180,7 +180,7 @@ const attemptService = {
               student.studentPhone,
               attempt._id.toString(),
               'exam',
-              score,
+              evaluationSummary.correctQuestions,
               exam.questions.length
             );
           }
@@ -311,7 +311,7 @@ const attemptService = {
           exam.marksPerQuestion || 1.0,
           exam.negativeMarking || 0.0
         );
-        score = evaluationSummary.correctQuestions;
+        score = evaluationSummary.marksObtained;
         marksObtained = evaluationSummary.marksObtained;
       }
 
@@ -350,7 +350,7 @@ const attemptService = {
         savedAttempt = await attempt.save();
       }
 
-      if (isExamEnded) {
+      if (isExamEnded && evaluationSummary) {
         try {
           if (student && student.studentPhone) {
             const totalQ = exam ? exam.questions.length : savedAttempt.responses.length;
@@ -358,7 +358,7 @@ const attemptService = {
               student.studentPhone,
               savedAttempt._id.toString(),
               'exam',
-              score,
+              evaluationSummary.correctQuestions,
               totalQ
             );
           }
