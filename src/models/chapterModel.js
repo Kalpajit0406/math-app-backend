@@ -3,7 +3,7 @@ const { normalizeChapterName } = require('../utils/chapterNormalization');
 
 const chapterSchema = new mongoose.Schema({
   classId: {
-    type: mongoose.Schema.Types.ObjectId,
+    type: mongoose.Schema.Types.Mixed,
     ref: 'Class',
     required: true,
     index: true,
