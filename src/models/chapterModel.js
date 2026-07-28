@@ -46,10 +46,17 @@ chapterSchema.index(
   { unique: true, partialFilterExpression: { isDeleted: false } }
 );
 
-// Auto-populate normalizedChapterName before validation
+// Auto-populate normalizedChapterName and normalize classId to ObjectId before validation
 chapterSchema.pre('validate', function(next) {
   if (this.chapterName) {
     this.normalizedChapterName = normalizeChapterName(this.chapterName);
+  }
+  if (this.classId && !mongoose.Types.ObjectId.isValid(this.classId)) {
+    const { getClassIdFromNo } = require('../utils/classCache');
+    const objId = getClassIdFromNo(this.classId);
+    if (objId) {
+      this.classId = objId;
+    }
   }
   if (typeof next === 'function') {
     next();
