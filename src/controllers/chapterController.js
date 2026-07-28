@@ -49,28 +49,10 @@ const getChapters = async (req, res) => {
       countMap[c._id.toString()] = c.count;
     });
     
-    const rawData = chapters.map(c => {
+    const data = chapters.map(c => {
       const json = c.toJSON();
       json.questionCount = countMap[c._id.toString()] || 0;
       return json;
-    });
-
-    // Roll up subchapter question counts into parent chapters (e.g. '11: Matrices' into '11')
-    const data = rawData.map(c => {
-      const cName = c.chapterName ? String(c.chapterName).trim() : '';
-      const childSum = rawData
-        .filter(sub => {
-          if (!sub.chapterName || sub._id === c._id) return false;
-          const subName = String(sub.chapterName).trim();
-          const subParent = sub.parentChapter ? String(sub.parentChapter).trim() : '';
-          return subParent === cName || subName.startsWith(cName + ':');
-        })
-        .reduce((sum, sub) => sum + (sub.questionCount || 0), 0);
-
-      return {
-        ...c,
-        questionCount: (c.questionCount || 0) + childSum,
-      };
     });
 
     res.json({
