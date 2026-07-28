@@ -32,7 +32,10 @@ const getExams = async (req, res) => {
       if (!student) {
         return res.status(404).json({ success: false, message: 'Student not found' });
       }
-      exams = await examService.getExamsForStudent(student.classNo, student.language, !!student.isJoint);
+      const { getClassNoFromId } = require('../utils/classCache');
+      const classNo = student.classNo || getClassNoFromId(student.classId) || 10;
+      const isJoint = student.accountType === 'JOINT' || student.accountType === 'JOINT_ENTRANCE' || student.targetExam === 'Joint Entrance' || student.targetExam === 'JEE' || !!student.isJoint;
+      exams = await examService.getExamsForStudent(classNo, student.language || 'Both', isJoint);
       // Strip correct answers for security
       exams = exams.map(exam => {
         const examObj = exam.toObject ? exam.toObject() : exam;
