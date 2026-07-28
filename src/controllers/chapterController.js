@@ -36,9 +36,28 @@ const getChapters = async (req, res) => {
 
     filter.isDeleted = { $ne: true };
     const chapters = await Chapter.find(filter).sort({ classId: 1, chapterName: 1 });
+    
+    // Aggregate question counts for all returned chapters to avoid N+1 queries
+    const chapterIds = chapters.map(c => c._id);
+    const counts = await Question.aggregate([
+      { $match: { chapterId: { $in: chapterIds } } },
+      { $group: { _id: '$chapterId', count: { $sum: 1 } } }
+    ]);
+    
+    const countMap = {};
+    counts.forEach(c => {
+      countMap[c._id.toString()] = c.count;
+    });
+    
+    const data = chapters.map(c => {
+      const json = c.toJSON();
+      json.questionCount = countMap[c._id.toString()] || 0;
+      return json;
+    });
+
     res.json({
       success: true,
-      data: chapters
+      data
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
