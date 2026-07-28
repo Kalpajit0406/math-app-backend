@@ -16,6 +16,8 @@ const createTestConfig = asyncHandler(async (req, res) => {
     timePQ,
     negativeMarksPQ,
     chapters,
+    chapterDistribution,
+    isRandomDistribution,
   } = req.body;
 
   // Basic validation
@@ -43,6 +45,8 @@ const createTestConfig = asyncHandler(async (req, res) => {
     timePQ,
     negativeMarksPQ,
     chapters,
+    chapterDistribution: Array.isArray(chapterDistribution) ? chapterDistribution : [],
+    isRandomDistribution: isRandomDistribution === true,
   });
 
   const savedTest = await newTest.save();
@@ -83,7 +87,9 @@ const getAllStudentTests = asyncHandler(async (req, res) => {
     marksPQ: t.marksPQ,
     timePQ: t.timePQ,
     negativeMarksPQ: t.negativeMarksPQ,
-    chapters: t.chapters || []
+    chapters: t.chapters || [],
+    chapterDistribution: t.chapterDistribution || [],
+    isRandomDistribution: t.isRandomDistribution || false,
   }));
   return res.status(200).json(sanitized);
 });
@@ -128,7 +134,9 @@ const getTestsByClassAndLanguage = asyncHandler(async (req, res) => {
     marksPQ: t.marksPQ,
     timePQ: t.timePQ,
     negativeMarksPQ: t.negativeMarksPQ,
-    chapters: t.chapters || []
+    chapters: t.chapters || [],
+    chapterDistribution: t.chapterDistribution || [],
+    isRandomDistribution: t.isRandomDistribution || false,
   }));
 
   return res.status(200).json(sanitized);

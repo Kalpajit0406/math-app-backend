@@ -44,6 +44,11 @@ const testConfigSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Chapter',
     }],
+    chapterDistribution: [{
+      chapterName: { type: String },
+      count: { type: Number, min: 0 },
+    }],
+    isRandomDistribution: { type: Boolean, default: false },
     isDeleted: { type: Boolean, default: false, index: true },
     deletedAt: { type: Date },
     deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' }
