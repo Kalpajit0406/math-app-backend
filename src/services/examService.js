@@ -161,7 +161,9 @@ const examService = {
   },
 
   getExamsForStudent: async (classNo, language, isJoint = false) => {
-    const cacheKey = `exams:student:class:${classNo}:lang:${language}:joint:${isJoint}`;
+    // Cache key uses class+joint only — language no longer restricts which exams a student sees.
+    // All students in the same class see all exams for that class.
+    const cacheKey = `exams:student:class:${classNo}:joint:${isJoint}`;
     const redis = getRedisClient();
     try {
       const cachedData = await redis.get(cacheKey);
@@ -183,16 +185,12 @@ const examService = {
       console.warn('[Cache] getExamsForStudent cache read error:', err.message);
     }
 
-    let testLanguageFilter;
-    if (language === 'Both') {
-      testLanguageFilter = { $in: ['Bengali', 'English', 'Both'] };
-    } else {
-      testLanguageFilter = { $in: [language, 'Both'] };
-    }
-    
-    const query = {
-      language: testLanguageFilter,
-    };
+    // NOTE: We intentionally do NOT filter by language here.
+    // The exam's `language` field indicates which question medium was sampled,
+    // not which students are eligible to see it. ALL students in the target class
+    // should see ALL scheduled exams, regardless of their language preference.
+    // This fixes the bug where Bengali-language students couldn't see English-medium exams.
+    const query = {};
 
     const { getClassIdFromNo } = require('../utils/classCache');
     const classIdObj = getClassIdFromNo(classNo);
