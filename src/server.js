@@ -170,6 +170,20 @@ app.get('/api/v1/admin/ocr/health', (req, res) => {
   });
 });
 
+// App version & forced update endpoint for student app
+app.get('/api/v1/app-version', (req, res) => {
+  res.json({
+    success: true,
+    latestVersion: process.env.LATEST_APP_VERSION || '1.2.1',
+    latestBuildNumber: parseInt(process.env.LATEST_APP_BUILD || '121', 10),
+    minRequiredVersion: process.env.MIN_REQUIRED_APP_VERSION || '1.2.1',
+    minRequiredBuildNumber: parseInt(process.env.MIN_REQUIRED_APP_BUILD || '121', 10),
+    forceUpdate: process.env.FORCE_APP_UPDATE === 'true',
+    updateUrl: process.env.APP_UPDATE_URL || 'https://play.google.com/store/apps/details?id=in.mathswithsd.app',
+    releaseNotes: process.env.APP_RELEASE_NOTES || 'Includes mandatory performance updates and security enhancements.'
+  });
+});
+
 // Expose a top-level /health for simpler probes and monitoring systems
 app.use('/health', healthRoutes);
 app.get('/health', (req, res) => {
