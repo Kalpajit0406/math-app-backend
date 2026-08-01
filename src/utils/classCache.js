@@ -6,7 +6,12 @@ let isInitialized = false;
 
 async function initCache() {
   try {
-    const Class = mongoose.model('Class');
+    let Class;
+    try {
+      Class = mongoose.model('Class');
+    } catch {
+      Class = require('../models/classModel');
+    }
     const classes = await Class.find({}).lean();
     classByIdMap = {};
     classByNoMap = {};

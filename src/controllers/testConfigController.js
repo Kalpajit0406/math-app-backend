@@ -65,6 +65,20 @@ const createTestConfig = asyncHandler(async (req, res) => {
     }
   });
 
+  // Clear student exams cache so new test config shows up instantly
+  try {
+    const { getRedisClient } = require('../config/redis');
+    const redis = getRedisClient();
+    if (redis && typeof redis.keys === 'function') {
+      const keys = await redis.keys('exams:student:*');
+      if (keys && keys.length > 0) {
+        await redis.del(...keys);
+      }
+    }
+  } catch (cacheErr) {
+    console.warn('[Cache] Error clearing student exams cache on createTestConfig:', cacheErr.message);
+  }
+
   return res.status(201).json({
     success: true,
     message: "Test configuration saved",

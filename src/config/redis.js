@@ -43,9 +43,21 @@ class MockRedis {
     return this.store.get(key) || null;
   }
 
-  async del(key) {
-    this.store.delete(key);
-    return 1;
+  async del(...keys) {
+    let count = 0;
+    const flatKeys = keys.flat();
+    for (const key of flatKeys) {
+      if (this.store.delete(key)) count++;
+    }
+    return count;
+  }
+
+  async keys(pattern) {
+    if (!pattern || pattern === '*') {
+      return Array.from(this.store.keys());
+    }
+    const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+    return Array.from(this.store.keys()).filter(k => regex.test(k));
   }
 
   async hset(key, field, value) {

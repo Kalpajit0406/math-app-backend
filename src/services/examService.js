@@ -135,9 +135,11 @@ const examService = {
       // Clear student exams cache so new exam shows up instantly
       try {
         const redis = getRedisClient();
-        const keys = await redis.keys('exams:student:*');
-        if (keys && keys.length > 0) {
-          await redis.del(...keys);
+        if (redis && typeof redis.keys === 'function') {
+          const keys = await redis.keys('exams:student:*');
+          if (keys && keys.length > 0) {
+            await redis.del(...keys);
+          }
         }
       } catch (cacheErr) {
         console.warn('[Cache] Error clearing student exams cache on createExam:', cacheErr.message);
