@@ -3,16 +3,106 @@ const jwt = require('jsonwebtoken');
 const Attempt = require('../models/attemptModel');
 const Exam = require('../models/examModel');
 const attemptService = require('./attemptService');
+const examService = require('./examService');
 
 // Map of attemptId -> session state
-// Session state: { ws, userId, examId, startTime, timeRemaining, timer, reconnectTimer, lastHeartbeat }
+// Session state: { ws, userId, examId, startTime, timeRemaining, lastHeartbeat, reconnectTimer, pendingAnswers, lastFlush }
 const activeSessions = new Map();
+
+let globalTickTimer = null;
+
+function startGlobalTick() {
+  if (globalTickTimer) return;
+  globalTickTimer = setInterval(async () => {
+    const now = Date.now();
+    const expiredAttemptIds = [];
+
+    for (const [attemptId, session] of activeSessions.entries()) {
+      session.timeRemaining--;
+
+      // Periodic answer flush every 15 seconds
+      if (session.pendingAnswers && session.pendingAnswers.size > 0) {
+        if (!session.lastFlush || (now - session.lastFlush) >= 15000) {
+          session.lastFlush = now;
+          flushSessionAnswers(attemptId, session).catch(err => {
+            console.error(`[WS Global Tick Flush Error] ${attemptId}`, err);
+          });
+        }
+      }
+
+      if (session.timeRemaining <= 0) {
+        expiredAttemptIds.push(attemptId);
+      }
+    }
+
+    for (const attemptId of expiredAttemptIds) {
+      console.log(`[WS Global Timer Expired] Attempt: ${attemptId}`);
+      await submitOnTimeout(attemptId, '⏰ Exam time has expired.');
+    }
+  }, 1000);
+}
+
+async function flushSessionAnswers(attemptId, session) {
+  if (!session || !session.pendingAnswers || session.pendingAnswers.size === 0) return;
+
+  const answersToFlush = new Map(session.pendingAnswers);
+  session.pendingAnswers.clear();
+
+  try {
+    const attempt = await Attempt.findById(attemptId);
+    if (!attempt || attempt.endTime) return;
+
+    let modified = false;
+    for (const [qIdStr, ansVal] of answersToFlush.entries()) {
+      const idx = attempt.responses.findIndex(r => String(r.questionId) === qIdStr);
+      if (idx !== -1) {
+        if (attempt.responses[idx].userAnswer !== ansVal) {
+          attempt.responses[idx].userAnswer = ansVal;
+          modified = true;
+        }
+      } else {
+        attempt.responses.push({
+          questionId: qIdStr,
+          userAnswer: ansVal
+        });
+        modified = true;
+      }
+    }
+    if (modified) {
+      await attempt.save();
+    }
+  } catch (err) {
+    console.error(`[WS Flush Answers Error] Attempt: ${attemptId}`, err.message);
+    // Put failed answers back into pending map if session is still alive
+    if (session && session.pendingAnswers) {
+      for (const [qIdStr, ansVal] of answersToFlush.entries()) {
+        if (!session.pendingAnswers.has(qIdStr)) {
+          session.pendingAnswers.set(qIdStr, ansVal);
+        }
+      }
+    }
+  }
+}
+
+async function flushAllPendingAnswers() {
+  console.log(`[WS] Flushing pending answers for ${activeSessions.size} active sessions...`);
+  const promises = [];
+  for (const [attemptId, session] of activeSessions.entries()) {
+    if (session.pendingAnswers && session.pendingAnswers.size > 0) {
+      promises.push(flushSessionAnswers(attemptId, session));
+    }
+  }
+  await Promise.all(promises);
+  console.log('[WS] All pending answers flushed.');
+}
 
 function initExamWebSocket(server) {
   const wss = new ws.Server({ 
     noServer: true,
     path: '/api/v1/exam-ws' 
   });
+
+  startGlobalTick();
 
   // Handle upgrade request manually to support query params and JWT auth
   server.on('upgrade', async (request, socket, head) => {
@@ -68,71 +158,29 @@ function initExamWebSocket(server) {
       if (oldSession.reconnectTimer) {
         clearTimeout(oldSession.reconnectTimer);
       }
+      if (oldSession.pendingAnswers && oldSession.pendingAnswers.size > 0) {
+        await flushSessionAnswers(attemptId, oldSession);
+      }
       try {
         oldSession.ws.close();
       } catch (_) {}
-    }
-
-    const exam = await Exam.findById(examId);
-    if (!exam) {
-      wsConn.close(1011, 'Exam not found');
-      return;
-    }
-
-    const attempt = await Attempt.findById(attemptId);
-    if (!attempt || attempt.endTime) {
-      wsConn.close(1008, 'Exam session already finished');
-      return;
-    }
-
-    // Calculate initial remaining seconds using server time
-    const elapsedMs = Date.now() - new Date(attempt.startTime).getTime();
-    const durationMs = exam.duration * 60 * 1000;
-    const remainingSeconds = Math.max(0, Math.ceil((durationMs - elapsedMs) / 1000));
-
-    if (remainingSeconds <= 0) {
-      // Auto submit immediately if expired
-      await attemptService.submitAttempt(userId, attemptId, [], {
-        isAutoSubmitted: true,
-        autoSubmitReason: '⏰ Exam time has expired.'
-      });
-      wsConn.close(1008, 'Exam time has expired');
-      return;
     }
 
     const session = {
       ws: wsConn,
       userId,
       examId,
-      startTime: attempt.startTime,
-      timeRemaining: remainingSeconds,
+      startTime: new Date(),
+      timeRemaining: 0,
       lastHeartbeat: Date.now(),
       reconnectTimer: null,
-      timer: null
+      pendingAnswers: new Map(),
+      lastFlush: Date.now()
     };
 
     activeSessions.set(attemptId, session);
 
-    // Setup active countdown timer on the server side (Server authority)
-    session.timer = setInterval(async () => {
-      session.timeRemaining--;
-      if (session.timeRemaining <= 0) {
-        clearInterval(session.timer);
-        console.log(`[WS Server Timer Expired] Attempt: ${attemptId}`);
-        await submitOnTimeout(attemptId, '⏰ Exam time has expired.');
-      }
-    }, 1000);
-
-    // Send initialization ack
-    sendJson(wsConn, {
-      event: 'init_ack',
-      data: {
-        attemptId,
-        examId,
-        remainingSeconds: session.timeRemaining
-      }
-    });
-
+    // Register message/close/error handlers IMMEDIATELY to avoid dropping early frames
     wsConn.on('message', async (rawMessage) => {
       try {
         const message = JSON.parse(rawMessage);
@@ -151,6 +199,64 @@ function initExamWebSocket(server) {
     wsConn.on('error', (err) => {
       console.error(`[WS Connection Error] Attempt: ${attemptId}`, err);
       handleDisconnect(attemptId);
+    });
+
+    // Use Redis-cached exam lookup and Attempt lookup in parallel
+    const [exam, attempt] = await Promise.all([
+      examService.getExamById(examId),
+      Attempt.findById(attemptId)
+    ]);
+
+    if (!exam) {
+      wsConn.close(1011, 'Exam not found');
+      activeSessions.delete(attemptId);
+      return;
+    }
+
+    if (!attempt || attempt.endTime) {
+      wsConn.close(1008, 'Exam session already finished');
+      activeSessions.delete(attemptId);
+      return;
+    }
+
+    // Calculate initial remaining seconds — cap against BOTH the per-student
+    // duration elapsed AND the absolute scheduled exam end time (same logic as
+    // startAttempt) so the WS timer never gives a student more time than the
+    // exam window allows.
+    const { getExamEndTime } = require('../utils/examUtils');
+    const elapsedMs = Date.now() - new Date(attempt.startTime).getTime();
+    const durationMs = exam.duration * 60 * 1000;
+    let remainingSeconds = Math.max(0, Math.ceil((durationMs - elapsedMs) / 1000));
+
+    const examEndTime = getExamEndTime(exam);
+    if (examEndTime) {
+      const now2 = new Date();
+      const secondsUntilAbsoluteEnd = Math.max(0, Math.ceil((examEndTime.getTime() - now2.getTime()) / 1000));
+      remainingSeconds = Math.min(remainingSeconds, secondsUntilAbsoluteEnd);
+    }
+
+    if (remainingSeconds <= 0) {
+      // Auto submit immediately if expired
+      await attemptService.submitAttempt(userId, attemptId, [], {
+        isAutoSubmitted: true,
+        autoSubmitReason: '⏰ Exam time has expired.'
+      });
+      wsConn.close(1008, 'Exam time has expired');
+      activeSessions.delete(attemptId);
+      return;
+    }
+
+    session.startTime = attempt.startTime;
+    session.timeRemaining = remainingSeconds;
+
+    // Send initialization ack
+    sendJson(wsConn, {
+      event: 'init_ack',
+      data: {
+        attemptId,
+        examId,
+        remainingSeconds: session.timeRemaining
+      }
     });
   });
 }
@@ -172,47 +278,34 @@ async function handleClientMessage(session, attemptId, message) {
       break;
 
     case 'submit_answer':
-      // Real-time dynamic response validation & save (continuous syncing)
+      // Buffer answer in memory for batch flush
       if (data && data.questionId) {
-        try {
-          const attempt = await Attempt.findById(attemptId);
-          if (attempt && !attempt.endTime) {
-            // Find existing response or add new
-            const idx = attempt.responses.findIndex(r => String(r.questionId) === String(data.questionId));
-            if (idx !== -1) {
-              attempt.responses[idx].userAnswer = data.answer;
-            } else {
-              attempt.responses.push({
-                questionId: data.questionId,
-                userAnswer: data.answer
-              });
-            }
-            await attempt.save();
-            sendJson(session.ws, {
-              event: 'answer_sync_ack',
-              data: { questionId: data.questionId, success: true }
-            });
-          }
-        } catch (e) {
-          console.error('[WS Sync Answer Error]', e);
-        }
+        session.pendingAnswers.set(String(data.questionId), data.answer !== undefined ? data.answer : '');
+        sendJson(session.ws, {
+          event: 'answer_sync_ack',
+          data: { questionId: data.questionId, success: true }
+        });
       }
       break;
 
     case 'get_question':
-      // Dynamic question streaming (does not send correct answers to client)
+      // Dynamic question streaming (uses Redis-cached exam model)
       if (data && data.questionId) {
         try {
-          const exam = await Exam.findById(session.examId);
+          const exam = await examService.getExamById(session.examId);
           if (exam) {
-            const question = exam.questions.id(data.questionId);
+            let question = null;
+            if (exam.questions && Array.isArray(exam.questions)) {
+              const qIdStr = String(data.questionId);
+              question = exam.questions.find(q => (q._id && String(q._id) === qIdStr) || (q.id && String(q.id) === qIdStr));
+            }
             if (question) {
               sendJson(session.ws, {
                 event: 'question_data',
                 data: {
-                  id: question._id,
+                  id: question._id || question.id,
                   type: question.type,
-                  questionText: question.questionText,
+                  questionText: question.questionText || question.question,
                   options: question.options,
                   diagram: question.diagram
                 }
@@ -252,8 +345,11 @@ async function handleClientMessage(session, attemptId, message) {
             // If severity is critical, instantly invalidate and terminate exam
             if (severity === 'critical') {
               console.error(`[WS Invalidation Action] Terminating due to critical violation: ${type}`);
-              clearInterval(session.timer);
               
+              if (session.pendingAnswers && session.pendingAnswers.size > 0) {
+                await flushSessionAnswers(attemptId, session);
+              }
+
               await attemptService.submitAttempt(session.userId, attemptId, [], {
                 violations: attempt.violations,
                 isAutoSubmitted: true,
@@ -290,9 +386,11 @@ function handleDisconnect(attemptId) {
   const session = activeSessions.get(attemptId);
   if (!session) return;
 
-  // Clear running tick timer
-  if (session.timer) {
-    clearInterval(session.timer);
+  // Flush pending answers on disconnect asynchronously
+  if (session.pendingAnswers && session.pendingAnswers.size > 0) {
+    flushSessionAnswers(attemptId, session).catch(err => {
+      console.error(`[WS Disconnect Flush Error] Attempt: ${attemptId}`, err);
+    });
   }
 
   // Start 15-second reconnect countdown
@@ -308,6 +406,9 @@ async function submitOnTimeout(attemptId, reason) {
   if (!session) return;
 
   try {
+    if (session.pendingAnswers && session.pendingAnswers.size > 0) {
+      await flushSessionAnswers(attemptId, session);
+    }
     const attempt = await Attempt.findById(attemptId);
     if (attempt && !attempt.endTime) {
       attempt.violations.push({
@@ -339,4 +440,4 @@ function sendJson(wsConn, obj) {
   }
 }
 
-module.exports = { initExamWebSocket };
+module.exports = { initExamWebSocket, flushAllPendingAnswers };
