@@ -33,11 +33,15 @@ const attemptService = {
   startAttempt: async (userId, examId) => {
     if (!examId) throw new Error('Exam id is required');
 
-    const exam = await examService.getExamById(examId);
-    if (!exam) throw new Error('Exam not found');
-
     const Student = require('../models/studentModel');
-    const student = await Student.findById(userId);
+    const [exam, student, existingAttempt, completedAttempt] = await Promise.all([
+      examService.getExamById(examId),
+      Student.findById(userId),
+      Attempt.findOne({ userId, examId, endTime: { $exists: false } }),
+      Attempt.findOne({ userId, examId, endTime: { $exists: true } }),
+    ]);
+
+    if (!exam) throw new Error('Exam not found');
     if (!student) throw new Error('Student not found');
 
     if (exam.classNo === 13) {
@@ -53,11 +57,21 @@ const attemptService = {
       }
     }
 
-    let attempt = await Attempt.findOne({ userId, examId, endTime: { $exists: false } });
+    let attempt = existingAttempt;
     if (attempt) {
-      // Calculate remaining seconds using server time
+      // Calculate remaining seconds from when THIS student started (relative)
       const elapsedMs = Date.now() - new Date(attempt.startTime).getTime();
-      const remainingSeconds = Math.max(0, Math.ceil((exam.duration * 60 * 1000 - elapsedMs) / 1000));
+      let remainingSeconds = Math.max(0, Math.ceil((exam.duration * 60 * 1000 - elapsedMs) / 1000));
+
+      // Also cap against the absolute scheduled exam end time so a student who
+      // resumes after the window has partially elapsed cannot get more time than
+      // the exam slot allows.
+      const examEndTime = getExamEndTime(exam);
+      if (examEndTime) {
+        const now = new Date();
+        const secondsUntilAbsoluteEnd = Math.max(0, Math.ceil((examEndTime.getTime() - now.getTime()) / 1000));
+        remainingSeconds = Math.min(remainingSeconds, secondsUntilAbsoluteEnd);
+      }
       
       // If time has completely expired, auto-submit the attempt
       if (remainingSeconds <= 0) {
@@ -71,7 +85,6 @@ const attemptService = {
       return attemptObj;
     }
     // Verify the student hasn't already completed this particular exam
-    const completedAttempt = await Attempt.findOne({ userId, examId, endTime: { $exists: true } });
     if (completedAttempt) {
       throw new Error('You have already completed this exam.');
     }
@@ -79,7 +92,27 @@ const attemptService = {
     attempt = new Attempt({ userId, examId });
     const savedAttempt = await attempt.save();
     const attemptObj = savedAttempt.toObject();
-    attemptObj.remainingSeconds = exam.duration * 60;
+
+    // Calculate remaining seconds for a FRESH attempt.
+    // Use the LESSER of:
+    //   a) full exam duration (if student starts exactly on time)
+    //   b) time remaining until the absolute scheduled end time (prevents late
+    //      joiners from getting more time than the exam window allows).
+    const examEndTime = getExamEndTime(exam);
+    let remainingSeconds = exam.duration * 60;
+    if (examEndTime) {
+      const now = new Date();
+      const secondsUntilEnd = Math.ceil((examEndTime.getTime() - now.getTime()) / 1000);
+      if (secondsUntilEnd <= 0) {
+        // Exam window has already closed — reject the start attempt.
+        // Clean up the just-created attempt record.
+        await attempt.deleteOne();
+        throw new Error('The exam window has already closed. You cannot start this exam.');
+      }
+      remainingSeconds = Math.min(remainingSeconds, secondsUntilEnd);
+    }
+
+    attemptObj.remainingSeconds = remainingSeconds;
     return attemptObj;
   },
 
