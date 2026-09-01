@@ -42,9 +42,13 @@ class MathpixService {
       console.log(`[MathpixService] Processing buffer: ${filename} (${(fileLength / 1024).toFixed(1)} KB, ${mimetype})`);
     }
 
-    // Request json format too — gives us line bounding boxes for column detection
+    // include_line_data (NOT a 'formats' entry — formats:['json'] does not exist
+    // in the Mathpix /v3/text API and returns nothing) requests per-line bounding
+    // boxes, which downstream layout analysis needs for reliable 2-column
+    // detection instead of guessing from question-number sequences.
     const optionsJson = JSON.stringify({
-      formats: ['text', 'html', 'json'],
+      formats: ['text', 'html'],
+      include_line_data: true,
       math_inline_delimiters: ['$', '$'],
       rm_spaces: true,
     });
@@ -127,11 +131,16 @@ class MathpixService {
         const rawText = result.text || strippedHtml;
         const latex = result.latex_styled || result.text || '';
 
-        // Pass full json result through for geometry-aware column detection
-        const jsonLines = result.json?.pages?.[0]?.lines || result.lines || null;
+        // Pass line-level bounding-box data through for geometry-aware column
+        // detection. `line_data` is the field Mathpix actually populates when
+        // include_line_data:true is set; the other two are kept as fallbacks
+        // in case of API/version differences.
+        const lines = result.line_data || result.json?.pages?.[0]?.lines || result.lines || null;
 
-        console.log(`[MathpixService] Success — rawText: ${rawText.length} chars, latex: ${latex.length} chars, jsonLines: ${jsonLines?.length ?? 0}`);
-        return { rawText, latex, confidence: result.confidence ?? null, jsonLines, fullResult: result };
+        console.log(`[MathpixService] Success — rawText: ${rawText.length} chars, latex: ${latex.length} chars, lines: ${lines?.length ?? 0}`);
+        // `lines` is what PageLayoutAnalyzer reads; `jsonLines` kept as an
+        // alias for backward compatibility with any other caller.
+        return { rawText, latex, confidence: result.confidence ?? null, lines, jsonLines: lines, fullResult: result };
 
       } catch (err) {
         if (err.name === 'AbortError') {

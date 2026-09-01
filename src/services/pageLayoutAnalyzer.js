@@ -102,6 +102,16 @@ function buildLineObj(raw, idx) {
     y = box.top  ?? box.y ?? 0;
     w = box.width ?? box.w ?? 0;
     h = box.height ?? box.h ?? 0;
+  } else if (Array.isArray(raw.cnt) && raw.cnt.length > 0) {
+    // Mathpix's include_line_data / lines_json format gives a 4-point
+    // contour polygon ("cnt": [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]) instead of
+    // an axis-aligned box — derive the bounding box from its corner points.
+    const xs = raw.cnt.map(p => p[0]);
+    const ys = raw.cnt.map(p => p[1]);
+    x = Math.min(...xs);
+    y = Math.min(...ys);
+    w = Math.max(...xs) - x;
+    h = Math.max(...ys) - y;
   }
   return { id: idx, text, x, y, w, h, right: x + w, bottom: y + h, midX: x + w / 2, midY: y + h / 2 };
 }
@@ -206,7 +216,7 @@ class PageLayoutAnalyzer {
       return this._analyzeTextOnly(source);
     }
 
-    const rawLines = source?.ocr?.lines || source?.lines;
+    const rawLines = source?.ocr?.lines || source?.lines || source?.jsonLines || source?.line_data;
     const rawText  = source?.latex || source?.rawText || source?.text || '';
 
     if (!Array.isArray(rawLines) || rawLines.length === 0) {
@@ -348,69 +358,120 @@ class PageLayoutAnalyzer {
     };
   }
 
+  // Question-number header pattern shared by detection + reconstruction.
+  static _Q_NUM_RE = /^(?:[›»>)]\)?|(?:Question|Q\.?)\s*)?\s*(\d{1,3})[.):\s]/;
+
   /**
-   * Detect if a text-only page is likely 2-column by analysing
-   * question number sequences. 2-column OCR produces large forward jumps
-   * in question numbers (left col Q1-9 interleaved with right col Q10-20).
+   * Locate all question-header lines and figure out, if possible, how to
+   * split them into a left-column run and a right-column run. Two distinct
+   * OCR failure shapes are handled:
+   *
+   *   1. STRICT ALTERNATION — the OCR reads the page row-by-row across the
+   *      full width, so headers from a same-height left/right column pair
+   *      land back-to-back: 37,45,38,46,39,47,... Splitting by even/odd
+   *      position in the header list recovers both columns natural order.
+   *   2. SINGLE CLEAN BREAK — the OCR emits the whole left column as one
+   *      block, then the whole right column as one block: 37,38,...,44,
+   *      45,46,...,52. There is exactly one large forward jump.
+   *
+   * Returns null when neither shape is detected (page is genuinely 1-column,
+   * or the pattern is too irregular to safely reorder) — callers must then
+   * leave the text untouched rather than risk scrambling it further.
    */
-  static _detectTextColumnLayout(lines) {
-    const Q_NUM_RE = /^(?:[›»>)\u203a]\)?|(?:Question|Q\.?)\s*)?\s*(\d{1,3})[.):\s]/;
-    const nums = [];
-    for (const line of lines) {
-      const m = line.trim().match(Q_NUM_RE);
+  static _findColumnSplit(lines) {
+    const headers = [];
+    lines.forEach((line, idx) => {
+      const m = line.trim().match(this._Q_NUM_RE);
       if (m) {
         const n = parseInt(m[1], 10);
-        if (n >= 1 && n <= 100) nums.push(n);
+        if (n >= 1 && n <= 500) headers.push({ idx, num: n });
+      }
+    });
+
+    if (headers.length < 4) return null;
+
+    // A run is "monotonic" if it only increases, allowing exactly the kind
+    // of restart-to-1 that marks a new section (e.g. "Fill in the Blanks").
+    const isMonotonic = (arr) => arr.every((h, i) => i === 0 || h.num > arr[i - 1].num || h.num === 1);
+
+    // If the page is ALREADY in correct reading order (a plain increasing
+    // run, or a single legitimate restart-to-1 for a new section), there is
+    // nothing to fix — do NOT reorder it. This matters because any sequence
+    // that is already monotonic trivially "passes" an even/odd split too
+    // (sub-sequences of a monotonic sequence are always monotonic), so we
+    // must rule this out first or we'd scramble perfectly correct text.
+    if (isMonotonic(headers)) return null;
+
+    const evens = headers.filter((_, i) => i % 2 === 0);
+    const odds  = headers.filter((_, i) => i % 2 === 1);
+    if (odds.length >= 2 && isMonotonic(evens) && isMonotonic(odds)) {
+      return { headers, colOfHeaderIdx: headers.map((_, i) => i % 2), shape: 'alternating' };
+    }
+
+    // SINGLE REVERSED BLOCK — the OCR emitted the right column's block
+    // before the left column's (e.g. 45,46,...,52,37,38,...,44). Find the
+    // one point where the number drops backward (not a restart-to-1) and
+    // confirm both sides are individually monotonic; the block that starts
+    // lower is the true left column and belongs first.
+    for (let i = 1; i < headers.length; i++) {
+      if (headers[i].num < headers[i - 1].num && headers[i].num !== 1) {
+        const before = headers.slice(0, i);
+        const after  = headers.slice(i);
+        if (isMonotonic(before) && isMonotonic(after)) {
+          const beforeFirst = before[0].num <= after[0].num;
+          return {
+            headers,
+            colOfHeaderIdx: headers.map((_, idx2) => {
+              const inBefore = idx2 < i;
+              return beforeFirst ? (inBefore ? 0 : 1) : (inBefore ? 1 : 0);
+            }),
+            shape: 'reversed-block',
+          };
+        }
+        break; // irregular pattern beyond a single clean reversal — bail out
       }
     }
-    if (nums.length < 4) return '1-col';
 
-    // Count how many times the number jumps forward by more than 5
-    let bigJumps = 0;
-    for (let i = 1; i < nums.length; i++) {
-      if (nums[i] - nums[i - 1] > 5) bigJumps++;
-    }
-    // If >=2 big jumps among first 10 numbers → likely 2-column
-    if (bigJumps >= 2) {
-      console.log(`[PageLayoutAnalyzer] Text-heuristic: ${bigJumps} large number jumps → 2-col`);
-      return '2-col';
-    }
-    return '1-col';
+    return null;
   }
 
   /**
-   * Reconstruct reading order for a 2-column text page.
-   * Splits lines at the point where the right column starts
-   * (detected as a large forward jump in question numbering)
-   * and concatenates left-col block + right-col block.
+   * Detect if a text-only page is likely 2-column by analysing
+   * question number sequences (no bounding-box geometry available).
+   */
+  static _detectTextColumnLayout(lines) {
+    const split = this._findColumnSplit(lines);
+    if (split) {
+      console.log(`[PageLayoutAnalyzer] Text-heuristic: 2-col detected (${split.shape})`);
+      return "2-col";
+    }
+    return "1-col";
+  }
+
+  /**
+   * Reconstruct reading order for a 2-column text page: every line is
+   * assigned to the column of the most recent header before it, then
+   * column 0 (left) is emitted in full followed by column 1 (right).
    */
   static _reconstructTwoColumnText(lines) {
-    const Q_NUM_RE = /^(?:[›»>)\u203a]\)?|(?:Question|Q\.?)\s*)?\s*(\d{1,3})[.):\s]/;
+    const split = this._findColumnSplit(lines);
+    if (!split) return lines.join('\n');
 
-    // Find the line index where the right column starts (first big jump)
-    let splitIdx = -1;
-    let lastNum = null;
+    const { headers, colOfHeaderIdx } = split;
+    const columns = [[], []];
+    let currentCol = 0;
+    let hIdx = 0;
+
     for (let i = 0; i < lines.length; i++) {
-      const m = lines[i].trim().match(Q_NUM_RE);
-      if (m) {
-        const n = parseInt(m[1], 10);
-        if (lastNum !== null && n - lastNum > 5) {
-          splitIdx = i;
-          break;
-        }
-        lastNum = n;
+      if (hIdx < headers.length && headers[hIdx].idx === i) {
+        currentCol = colOfHeaderIdx[hIdx];
+        hIdx++;
       }
+      columns[currentCol].push(lines[i]);
     }
 
-    if (splitIdx === -1) return lines.join('\n');
-
-    // Left column: lines before the jump
-    // Right column: lines after the jump
-    // We merge them so left col questions come first, then right col
-    const leftLines  = lines.slice(0, splitIdx);
-    const rightLines = lines.slice(splitIdx);
-    console.log(`[PageLayoutAnalyzer] 2-col split: left=${leftLines.length} lines, right=${rightLines.length} lines`);
-    return leftLines.join('\n') + '\n\n' + rightLines.join('\n');
+    console.log(`[PageLayoutAnalyzer] 2-col reconstruction: left=${columns[0].length} lines, right=${columns[1].length} lines`);
+    return columns[0].join('\n') + '\n\n' + columns[1].join('\n');
   }
 }
 

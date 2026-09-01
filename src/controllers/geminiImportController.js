@@ -84,11 +84,21 @@ const createImport = async (req, res) => {
         if (String(engine).toLowerCase() === 'mathpix') {
           const { OCRPipeline } = require('../services/ocrPipeline');
           if (sourceType === 'pdf') {
+            // NOTE: `processPdf()` does not exist on MathpixPdfService — this
+            // used to throw immediately and fail every Mathpix PDF import.
+            // extractPagesForPipeline() also fixes a second issue: it feeds
+            // the pipeline one page at a time (using each page's own bbox
+            // line geometry when available) instead of one giant blob for
+            // the whole document, which is what PageLayoutAnalyzer /
+            // QuestionSegmenter are actually designed to analyze.
             const MathpixPdfService = require('../services/mathpixPdfService');
             const pdfService = new MathpixPdfService();
-            const ocrResult = await pdfService.processPdf(job.rawSourceData);
-            const parseResult = await OCRPipeline.runParsing(ocrResult, job.originalFilename);
-            extracted = parseResult.parsedQuestions || [];
+            const pages = await pdfService.extractPagesForPipeline(job.rawSourceData);
+            extracted = [];
+            for (const pageOcrResult of pages) {
+              const parseResult = await OCRPipeline.runParsing(pageOcrResult, job.originalFilename);
+              extracted.push(...(parseResult.parsedQuestions || []));
+            }
           } else {
             const buffer = fs.readFileSync(job.rawSourceData);
             const ocrResult = await OCRPipeline.runFromBuffer(buffer, fileMime, job.originalFilename);
@@ -132,7 +142,14 @@ const createImport = async (req, res) => {
             warnings.push('Duplicate check warning: Strong duplicate detected.');
           }
 
-          if (!item.isValid) {
+          // Gemini/OpenRouter items set `isValid` explicitly (true or false).
+          // Mathpix items never set `isValid` at all — they signal rejection
+          // via `extractionState === 'QUARANTINED'` instead. Checking
+          // `!item.isValid` alone treated every Mathpix-sourced question as
+          // "failed validation" regardless of how good the extraction was,
+          // which is misleading noise for a reviewer looking at the batch.
+          const failedValidation = item.isValid === false || item.extractionState === 'QUARANTINED';
+          if (failedValidation) {
             errors.push('Validation failed. Review required.');
           }
 

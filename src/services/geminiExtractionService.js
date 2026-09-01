@@ -193,10 +193,24 @@ class GeminiExtractionService {
 
         const resJson = await response.json();
         const outputText = resJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-        
+        const finishReason = resJson?.candidates?.[0]?.finishReason;
+
         if (!outputText) {
           console.error('[GeminiExtractionService] Empty candidate response:', JSON.stringify(resJson));
           throw new Error('Gemini API returned an empty completion result.');
+        }
+
+        // CRITICAL: Detect output truncation. When the model runs out of output
+        // tokens mid-document (very likely for dense multi-page/multi-section
+        // question papers), Gemini's JSON mode often force-closes the array to
+        // stay syntactically valid — so JSON.parse() succeeds but SILENTLY DROPS
+        // every question after the cut point. That looks like a normal success
+        // to the caller, so it never triggers the safer page-by-page fallback.
+        // We must surface truncation as an error so extractFromPdfPath() falls
+        // back to per-page extraction instead of accepting a partial result.
+        if (finishReason === 'MAX_TOKENS') {
+          console.error(`[GeminiExtractionService] Response TRUNCATED (finishReason=MAX_TOKENS). Output was cut off — questions after the cut point are missing.`);
+          throw new Error('Gemini API output was truncated (MAX_TOKENS) — response is incomplete.');
         }
 
         // Clean up uploaded file in background (non-blocking)
@@ -324,9 +338,26 @@ class GeminiExtractionService {
       // Process PDF natively via direct Gemini call (mimeType: 'application/pdf')
       const questions = await this.extractFromBuffer(buffer, 'application/pdf', classNo, chapterName);
       console.log(`[GeminiExtractionService] Native PDF extraction succeeded. Found ${questions.length} questions.`);
+
+      // SANITY CHECK: a single Gemini call is asked to enumerate every question
+      // across the whole document. For multi-page question papers, returning
+      // fewer questions than there are pages is a strong signal the model
+      // stopped early / summarized instead of listing every question (this can
+      // happen even without a hard MAX_TOKENS cutoff). Page-by-page extraction
+      // is far more reliable, so treat implausibly low yields as a failure and
+      // fall back rather than silently accepting an incomplete result.
+      let pageCount = 1;
+      try {
+        pageCount = await getPdfPageCount(pdfPath);
+      } catch (_) { /* best-effort; skip the sanity check if page count is unavailable */ }
+
+      if (pageCount >= 2 && questions.length < pageCount) {
+        throw new Error(`Implausibly few questions extracted (${questions.length}) for a ${pageCount}-page document — likely incomplete/summarized output.`);
+      }
+
       return questions;
     } catch (nativeErr) {
-      console.warn(`[GeminiExtractionService] Native PDF extraction failed: ${nativeErr.message}. Falling back to page-by-page pdftoppm rendering...`);
+      console.warn(`[GeminiExtractionService] Native PDF extraction failed or incomplete: ${nativeErr.message}. Falling back to page-by-page pdftoppm rendering...`);
       return this.extractFromPdfPathFallback(pdfPath, classNo, chapterName);
     }
   }

@@ -413,6 +413,63 @@ class MathpixPdfService {
   }
 
   /**
+   * Process a PDF and split the result into one OCR-result object per page,
+   * ready to feed individually into OCRPipeline.runParsing()/
+   * runPipelineOnOCRResult(). This matters because PageLayoutAnalyzer /
+   * QuestionSegmenter are designed to analyze ONE page's column layout and
+   * question numbering at a time — feeding them a single blob covering every
+   * page of a multi-page document risks the column-detection heuristics
+   * misreading structure across page boundaries (e.g. two pages that each
+   * have an independent 2-column layout, concatenated into one text run).
+   *
+   * When per-page line geometry is available (lines_json), each page's
+   * `lines` array is handed to PageLayoutAnalyzer directly so it can
+   * reconstruct that page's text via real bounding-box column detection
+   * instead of the weaker text-only heuristics.
+   *
+   * @param {Buffer|string} pdfInput - File buffer or file path
+   * @param {object} options - Processing options
+   * @returns {Promise<Array<{lines?: object[], rawText: string, latex: string, confidence: number|null, pageNumber: number}>>}
+   */
+  async extractPagesForPipeline(pdfInput, options = {}) {
+    const { markdown, linesJson, metadata } = await this.processPdfComplete(pdfInput, options);
+
+    const pagesData = Array.isArray(linesJson?.pages) ? linesJson.pages
+                     : Array.isArray(linesJson)        ? linesJson
+                     : null;
+
+    if (!pagesData || pagesData.length === 0) {
+      console.warn('[Mathpix] No per-page line geometry available — falling back to whole-document text as a single page.');
+      return [{ rawText: markdown, latex: markdown, confidence: null, pageNumber: 1 }];
+    }
+
+    const pages = pagesData.map((p, idx) => {
+      const lines = p.lines || p.line_data || [];
+      return {
+        lines,
+        // rawText/latex are left empty on purpose: PageLayoutAnalyzer
+        // reconstructs page text from `lines` geometry when present.
+        rawText: '',
+        latex: '',
+        confidence: null,
+        pageNumber: p.page_number ?? p.page ?? (idx + 1),
+      };
+    });
+
+    const totalLineCount = pages.reduce((sum, p) => sum + p.lines.length, 0);
+    if (totalLineCount === 0) {
+      // The lines_json response didn't match the shape we expected (API/
+      // version difference) — rather than silently produce zero questions
+      // per page, fall back to the whole-document markdown as one page.
+      console.warn('[Mathpix] Per-page line arrays were empty for every page — falling back to whole-document text as a single page.');
+      return [{ rawText: markdown, latex: markdown, confidence: null, pageNumber: 1 }];
+    }
+
+    console.log(`[Mathpix] Split PDF into ${pages.length} page(s) for per-page pipeline processing (${totalLineCount} total lines).`);
+    return pages;
+  }
+
+  /**
    * Helper: Build conversion formats object
    * @private
    */
