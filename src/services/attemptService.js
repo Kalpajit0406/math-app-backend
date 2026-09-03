@@ -29,6 +29,17 @@ async function releaseAttemptLock(attemptId) {
   await redis.del(lockKey);
 }
 
+// Fisher-Yates shuffle — returns a new array, does not mutate the input.
+// Used to generate a distinct question order per student per attempt.
+function shuffleArray(arr) {
+  const result = arr.slice();
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
 const attemptService = {
   startAttempt: async (userId, examId) => {
     if (!examId) throw new Error('Exam id is required');
@@ -79,7 +90,18 @@ const attemptService = {
         await attempt.save();
         throw new Error('Exam time has already expired');
       }
-      
+
+      // Backfill questionOrder for attempts created before this field existed
+      // (or any other edge case where it ended up empty), so resuming an
+      // in-flight attempt also gets a stable per-student shuffled order.
+      if (!attempt.questionOrder || attempt.questionOrder.length === 0) {
+        const examQuestionIds = (exam.questionIds || []).map(id => String(id));
+        if (examQuestionIds.length > 0) {
+          attempt.questionOrder = shuffleArray(examQuestionIds);
+          await attempt.save();
+        }
+      }
+
       const attemptObj = attempt.toObject();
       attemptObj.remainingSeconds = remainingSeconds;
       return attemptObj;
@@ -89,7 +111,14 @@ const attemptService = {
       throw new Error('You have already completed this exam.');
     }
 
-    attempt = new Attempt({ userId, examId });
+    // Generate a per-student shuffled question order and persist it on the
+    // attempt itself, so it stays stable for this student across resumes
+    // (app restart, network drop) while being independently randomized for
+    // every other student attempting the same exam.
+    const examQuestionIds = (exam.questionIds || []).map(id => String(id));
+    const questionOrder = examQuestionIds.length > 0 ? shuffleArray(examQuestionIds) : [];
+
+    attempt = new Attempt({ userId, examId, questionOrder });
     const savedAttempt = await attempt.save();
     const attemptObj = savedAttempt.toObject();
 

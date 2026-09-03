@@ -49,6 +49,15 @@ const attemptSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  // Per-student shuffled question order, generated once when the attempt is
+  // first created and persisted so it stays stable across resumes (app
+  // restart, network drop, etc). Stores Question _ids as strings in the
+  // order this student should see them. Empty for legacy attempts created
+  // before this field existed — clients fall back to the exam's stored order.
+  questionOrder: {
+    type: [String],
+    default: [],
+  },
   evaluationSummary: {
     type: mongoose.Schema.Types.Mixed,
     default: null,
