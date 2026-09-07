@@ -19,6 +19,15 @@ const createExam = async (req, res) => {
     });
 
     res.status(201).json({ success: true, data: exam });
+
+    // Fire-and-forget: pre-compute per-student shuffled question orders in
+    // the background so exam-open time serves an O(1) lookup instead of
+    // shuffling for every student on the request path. Runs after the
+    // response is sent, so exam creation is never slowed down by it.
+    const examPreOrderService = require('../services/examPreOrderService');
+    examPreOrderService.precomputeExamOrders(exam._id).catch(err => {
+      console.error('[ExamPreOrder] precomputeExamOrders failed to start:', err.message);
+    });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -36,15 +45,17 @@ const getExams = async (req, res) => {
       const classNo = student.classNo || getClassNoFromId(student.classId) || 10;
       const isJoint = student.accountType === 'JOINT' || student.accountType === 'JOINT_ENTRANCE' || student.targetExam === 'Joint Entrance' || student.targetExam === 'JEE' || !!student.isJoint;
       exams = await examService.getExamsForStudent(classNo, student.language || 'Both', isJoint);
-      // Strip correct answers for security
+      // SECURITY: withhold question content entirely from the pre-start
+      // listing (previously only correctAnswer was stripped, but full
+      // question text/options/diagrams were still sent to every eligible
+      // student's device hours or days before the exam opens). The full,
+      // ordered, correctAnswer-free questions are now delivered only at
+      // /testResponse/start, once the exam's start window has actually
+      // opened — see attemptService.startAttempt.
       exams = exams.map(exam => {
         const examObj = exam.toObject ? exam.toObject() : exam;
-        if (examObj.questions) {
-          examObj.questions = examObj.questions.map(q => {
-            delete q.correctAnswer;
-            return q;
-          });
-        }
+        examObj.totalQuestions = examObj.totalQuestions || (examObj.questionIds ? examObj.questionIds.length : 0);
+        delete examObj.questions;
         return examObj;
       });
     } else {

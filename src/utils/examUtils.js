@@ -1,3 +1,26 @@
+// Fisher-Yates shuffle — returns a new array, does not mutate the input.
+// Shared by attemptService (per-attempt shuffle) and examPreOrderService
+// (background pre-computation) so both use one battle-tested implementation.
+function shuffleArray(arr) {
+  const result = arr.slice();
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+// Builds the display title shown to students and teachers everywhere an
+// exam appears: "Class {N} - {Language}", or "Class {N} - {Language} - {Name}"
+// if the teacher gave the exam a name. classNo 13 reads as "Joint Entrance"
+// to match how every other screen in the admin app already labels it.
+function buildExamTitle(classNo, language, examName) {
+  const classLabel = Number(classNo) === 13 ? 'Joint Entrance' : `Class ${classNo}`;
+  const base = `${classLabel} - ${language}`;
+  const trimmedName = examName && typeof examName === 'string' ? examName.trim() : '';
+  return trimmedName ? `${base} - ${trimmedName}` : base;
+}
+
 const evaluateQuestionCorrectness = (question, userAnswer) => {
   if (!question || userAnswer === undefined || userAnswer === null) return false;
   
@@ -192,6 +215,8 @@ async function evaluateAttemptIfNeeded(attempt, exam) {
 }
 
 module.exports = {
+  shuffleArray,
+  buildExamTitle,
   evaluateQuestionCorrectness,
   getExamStartTime,
   getExamEndTime,

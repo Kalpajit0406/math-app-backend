@@ -172,6 +172,8 @@ const deleteTestConfig = asyncHandler(async (req, res) => {
       isExam = true;
       const Attempt = require('../models/attemptModel');
       await Attempt.deleteMany({ examId: id });
+      const examPreOrderService = require('../services/examPreOrderService');
+      await examPreOrderService.invalidateExamOrders(id);
     }
   }
 

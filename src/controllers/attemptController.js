@@ -6,7 +6,8 @@ const startAttempt = async (req, res) => {
     const attempt = await attemptService.startAttempt(req.user.id, examId);
     res.status(201).json({ success: true, data: attempt });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    const statusCode = error.statusCode || 400;
+    res.status(statusCode).json({ success: false, message: error.message });
   }
 };
 

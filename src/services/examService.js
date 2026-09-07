@@ -2,9 +2,10 @@ const Exam = require('../models/examModel');
 const Question = require('../models/questionModel');
 const mongoose = require('mongoose');
 const { getRedisClient } = require('../config/redis');
+const { buildExamTitle } = require('../utils/examUtils');
 
 const normalizeExamData = async (examData = {}, session = null) => {
-  const title = examData.title || `Class ${examData.classNo} ${examData.language} Test`;
+  const title = examData.title || buildExamTitle(examData.classNo, examData.language, examData.examName);
   const totalTime = Number.parseInt(examData.totalTime || examData.duration || '0', 10) || 0;
   const negativeMarking = Number(examData.negativeMarking !== undefined ? examData.negativeMarking : 0.0);
   const marksPerQuestion = Number(examData.marksPerQuestion !== undefined ? examData.marksPerQuestion : 1.0);
@@ -219,7 +220,7 @@ const examService = {
 
     try {
       const serialized = exams.map(e => e.toJSON());
-      await redis.set(cacheKey, JSON.stringify(serialized), 'EX', 30); // 30 seconds TTL
+      await redis.set(cacheKey, JSON.stringify(serialized), 'EX', 300); // 5 minutes TTL
     } catch (err) {
       console.warn('[Cache] getExamsForStudent cache write error:', err.message);
     }
@@ -257,7 +258,55 @@ const examService = {
     }
 
     return exam;
-  }
+  },
+
+  /**
+   * Reorders `questions` (raw, un-stripped — from getExamById, either a live
+   * Mongoose doc's populated array or a cached plain-object array) to match
+   * `orderIds`, and strips `correctAnswer` from each so the result is safe to
+   * hand back to a student in the startAttempt response. Any id in
+   * `orderIds` with no matching question (stale/edited/removed) is simply
+   * skipped, and any question not covered by `orderIds` is appended at the
+   * end — questions are never dropped or duplicated even with a partial or
+   * empty order.
+   */
+  orderSanitizedQuestions: (questions, orderIds) => {
+    const list = Array.isArray(questions) ? questions : [];
+
+    const sanitize = (q) => ({
+      id: String(q.id || q._id || ''),
+      type: Array.isArray(q.options) && q.options.length > 0 ? 'mcq' : 'numeric',
+      questionText: q.questionText || q.question || '',
+      options: q.options || null,
+      diagram: q.diagram || null,
+    });
+
+    const byId = new Map();
+    for (const q of list) {
+      const key = String(q.id || q._id || '');
+      if (key) byId.set(key, q);
+    }
+
+    const used = new Set();
+    const ordered = [];
+    for (const id of Array.isArray(orderIds) ? orderIds : []) {
+      const key = String(id);
+      const match = byId.get(key);
+      if (match && !used.has(key)) {
+        used.add(key);
+        ordered.push(sanitize(match));
+      }
+    }
+
+    if (ordered.length < list.length) {
+      for (const q of list) {
+        const key = String(q.id || q._id || '');
+        if (!used.has(key)) ordered.push(sanitize(q));
+      }
+    }
+
+    return ordered;
+  },
 };
 
 module.exports = examService;

@@ -3,6 +3,7 @@ const Exam = require('../models/examModel');
 const examService = require('./examService');
 const {
   evaluateQuestionCorrectness,
+  getExamStartTime,
   getExamEndTime,
   evaluateAttemptIfNeeded
 } = require('../utils/examUtils');
@@ -27,17 +28,6 @@ async function releaseAttemptLock(attemptId) {
   const redis = getRedisClient();
   const lockKey = `lock:attempt:${attemptId}`;
   await redis.del(lockKey);
-}
-
-// Fisher-Yates shuffle — returns a new array, does not mutate the input.
-// Used to generate a distinct question order per student per attempt.
-function shuffleArray(arr) {
-  const result = arr.slice();
-  for (let i = result.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [result[i], result[j]] = [result[j], result[i]];
-  }
-  return result;
 }
 
 const attemptService = {
@@ -68,6 +58,23 @@ const attemptService = {
       }
     }
 
+    // Block attempts made well before the scheduled start (clock-cheating /
+    // question-scraping protection). Fails OPEN — if the exam's date/time
+    // can't be parsed, `getExamStartTime` returns null and no gate is applied,
+    // so a malformed schedule never locks legitimate students out.
+    const examStartTime = getExamStartTime(exam);
+    if (examStartTime) {
+      const earlyWindowMs = 30 * 1000; // clock drift / network latency buffer
+      if (Date.now() < examStartTime.getTime() - earlyWindowMs) {
+        const err = new Error(`This exam has not started yet. It starts on ${exam.date} at ${exam.time}.`);
+        err.statusCode = 403;
+        throw err;
+      }
+    }
+
+    const examQuestionIds = (exam.questionIds || []).map(id => String(id));
+    const examPreOrderService = require('./examPreOrderService');
+
     let attempt = existingAttempt;
     if (attempt) {
       // Calculate remaining seconds from when THIS student started (relative)
@@ -83,7 +90,7 @@ const attemptService = {
         const secondsUntilAbsoluteEnd = Math.max(0, Math.ceil((examEndTime.getTime() - now.getTime()) / 1000));
         remainingSeconds = Math.min(remainingSeconds, secondsUntilAbsoluteEnd);
       }
-      
+
       // If time has completely expired, auto-submit the attempt
       if (remainingSeconds <= 0) {
         attempt.endTime = new Date();
@@ -94,16 +101,14 @@ const attemptService = {
       // Backfill questionOrder for attempts created before this field existed
       // (or any other edge case where it ended up empty), so resuming an
       // in-flight attempt also gets a stable per-student shuffled order.
-      if (!attempt.questionOrder || attempt.questionOrder.length === 0) {
-        const examQuestionIds = (exam.questionIds || []).map(id => String(id));
-        if (examQuestionIds.length > 0) {
-          attempt.questionOrder = shuffleArray(examQuestionIds);
-          await attempt.save();
-        }
+      if ((!attempt.questionOrder || attempt.questionOrder.length === 0) && examQuestionIds.length > 0) {
+        attempt.questionOrder = await examPreOrderService.getStudentQuestionOrder(examId, userId, examQuestionIds);
+        await attempt.save();
       }
 
       const attemptObj = attempt.toObject();
       attemptObj.remainingSeconds = remainingSeconds;
+      attemptObj.questions = examService.orderSanitizedQuestions(exam.questions, attempt.questionOrder);
       return attemptObj;
     }
     // Verify the student hasn't already completed this particular exam
@@ -111,12 +116,15 @@ const attemptService = {
       throw new Error('You have already completed this exam.');
     }
 
-    // Generate a per-student shuffled question order and persist it on the
-    // attempt itself, so it stays stable for this student across resumes
-    // (app restart, network drop) while being independently randomized for
-    // every other student attempting the same exam.
-    const examQuestionIds = (exam.questionIds || []).map(id => String(id));
-    const questionOrder = examQuestionIds.length > 0 ? shuffleArray(examQuestionIds) : [];
+    // Fetch this student's per-exam shuffled question order. Fast path is an
+    // O(1) Redis/Mongo lookup against orders pre-computed in the background
+    // when the exam was created (see examPreOrderService.precomputeExamOrders);
+    // falls back to an instant deterministic PRNG for anyone missed by that
+    // pre-computation (e.g. a student who registered/switched class after the
+    // exam was scheduled) — never blocks on a live shuffle under load.
+    const questionOrder = examQuestionIds.length > 0
+      ? await examPreOrderService.getStudentQuestionOrder(examId, userId, examQuestionIds)
+      : [];
 
     attempt = new Attempt({ userId, examId, questionOrder });
     const savedAttempt = await attempt.save();
@@ -142,6 +150,10 @@ const attemptService = {
     }
 
     attemptObj.remainingSeconds = remainingSeconds;
+    // Deliver the full (correctAnswer-stripped) question bodies here, at
+    // start time, in this student's shuffled order — the exam listing
+    // endpoint no longer sends question content ahead of time.
+    attemptObj.questions = examService.orderSanitizedQuestions(exam.questions, questionOrder);
     return attemptObj;
   },
 

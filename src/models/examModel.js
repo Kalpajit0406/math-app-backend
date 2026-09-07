@@ -56,8 +56,24 @@ const examSchema = new mongoose.Schema({
   },
   isDeleted: { type: Boolean, default: false, index: true },
   deletedAt: { type: Date },
-  deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' }
-}, { 
+  deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' },
+  // Tracks the background per-student question-order pre-computation
+  // (see examPreOrderService.precomputeExamOrders). Purely observability —
+  // startAttempt() never blocks on this and always has a working fallback
+  // regardless of status.
+  orderPreGenStatus: {
+    type: String,
+    enum: ['PENDING', 'PROCESSING', 'READY', 'FAILED'],
+    default: 'PENDING',
+  },
+  preGenStudentCount: {
+    type: Number,
+    default: 0,
+  },
+  preGenCompletedAt: {
+    type: Date,
+  },
+}, {
   timestamps: true,
   toJSON: {
     virtuals: true,
