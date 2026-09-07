@@ -50,7 +50,9 @@ async function flushSessionAnswers(attemptId, session) {
 
   try {
     const attempt = await Attempt.findById(attemptId);
-    if (!attempt || attempt.endTime) return;
+    if (!attempt) return;
+    const isPrematureEmptyAutoSubmit = Boolean(attempt.endTime) && Boolean(attempt.isAutoSubmitted) && (!attempt.responses || attempt.responses.length === 0);
+    if (attempt.endTime && !isPrematureEmptyAutoSubmit) return;
 
     let modified = false;
     for (const [qIdStr, ansVal] of answersToFlush.entries()) {

@@ -171,10 +171,6 @@ const attemptService = {
       const attempt = await Attempt.findById(attemptId);
       if (!attempt) throw new Error('Attempt not found');
       if (String(attempt.userId) !== String(userId)) throw new Error('You are not allowed to submit this attempt');
-      if (attempt.endTime) {
-        // Idempotent submit
-        return attempt;
-      }
 
       const exam = await examService.getExamById(attempt.examId);
       if (!exam) throw new Error('Exam not found');
@@ -187,6 +183,25 @@ const attemptService = {
       }
       const now = new Date();
       const isExamEnded = now >= attemptEndBoundary;
+
+      // Check if this attempt was previously auto-submitted prematurely with 0 responses
+      // (e.g. client race condition where an empty auto-submit happened right after attempt creation).
+      // If student is now submitting real responses within the valid exam window (+ grace period), allow the submission!
+      const hasNoRecordedResponses = !attempt.responses || attempt.responses.length === 0;
+      const isPrematureEmptyAutoSubmit = Boolean(attempt.endTime) && Boolean(attempt.isAutoSubmitted) && hasNoRecordedResponses && responses.length > 0;
+
+      if (attempt.endTime && !isPrematureEmptyAutoSubmit) {
+        // Normal idempotent submit for already-completed attempt
+        return attempt;
+      }
+
+      if (isPrematureEmptyAutoSubmit) {
+        // Allow up to a 5-minute grace period past the end boundary for late submissions / network recovery
+        const gracePeriodMs = 5 * 60 * 1000;
+        if (now.getTime() > attemptEndBoundary.getTime() + gracePeriodMs) {
+          return attempt;
+        }
+      }
 
       let score = 0;
       let marksObtained = 0;
