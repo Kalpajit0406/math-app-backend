@@ -174,8 +174,8 @@ app.get('/api/v1/admin/ocr/health', (req, res) => {
 app.get('/api/v1/app-version', (req, res) => {
   res.json({
     success: true,
-    latestVersion: process.env.LATEST_APP_VERSION || '1.2.2',
-    latestBuildNumber: parseInt(process.env.LATEST_APP_BUILD || '122', 10),
+    latestVersion: process.env.LATEST_APP_VERSION || '1.2.6',
+    latestBuildNumber: parseInt(process.env.LATEST_APP_BUILD || '126', 10),
     minRequiredVersion: process.env.MIN_REQUIRED_APP_VERSION || '1.2.2',
     minRequiredBuildNumber: parseInt(process.env.MIN_REQUIRED_APP_BUILD || '122', 10),
     forceUpdate: process.env.FORCE_APP_UPDATE === 'true',
