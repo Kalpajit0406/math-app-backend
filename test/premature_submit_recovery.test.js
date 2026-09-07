@@ -7,6 +7,7 @@ const Exam = require('../src/models/examModel');
 const Student = require('../src/models/studentModel');
 const Question = require('../src/models/questionModel');
 const attemptService = require('../src/services/attemptService');
+const examService = require('../src/services/examService');
 const mongoose = require('mongoose');
 
 test('Premature empty auto-submit recovery in attemptService', async (t) => {
@@ -37,7 +38,7 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
     title: `Recovery Test Exam ${timestamp}`,
     classNo: 10,
     language: 'English',
-    date: '2026-09-07',
+    date: '2099-01-01',
     time: '10:00 AM',
     duration: 60,
     marksPerQuestion: 2,
@@ -47,8 +48,12 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
 
   const student = await Student.create({
     _id: testStudentId,
-    name: 'Test Recovery Student',
+    firstName: 'Test',
+    lastName: 'Recovery',
     studentPhone: `99${String(timestamp).slice(-8)}`,
+    guardianPhone: '9999911111',
+    language: 'English',
+    password: 'password123',
     classNo: 10,
     isJoint: false,
     verified: true,
@@ -82,15 +87,6 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
   });
 
   await t.test('2. Student submits real answers within exam window - must recover and record answers', async () => {
-    const fetchedExamBefore = await examService.getExamById(exam._id);
-    console.log('DIAGNOSTIC: q1 in DB =', !!(await Question.findById(q1._id)));
-    console.log('DIAGNOSTIC: q2 in DB =', !!(await Question.findById(q2._id)));
-    console.log('DIAGNOSTIC: exam.questionIds in DB =', (await Exam.findById(exam._id)).questionIds);
-    console.log('DIAGNOSTIC: fetchedExamBefore.questions length =', fetchedExamBefore.questions?.length);
-    console.log('DIAGNOSTIC: fetchedExamBefore.questions =', JSON.stringify(fetchedExamBefore.questions));
-    console.log('DIAGNOSTIC: id(q1) =', fetchedExamBefore.questions?.id(q1._id.toString()) ? 'FOUND' : 'NOT FOUND');
-    console.log('DIAGNOSTIC: id(q2) =', fetchedExamBefore.questions?.id(q2._id.toString()) ? 'FOUND' : 'NOT FOUND');
-
     const recovered = await attemptService.submitAttempt(
       testStudentId,
       attempt._id,
@@ -135,5 +131,15 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
     await Exam.deleteOne({ _id: exam._id });
     await Question.deleteMany({ _id: { $in: [q1._id, q2._id] } });
     await Student.deleteOne({ _id: testStudentId });
+
+    try {
+      const { getRedisClient } = require('../src/config/redis');
+      const redis = getRedisClient();
+      if (redis && typeof redis.quit === 'function') {
+        await redis.quit();
+      }
+    } catch (_) {}
+
+    await mongoose.connection.close(false);
   }
 });
