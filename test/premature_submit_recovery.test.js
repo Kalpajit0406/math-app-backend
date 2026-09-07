@@ -94,7 +94,7 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
       }
     );
 
-    assert.equal(recovered.responses.length, 2, 'Must record 2 responses');
+    assert.equal(recovered.responses.length, 2, `Expected 2 responses but got ${recovered.responses.length}: ${JSON.stringify(recovered.responses)}`);
     assert.equal(recovered.responses[0].userAnswer, '4');
     assert.equal(recovered.responses[1].userAnswer, '9');
 
