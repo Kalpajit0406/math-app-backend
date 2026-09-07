@@ -232,8 +232,23 @@ connectDB()
     });
 
     // Initialize WebSockets for live exam integrity monitoring and timer authority
-    const { initExamWebSocket } = require('./services/examWebSocketService');
+    const { initExamWebSocket, flushAllPendingAnswers } = require('./services/examWebSocketService');
     initExamWebSocket(server);
+
+    // Graceful shutdown handler
+    const gracefulShutdown = async (signal) => {
+      console.log(`\n[Shutdown] Received ${signal}. Flushing pending exam answers...`);
+      try {
+        await flushAllPendingAnswers();
+      } catch (err) {
+        console.error('[Shutdown Error]', err.message);
+      }
+      console.log('[Shutdown] Done. Exiting.');
+      process.exit(0);
+    };
+
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
     // Start periodic stale self-assessment session cleaner
     const SelfAssessmentService = require('./services/selfAssessmentService');
@@ -247,3 +262,4 @@ connectDB()
     console.error(`Failed to start server: ${error.message}`);
     process.exit(1);
   });
+

@@ -192,7 +192,7 @@ function getRedisClient() {
     const realClient = new Redis(REDIS_URL, {
       maxRetriesPerRequest: null,
       enableReadyCheck: true,
-      enableOfflineQueue: false, // Immediately reject commands when connection is down
+      enableOfflineQueue: true,
       reconnectOnError: (err) => {
         const targetError = 'READONLY';
         if (err.message.slice(0, targetError.length) === targetError) {
