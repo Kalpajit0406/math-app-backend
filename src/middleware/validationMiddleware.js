@@ -3,6 +3,8 @@
  * Provides centralized request validation using express-validator patterns
  */
 
+const { buildExamTitle } = require('../utils/examUtils');
+
 const validatePhoneNumber = (phone) => {
   if (!phone || typeof phone !== 'string') return false;
   // Valid Indian phone numbers: 10 digits, can start with +91
@@ -197,8 +199,8 @@ const validationRules = {
     const isSchedulePayload = req.path === '/';
     
     if (isSchedulePayload) {
-      req.body.title = req.body.title || `Class ${req.body.classNo} ${req.body.language} Test`;
-      
+      req.body.title = req.body.title || buildExamTitle(req.body.classNo, req.body.language, req.body.examName);
+
       const totalMarks = Number(req.body.totalMarks || 0);
       const marksPQ = Number(req.body.marksPQ !== undefined ? req.body.marksPQ : 1.0);
       const timePQ = Number(req.body.timePQ || 0); // timePQ in seconds
@@ -220,12 +222,15 @@ const validationRules = {
 
     const rawDuration = req.body.duration !== undefined ? req.body.duration : req.body.totalTime;
     const duration = rawDuration !== undefined ? Number(rawDuration) : undefined;
-    const title = req.body.title || `Class ${req.body.classNo} ${req.body.language} Test`;
-    const { description, classNo, language, totalMarks, questions, date, time } = req.body;
-    
+    const { examName, description, classNo, language, totalMarks, questions, date, time } = req.body;
+    const title = req.body.title || buildExamTitle(classNo, language, examName);
+
     const errors = [];
     if (!title || typeof title !== 'string' || title.length < 3 || title.length > 200) {
       errors.push('Title must be 3-200 characters');
+    }
+    if (examName !== undefined && examName !== null && (typeof examName !== 'string' || examName.length > 100)) {
+      errors.push('Exam name must be under 100 characters');
     }
     if (description && (typeof description !== 'string' || description.length > 2000)) {
       errors.push('Description must be under 2000 characters');
@@ -300,6 +305,7 @@ const validationRules = {
     
     req.body.duration = duration;
     req.body.title = sanitizeString(title);
+    req.body.examName = examName ? sanitizeString(examName.trim()) : undefined;
     req.body.description = sanitizeString(description || '');
     if (Array.isArray(questions)) {
       req.body.questions = questions.map(q => {
