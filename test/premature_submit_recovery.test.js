@@ -13,9 +13,10 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
   await connectDB();
 
   const testStudentId = new mongoose.Types.ObjectId();
+  const timestamp = Date.now();
 
   const q1 = await Question.create({
-    question: 'What is 2 + 2?',
+    question: `What is 2 + 2? ${timestamp}`,
     options: ['2', '3', '4', '5'],
     correctAnswer: '4',
     language: 'English',
@@ -24,7 +25,7 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
   });
 
   const q2 = await Question.create({
-    question: 'What is 3 * 3?',
+    question: `What is 3 * 3? ${timestamp}`,
     options: ['6', '8', '9', '12'],
     correctAnswer: '9',
     language: 'English',
@@ -33,7 +34,7 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
   });
 
   const exam = await Exam.create({
-    title: 'Recovery Test Exam',
+    title: `Recovery Test Exam ${timestamp}`,
     classNo: 10,
     language: 'English',
     date: '2026-09-07',
@@ -47,7 +48,7 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
   const student = await Student.create({
     _id: testStudentId,
     name: 'Test Recovery Student',
-    studentPhone: '9999888877',
+    studentPhone: `99${String(timestamp).slice(-8)}`,
     classNo: 10,
     isJoint: false,
     verified: true,
@@ -59,6 +60,8 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
     startTime: new Date(),
     questionOrder: [q1._id.toString(), q2._id.toString()],
   });
+
+  try {
 
   await t.test('1. Premature auto-submit with 0 responses marks attempt as ended', async () => {
     // Simulate what checkForResumableExam did: empty payload auto-submit 1s after start
@@ -117,10 +120,11 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
     assert.equal(idempotentResult.responses[0].userAnswer, '4');
     assert.equal(idempotentResult.responses[1].userAnswer, '9');
   });
-
-  // Cleanup
-  await Attempt.deleteMany({ examId: exam._id });
-  await Exam.deleteOne({ _id: exam._id });
-  await Question.deleteMany({ _id: { $in: [q1._id, q2._id] } });
-  await Student.deleteOne({ _id: testStudentId });
+  } finally {
+    // Cleanup
+    await Attempt.deleteMany({ examId: exam._id });
+    await Exam.deleteOne({ _id: exam._id });
+    await Question.deleteMany({ _id: { $in: [q1._id, q2._id] } });
+    await Student.deleteOne({ _id: testStudentId });
+  }
 });
