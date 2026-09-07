@@ -83,7 +83,9 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
 
   await t.test('2. Student submits real answers within exam window - must recover and record answers', async () => {
     const fetchedExamBefore = await examService.getExamById(exam._id);
-    console.log('DIAGNOSTIC: q1._id =', q1._id.toString(), 'q2._id =', q2._id.toString());
+    console.log('DIAGNOSTIC: q1 in DB =', !!(await Question.findById(q1._id)));
+    console.log('DIAGNOSTIC: q2 in DB =', !!(await Question.findById(q2._id)));
+    console.log('DIAGNOSTIC: exam.questionIds in DB =', (await Exam.findById(exam._id)).questionIds);
     console.log('DIAGNOSTIC: fetchedExamBefore.questions length =', fetchedExamBefore.questions?.length);
     console.log('DIAGNOSTIC: fetchedExamBefore.questions =', JSON.stringify(fetchedExamBefore.questions));
     console.log('DIAGNOSTIC: id(q1) =', fetchedExamBefore.questions?.id(q1._id.toString()) ? 'FOUND' : 'NOT FOUND');
