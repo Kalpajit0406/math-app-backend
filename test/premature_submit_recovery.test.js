@@ -1,10 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-require('dotenv').config({ path: 'E:/MathswithSD/MathswithSD/math-app-backend/.env' });
+require('dotenv').config();
 const connectDB = require('../src/config/db');
 const Attempt = require('../src/models/attemptModel');
 const Exam = require('../src/models/examModel');
 const Student = require('../src/models/studentModel');
+const Question = require('../src/models/questionModel');
 const attemptService = require('../src/services/attemptService');
 const mongoose = require('mongoose');
 
@@ -12,8 +13,24 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
   await connectDB();
 
   const testStudentId = new mongoose.Types.ObjectId();
-  const testQuestionId = new mongoose.Types.ObjectId();
-  const testQuestion2Id = new mongoose.Types.ObjectId();
+
+  const q1 = await Question.create({
+    question: 'What is 2 + 2?',
+    options: ['2', '3', '4', '5'],
+    correctAnswer: '4',
+    language: 'English',
+    classNo: 10,
+    chapter: 'Arithmetic'
+  });
+
+  const q2 = await Question.create({
+    question: 'What is 3 * 3?',
+    options: ['6', '8', '9', '12'],
+    correctAnswer: '9',
+    language: 'English',
+    classNo: 10,
+    chapter: 'Arithmetic'
+  });
 
   const exam = await Exam.create({
     title: 'Recovery Test Exam',
@@ -24,22 +41,7 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
     duration: 60,
     marksPerQuestion: 2,
     negativeMarking: 0.5,
-    questions: [
-      {
-        _id: testQuestionId,
-        questionText: 'What is 2 + 2?',
-        options: ['2', '3', '4', '5'],
-        correctAnswer: '4',
-        marks: 2,
-      },
-      {
-        _id: testQuestion2Id,
-        questionText: 'What is 3 * 3?',
-        options: ['6', '8', '9', '12'],
-        correctAnswer: '9',
-        marks: 2,
-      }
-    ],
+    questionIds: [q1._id, q2._id],
   });
 
   const student = await Student.create({
@@ -55,7 +57,7 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
     userId: testStudentId,
     examId: exam._id,
     startTime: new Date(),
-    questionOrder: [testQuestionId.toString(), testQuestion2Id.toString()],
+    questionOrder: [q1._id.toString(), q2._id.toString()],
   });
 
   await t.test('1. Premature auto-submit with 0 responses marks attempt as ended', async () => {
@@ -81,8 +83,8 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
       testStudentId,
       attempt._id,
       [
-        { questionId: testQuestionId.toString(), userAnswer: '4' },
-        { questionId: testQuestion2Id.toString(), userAnswer: '9' },
+        { questionId: q1._id.toString(), userAnswer: '4' },
+        { questionId: q2._id.toString(), userAnswer: '9' },
       ],
       {
         isAutoSubmitted: false,
@@ -105,7 +107,7 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
       testStudentId,
       attempt._id,
       [
-        { questionId: testQuestionId.toString(), userAnswer: 'wrong_answer' },
+        { questionId: q1._id.toString(), userAnswer: 'wrong_answer' },
       ],
       {}
     );
@@ -119,5 +121,6 @@ test('Premature empty auto-submit recovery in attemptService', async (t) => {
   // Cleanup
   await Attempt.deleteMany({ examId: exam._id });
   await Exam.deleteOne({ _id: exam._id });
+  await Question.deleteMany({ _id: { $in: [q1._id, q2._id] } });
   await Student.deleteOne({ _id: testStudentId });
 });
