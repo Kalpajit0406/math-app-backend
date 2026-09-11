@@ -13,6 +13,7 @@ const verificationSessionSchema = new mongoose.Schema({
   
   status: { type: String, enum: ['pending', 'processing', 'completed', 'failed'], default: 'completed' },
   progress: { type: Number, default: 100 },
+  errorMessage: { type: String, default: null },
 
   // Pipeline metadata for the session
   pipelineMetadata: {

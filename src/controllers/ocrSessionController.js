@@ -142,49 +142,88 @@ async function processOCRAndUpdateSession(source, sessionId, userId, language = 
 
       if (pipelineError || unfilteredSafeQuestions.length === 0) {
         console.warn(`[ocrSessionController] Mathpix/OCRPipeline failed or returned 0 questions. Falling back to Gemini...`);
-        const { GeminiExtractionService } = require('../services/geminiExtractionService');
-        const geminiQuestions = await GeminiExtractionService.extractFromBuffer(source.buffer, source.mimetype);
-        
-        safeQuestions = geminiQuestions.map((gQ, idx) => {
-          const _id = new mongoose.Types.ObjectId();
-          return {
-            _id,
-            questionText: gQ.questionText,
-            options: gQ.options,
-            questionNumber: gQ.questionNumber || String(idx + 1),
-            detectionOrder: idx + 1,
-            format: gQ.format || 'mcq',
-            columnA: gQ.columnA || [],
-            columnB: gQ.columnB || [],
-            matchingChoices: gQ.matchingChoices || [],
-            blanks: gQ.blanks || [],
-            blankCount: gQ.blankCount || 0,
-            confidenceScores: {
-              ocrConfidence: gQ.confidence ?? 0.90,
-              parserConfidence: gQ.confidence ?? 0.90,
-              overallConfidence: gQ.confidence ?? 0.90,
-              rating: (gQ.confidence || 0.90) > 0.8 ? 'high' : ((gQ.confidence || 0.90) > 0.5 ? 'medium' : 'low')
-            },
-            validationErrors: gQ.validationErrors || [],
-            quarantineReasons: gQ.quarantineReasons || [],
-            extractionState: gQ.isValid ? 'ACCEPTED' : 'MANUAL_REVIEW',
-            duplicateInfo: {
-              detected: gQ.duplicateFound || false,
-              similarity: gQ.duplicateFound ? 1.0 : 0.0,
-              rating: gQ.duplicateFound ? 'Block duplicate' : 'Allow normally',
-              existingQuestionId: gQ.duplicateQuestionId || null,
-              existingQuestionText: ''
-            },
-            rawOcrData: {
-              rawChunk: gQ.questionText,
-              ocrConfidence: gQ.confidence ?? 0.90,
-              pageType: 'MCQ_PAGE',
-              effectiveParserType: 'mcq',
-              layoutMetadata: { strategy: 'text-only' }
-            }
-          };
-        });
-        pageType = 'MCQ_PAGE';
+        try {
+          const { GeminiExtractionService } = require('../services/geminiExtractionService');
+          const geminiQuestions = await GeminiExtractionService.extractFromBuffer(source.buffer, source.mimetype);
+          
+          safeQuestions = geminiQuestions.map((gQ, idx) => {
+            const _id = new mongoose.Types.ObjectId();
+            return {
+              _id,
+              questionText: gQ.questionText,
+              options: gQ.options,
+              questionNumber: gQ.questionNumber || String(idx + 1),
+              detectionOrder: idx + 1,
+              format: gQ.format || 'mcq',
+              columnA: gQ.columnA || [],
+              columnB: gQ.columnB || [],
+              matchingChoices: gQ.matchingChoices || [],
+              blanks: gQ.blanks || [],
+              blankCount: gQ.blankCount || 0,
+              confidenceScores: {
+                ocrConfidence: gQ.confidence ?? 0.90,
+                parserConfidence: gQ.confidence ?? 0.90,
+                overallConfidence: gQ.confidence ?? 0.90,
+                rating: (gQ.confidence || 0.90) > 0.8 ? 'high' : ((gQ.confidence || 0.90) > 0.5 ? 'medium' : 'low')
+              },
+              validationErrors: gQ.validationErrors || [],
+              quarantineReasons: gQ.quarantineReasons || [],
+              extractionState: gQ.isValid ? 'ACCEPTED' : 'MANUAL_REVIEW',
+              duplicateInfo: {
+                detected: gQ.duplicateFound || false,
+                similarity: gQ.duplicateFound ? 1.0 : 0.0,
+                rating: gQ.duplicateFound ? 'Block duplicate' : 'Allow normally',
+                existingQuestionId: gQ.duplicateQuestionId || null,
+                existingQuestionText: ''
+              },
+              rawOcrData: {
+                rawChunk: gQ.questionText,
+                ocrConfidence: gQ.confidence ?? 0.90,
+                pageType: 'MCQ_PAGE',
+                effectiveParserType: 'mcq',
+                layoutMetadata: { strategy: 'text-only' }
+              }
+            };
+          });
+          pageType = 'MCQ_PAGE';
+        } catch (geminiErr) {
+          console.error(`[ocrSessionController] Gemini fallback also failed: ${geminiErr.message}`);
+          // Salvage manualReviewArtifacts or raw questions from OCRPipeline if available
+          const salvageable = (ocrResult?.manualReviewArtifacts?.length > 0)
+            ? ocrResult.manualReviewArtifacts
+            : (allItems.length > 0 ? allItems : []);
+
+          if (salvageable.length > 0) {
+            console.log(`[ocrSessionController] Salvaged ${salvageable.length} questions/artifacts from Mathpix for manual review.`);
+            safeQuestions = salvageable.map((item, idx) => ({
+              _id: new mongoose.Types.ObjectId(),
+              questionText: item.questionText || item.rawChunk || item.failureReason || 'Extracted Question (Manual Review Required)',
+              options: Array.isArray(item.options) ? item.options : ['', '', '', ''],
+              questionNumber: item.questionNumber || String(idx + 1),
+              detectionOrder: idx + 1,
+              format: item.format || 'mcq',
+              confidenceScores: {
+                ocrConfidence: item.ocrConfidence ?? 0.60,
+                parserConfidence: 0.50,
+                overallConfidence: 0.55,
+                rating: 'medium'
+              },
+              validationErrors: item.validationErrors || ['Format verification needed'],
+              quarantineReasons: item.quarantineReasons || [],
+              extractionState: 'MANUAL_REVIEW',
+              rawOcrData: {
+                rawChunk: item.rawChunk || item.questionText || '',
+                ocrConfidence: item.ocrConfidence ?? 0.60,
+                pageType: ocrResult?.pageType || 'UNKNOWN_PAGE',
+                effectiveParserType: 'manual',
+                layoutMetadata: { strategy: 'salvage' }
+              }
+            }));
+            pageType = ocrResult?.pageType || 'UNKNOWN_PAGE';
+          } else {
+            throw new Error(`OCR extraction failed: ${geminiErr.message}`);
+          }
+        }
       } else {
         // Success with Mathpix
         safeQuestions = unfilteredSafeQuestions;
@@ -224,6 +263,7 @@ async function processOCRAndUpdateSession(source, sessionId, userId, language = 
     await VerificationQueueManager.updateSession(sessionId, {
       status: 'failed',
       progress: 0,
+      errorMessage: err.message,
     }).catch(() => {});
   }
 }
