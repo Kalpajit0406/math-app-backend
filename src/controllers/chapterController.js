@@ -6,6 +6,21 @@ const SyncVersion = require('../models/syncVersionModel');
 const mongoose = require('mongoose');
 const { normalizeChapterName } = require('../utils/chapterNormalization');
 
+const clearChaptersCache = async () => {
+  try {
+    const { getRedisClient } = require('../config/redis');
+    const redis = getRedisClient();
+    if (redis && typeof redis.keys === 'function') {
+      const keys = await redis.keys('chapters:list:*');
+      if (keys && keys.length > 0) {
+        await redis.del(...keys);
+      }
+    }
+  } catch (err) {
+    console.warn('[Cache] Failed to clear chapters cache:', err.message);
+  }
+};
+
 // Helper to increment chapter sync version
 const incrementSyncVersion = async () => {
   try {
@@ -14,6 +29,7 @@ const incrementSyncVersion = async () => {
       { $inc: { value: 1 } },
       { upsert: true, returnDocument: 'after' }
     );
+    await clearChaptersCache();
   } catch (error) {
     console.error('Failed to increment chapter sync version:', error.message);
   }
@@ -23,6 +39,22 @@ const incrementSyncVersion = async () => {
 const getChapters = async (req, res) => {
   try {
     const { classId } = req.query;
+    const cacheKey = `chapters:list:${classId || 'all'}`;
+
+    // Try reading from Redis cache first
+    try {
+      const { getRedisClient } = require('../config/redis');
+      const redis = getRedisClient();
+      if (redis) {
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+          return res.json(JSON.parse(cached));
+        }
+      }
+    } catch (cacheErr) {
+      console.warn('[Cache] Chapters cache read error:', cacheErr.message);
+    }
+
     const filter = {};
     if (classId) {
       const { getClassIdFromNo } = require('../utils/classCache');
@@ -40,7 +72,7 @@ const getChapters = async (req, res) => {
     // Aggregate question counts for all returned chapters to avoid N+1 queries
     const chapterIds = chapters.map(c => c._id);
     const counts = await Question.aggregate([
-      { $match: { chapterId: { $in: chapterIds } } },
+      { $match: { chapterId: { $in: chapterIds }, isDeleted: { $ne: true } } },
       { $group: { _id: '$chapterId', count: { $sum: 1 } } }
     ]);
     
@@ -55,10 +87,23 @@ const getChapters = async (req, res) => {
       return json;
     });
 
-    res.json({
+    const payload = {
       success: true,
       data
-    });
+    };
+
+    // Save to Redis cache (5-minute TTL)
+    try {
+      const { getRedisClient } = require('../config/redis');
+      const redis = getRedisClient();
+      if (redis) {
+        await redis.set(cacheKey, JSON.stringify(payload), 'EX', 300);
+      }
+    } catch (cacheErr) {
+      console.warn('[Cache] Chapters cache write error:', cacheErr.message);
+    }
+
+    res.json(payload);
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -479,5 +524,7 @@ module.exports = {
   editChapter,
   deleteChapter,
   getSyncVersion,
-  getChapterUsage
+  getChapterUsage,
+  clearChaptersCache,
+  incrementSyncVersion,
 };

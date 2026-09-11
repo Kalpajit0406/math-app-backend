@@ -46,6 +46,7 @@ async function ensureIndexes(mongoose) {
     const SystemMetrics = require('../models/systemMetricsModel');
     const ImportJob = require('../models/importJobModel');
     const ImportItem = require('../models/importItemModel');
+    const ExamPreOrder = require('../models/examPreOrderModel');
 
     // Student indexes
     await safeCreateIndex(Student.collection, { studentPhone: 1 }, { unique: true });
@@ -68,6 +69,7 @@ async function ensureIndexes(mongoose) {
     } catch (err) {}
     await safeCreateIndex(Question.collection, { contentHash: 1 }, { unique: true, sparse: true });
     await safeCreateIndex(Question.collection, { chapterId: 1 });
+    await safeCreateIndex(Question.collection, { chapterId: 1, isDeleted: 1 });
     await safeCreateIndex(Question.collection, { classId: 1 });
     await safeCreateIndex(Question.collection, { language: 1 });
     await safeCreateIndex(Question.collection, { classId: 1, language: 1 });
@@ -114,6 +116,12 @@ async function ensureIndexes(mongoose) {
     await safeCreateIndex(Exam.collection, { createdAt: -1 });
     await safeCreateIndex(Exam.collection, { isDeleted: 1 });
     console.log('✓ Exam indexes created');
+
+    // ExamPreOrder indexes
+    await safeCreateIndex(ExamPreOrder.collection, { examId: 1, studentId: 1 }, { unique: true });
+    await safeCreateIndex(ExamPreOrder.collection, { examId: 1 });
+    await safeCreateIndex(ExamPreOrder.collection, { createdAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
+    console.log('✓ ExamPreOrder indexes created');
 
     // Attempt indexes
     await safeCreateIndex(Attempt.collection, { userId: 1 });

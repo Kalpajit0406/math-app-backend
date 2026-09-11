@@ -89,26 +89,36 @@ const examPreOrderService = {
       }
 
       const redis = getRedisClient();
-      const bulkOps = [];
-      const cacheWrites = [];
+      const BATCH_SIZE = 50;
 
-      for (const student of students) {
-        const shuffledOrder = shuffleArray(examQuestionIds);
-        bulkOps.push({
-          updateOne: {
-            filter: { examId: exam._id, studentId: student._id },
-            update: { $set: { questionOrder: shuffledOrder } },
-            upsert: true,
-          },
-        });
-        cacheWrites.push(
-          redis.set(preOrderCacheKey(examId, student._id), JSON.stringify(shuffledOrder), 'EX', PREORDER_TTL_SECONDS)
-            .catch(err => console.warn('[ExamPreOrder] Redis cache write failed for one student:', err.message))
-        );
+      for (let i = 0; i < students.length; i += BATCH_SIZE) {
+        const batch = students.slice(i, i + BATCH_SIZE);
+        const bulkOps = [];
+        const cacheWrites = [];
+
+        for (const student of batch) {
+          const shuffledOrder = shuffleArray(examQuestionIds);
+          bulkOps.push({
+            updateOne: {
+              filter: { examId: exam._id, studentId: student._id },
+              update: { $set: { questionOrder: shuffledOrder } },
+              upsert: true,
+            },
+          });
+          cacheWrites.push(
+            redis.set(preOrderCacheKey(examId, student._id), JSON.stringify(shuffledOrder), 'EX', PREORDER_TTL_SECONDS)
+              .catch(err => console.warn('[ExamPreOrder] Redis cache write failed for one student:', err.message))
+          );
+        }
+
+        await ExamPreOrder.bulkWrite(bulkOps, { ordered: false });
+        await Promise.all(cacheWrites);
+
+        // Yield to the event loop so incoming HTTP requests (like /chapters) are not starved
+        if (i + BATCH_SIZE < students.length) {
+          await new Promise(resolve => setImmediate(resolve));
+        }
       }
-
-      await ExamPreOrder.bulkWrite(bulkOps, { ordered: false });
-      await Promise.all(cacheWrites);
 
       await Exam.findByIdAndUpdate(examId, {
         orderPreGenStatus: 'READY',
